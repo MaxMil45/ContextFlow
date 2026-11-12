@@ -1,0 +1,24 @@
+[package]
+name = "cf-cli"
+description = "ContextFlow command-line interface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "contextflow"
+path = "src/main.rs"
+
+[dependencies]
+cf-core.workspace = true
+cf-diff.workspace = true
+cf-git.workspace = true
+cf-storage.workspace = true
+cf-windows.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+directories.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

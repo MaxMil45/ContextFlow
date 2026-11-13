@@ -285,3 +285,119 @@ fn restore_runs_are_recorded_and_deleted_with_their_snapshot() {
         .unwrap();
     assert_eq!(steps, 0, "history is removed with its snapshot");
 }
+
+#[test]
+fn imported_workspaces_start_untrusted() {
+    let (mut db, id) = db_with_versions(1);
+    assert!(
+        db.is_trusted(id).unwrap(),
+        "workspaces made here are trusted"
+    );
+
+    let exported = db.export_context(id).unwrap();
+    let copy = db.import_workspace(&exported, Some("copy")).unwrap();
+    assert!(!db.is_trusted(copy.id).unwrap(), "imported ones are not");
+    assert!(db.is_trusted(id).unwrap(), "the original is unaffected");
+
+    db.set_trusted(copy.id, true).unwrap();
+    assert!(db.is_trusted(copy.id).unwrap());
+
+    let missing = cf_core::ContextId::new();
+    assert!(matches!(
+        db.is_trusted(missing),
+        Err(StorageError::NotFound(_))
+    ));
+    assert!(matches!(
+        db.set_trusted(missing, true),
+        Err(StorageError::NotFound(_))
+    ));
+}
+
+#[test]
+fn pinned_version_is_protected() {
+    let (mut db, id) = db_with_versions(3);
+    assert_eq!(db.pinned_version(id).unwrap(), None);
+
+    db.set_pinned_version(id, Some(1)).unwrap();
+    assert_eq!(db.pinned_version(id).unwrap(), Some(1));
+
+    // A pinned snapshot cannot be deleted...
+    assert!(matches!(
+        db.delete_snapshot(id, 1),
+        Err(StorageError::Conflict(_))
+    ));
+    // ...and pruning leaves it alone, keeping the latest too.
+    let policy = RetentionPolicy {
+        keep_last: Some(1),
+        max_age: None,
+    };
+    db.prune(id, &policy, Utc::now()).unwrap();
+    assert_eq!(versions(&db, id), vec![3, 1]);
+
+    // Pinning something that does not exist is refused and changes nothing.
+    assert!(matches!(
+        db.set_pinned_version(id, Some(9)),
+        Err(StorageError::NotFound(_))
+    ));
+    assert_eq!(db.pinned_version(id).unwrap(), Some(1));
+
+    // Unpinned, it can be deleted again.
+    db.set_pinned_version(id, None).unwrap();
+    db.delete_snapshot(id, 1).unwrap();
+    assert_eq!(versions(&db, id), vec![3]);
+}
+
+#[test]
+fn restore_history_is_capped_per_snapshot() {
+    use cf_storage::RestoreStepRecord;
+    use chrono::SecondsFormat;
+
+    let (mut db, id) = db_with_versions(2);
+    let first = db.get_snapshot(id, Some(1)).unwrap();
+    let second = db.get_snapshot(id, Some(2)).unwrap();
+    let step = RestoreStepRecord {
+        component_type: "application".into(),
+        component_identifier: "code".into(),
+        status: "success".into(),
+        error_code: None,
+        error_message: None,
+        duration_ms: 1,
+    };
+
+    // 55 runs of snapshot 1, each a second after the last; 3 of snapshot 2.
+    let base = Utc::now();
+    for i in 0..55 {
+        let at = base + TimeDelta::seconds(i);
+        db.record_restore_run(first.id, at, at, "success", std::slice::from_ref(&step))
+            .unwrap();
+    }
+    for i in 0..3 {
+        let at = base + TimeDelta::seconds(i);
+        db.record_restore_run(second.id, at, at, "success", std::slice::from_ref(&step))
+            .unwrap();
+    }
+
+    let count = |sql: &str| -> i64 {
+        db.raw_connection()
+            .query_row(sql, [], |r| r.get(0))
+            .unwrap()
+    };
+    // Each snapshot is capped on its own: 50 + 3, not 50 in total.
+    assert_eq!(count("SELECT COUNT(*) FROM restore_runs"), 53);
+    assert_eq!(db.restore_runs(second.id).unwrap().len(), 3);
+    // The steps of deleted runs are gone too.
+    assert_eq!(count("SELECT COUNT(*) FROM restore_steps"), 53);
+
+    // The oldest surviving run of snapshot 1 is the 6th one recorded.
+    let oldest: String = db
+        .raw_connection()
+        .query_row(
+            "SELECT started_at FROM restore_runs WHERE snapshot_id = ?1
+             ORDER BY started_at ASC LIMIT 1",
+            [first.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let sixth = (base + TimeDelta::seconds(5)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    assert_eq!(oldest, sixth);
+}

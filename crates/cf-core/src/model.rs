@@ -250,3 +250,26 @@ pub struct GitState {
     #[serde(default)]
     pub behind: Option<u32>,
 }
+
+/// Outcome of one restoration task (spec §4.4, stage 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreStatus {
+    Success,
+    PartialSuccess,
+    Failed,
+    Skipped,
+    RequiresUserIntervention,
+}
+
+impl RestoreStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::PartialSuccess => "partial_success",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+            Self::RequiresUserIntervention => "requires_user_intervention",
+        }
+    }
+}

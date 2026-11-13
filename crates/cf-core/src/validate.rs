@@ -4,6 +4,8 @@ use crate::{CoreError, Result, SnapshotPayload, PAYLOAD_SCHEMA_VERSION};
 
 pub const MAX_NAME_CHARS: usize = 100;
 pub const MAX_NOTE_BYTES: usize = 64 * 1024;
+/// Largest adapter-owned state (e.g. a browser's tabs) per application.
+pub const MAX_ADAPTER_STATE_BYTES: usize = 2 * 1024 * 1024;
 /// Generous bound on window dimensions; anything larger is corrupt data.
 pub const MAX_WINDOW_DIMENSION: i32 = 100_000;
 
@@ -56,6 +58,13 @@ pub fn payload(p: &SnapshotPayload) -> Result<()> {
         check_path("executable_path", &app.executable_path)?;
         if let Some(dir) = &app.working_directory {
             check_path("working_directory", dir)?;
+        }
+        let state_bytes = serde_json::to_vec(&app.adapter_state).map_or(0, |v| v.len());
+        if state_bytes > MAX_ADAPTER_STATE_BYTES {
+            return Err(invalid(format!(
+                "state saved for '{}' is too large ({state_bytes} bytes)",
+                app.application_id
+            )));
         }
         if app.launch_arguments.iter().any(|a| a.contains('\0')) {
             return Err(invalid("launch arguments must not contain NUL characters"));
@@ -152,6 +161,20 @@ mod tests {
             repository_path: "C:/repo".into(),
             head_commit: Some("not-a-sha".into()),
             ..Default::default()
+        });
+        assert!(payload(&p).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_adapter_state() {
+        let mut p = SnapshotPayload::default();
+        p.applications.push(crate::ApplicationState {
+            application_id: "chrome".into(),
+            executable_path: "C:/chrome.exe".into(),
+            launch_arguments: vec![],
+            working_directory: None,
+            adapter_id: Some("browser".into()),
+            adapter_state: serde_json::json!({ "blob": "x".repeat(MAX_ADAPTER_STATE_BYTES) }),
         });
         assert!(payload(&p).is_err());
     }

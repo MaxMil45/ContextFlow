@@ -311,3 +311,62 @@ Known gaps, in priority order:
 3. **Several windows of one app:** only as many windows come back as the app opens by itself.
 4. Still open from Phase 2: stable monitor ids (2.2), process identity with start time (2.1), the `cf-testwin` test app (2.4), and DPI scaling between monitors of different scale (2.7).
 5. The icon has no custom image yet.
+
+---
+
+## 14. Update: browser tabs (Phase 3, WP 3.6 and 3.7)
+
+Chrome and Edge windows now come back with their tabs.
+
+```text
+Capture:  extension ──▶ contextflow-browser-host ──▶ live state file ──▶ capture ──▶ snapshot
+Restore:  snapshot ──▶ chrome.exe --new-window <urls> ──▶ new window found and placed
+```
+
+Differences from the original plan: no named pipe. The host just keeps one validated JSON file per browser profile while the browser runs, and capture reads it. Restore needs no extension at all.
+
+| Piece | Where |
+|---|---|
+| MV3 extension (`tabs`, `nativeMessaging`, `storage`, `alarms` only; no cookies, history, page access or incognito) | [extensions/browser](../extensions/browser) |
+| Message validation (http/https only, size and count limits), live state files, tab-to-window matching, install and registry | [crates/cf-browser](../crates/cf-browser/src) |
+| `contextflow-browser-host.exe` and the `browser install/status/uninstall` commands | [crates/cf-cli](../crates/cf-cli/src) |
+| Per-window restore: open, find the new window, place it. A running browser only gets missing tabs | [crates/cf-engine/src/browser.rs](../crates/cf-engine/src/browser.rs) |
+| Config: `[browser] capture_tabs`, `excluded_url_patterns`, `max_tabs_per_window` | [cf-config](../crates/cf-config/src/lib.rs) |
+
+Known limits:
+
+1. Chrome can't be told which tab to bring to the front, nor pin tabs or recreate tab groups, from the command line.
+2. Tabs open in the browser profile last used, not necessarily the one they came from (no `--profile-directory` yet).
+3. If Chrome is set to "Continue where you left off", it may add its own old windows on startup.
+4. Two windows with identical titles can have their tabs matched to each other's position.
+5. If Chrome is already running and the extension isn't connected, tabs are left alone (reported) so nothing duplicates.
+6. Context Diff doesn't compare tabs yet (Phase 4, WP 4.3).
+7. The extension is loaded as unpacked ("Developer mode"). Publishing to the Chrome Web Store and Edge Add-ons would remove that step.
+
+---
+
+## 15. Blueprint tasks T1 to T11 delivered
+
+The audit and task prompts are in [BLUEPRINT.md](BLUEPRINT.md). All eleven tasks are done and passed the gate (format, clippy `-D warnings`, tests: 140 before T11).
+
+| Task | Delivered |
+|---|---|
+| T1 | Deleted the unused `cf-adapters` crate; `RestoreStatus` moved into `cf-core`. |
+| T2 | Split the 1,185-line `cf-cli/src/main.rs` into `commands/*`; help text byte-identical. |
+| T3 | Added 8 CLI integration tests (`cf-cli/tests/cli.rs`). |
+| T4 | Only one real restore at a time, through a named Windows lock; a second double-click exits silently. |
+| T5 | Imported workspaces start untrusted and need `workspace trust`; the engine refuses relative or non-`.exe` launch paths (`UNSAFE_PATH`). The review lists programs from every version, not just the latest (a deliberate change to the blueprint). |
+| T6 | `pin` / `unpin` a restore version (protected from delete and prune); `capture --unminimize` and a warning for minimized windows. |
+| T7 | Apps in `app-<version>` folders (Discord and similar) are found again after an update. |
+| T8 | An overall restore time limit (`timeouts.restore_overall_secs`), ordinary apps start before browser tabs, and the engine honours a cancel flag. |
+| T9a, T9b | VS Code folders are saved and reopened. T9a used VS Code's `storage.json` instead of the blueprint's `state.vscdb` key, which does not exist on current VS Code. |
+| T10 | Browser windows with identical titles are matched to their tabs by position (extension 0.2.0 sends window bounds). |
+| T11 | `host.log` is emptied above 1 MiB and each snapshot keeps its newest 50 restore runs. Documentation updated. |
+
+Known gaps that remain (see BLUEPRINT.md section 5 for the order):
+
+1. Cancel has no trigger yet: the engine honours the flag, but the CLI and the icon don't set it.
+2. Capture duration is part of the hashed payload, so "identical to the previous version" almost never appears with real windows.
+3. The launcher's log file loses errors reported after its logger shuts down.
+4. VS Code folder lookup depends on VS Code's internal `storage.json` layout, and a folder name shared by two folders is saved as unresolved.
+5. Still open from the earlier plan: stable monitor ids and mixed-DPI rescaling, process identity (apps sharing an exe name), a real-window integration test app, and the Tauri UI.

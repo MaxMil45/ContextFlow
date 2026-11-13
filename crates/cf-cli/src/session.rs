@@ -57,11 +57,30 @@ pub fn resolve_paths(
     })
 }
 
+/// Name of the lock that lets only one restore run at a time.
+pub const RESTORE_LOCK: &str = r"Local\ContextFlow.Restore";
+
+/// Returned when another restore already holds [`RESTORE_LOCK`].
+#[derive(Debug)]
+pub struct RestoreBusy;
+
+impl std::fmt::Display for RestoreBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "another ContextFlow restore is already running")
+    }
+}
+
+impl std::error::Error for RestoreBusy {}
+
 pub struct RestoreArgs {
     pub version: Option<u32>,
     pub only: Vec<String>,
     pub dry_run: bool,
     pub timeout: Duration,
+    /// Most saved tabs reopened per browser window.
+    pub max_tabs_per_window: usize,
+    /// Longest the whole restore may take.
+    pub overall_timeout: Duration,
 }
 
 /// Restore a workspace's snapshot onto the real desktop and record the run.
@@ -72,7 +91,21 @@ pub fn restore_workspace(
     log: &mut dyn FnMut(&str),
 ) -> Result<(Context, Snapshot, RestoreRun)> {
     let ctx = db.find_context(workspace)?;
-    let snapshot = db.get_snapshot(ctx.id, args.version)?;
+
+    // Imported workspaces can name any program to start, so they must be
+    // reviewed and approved first. A dry run only reads, so it is always allowed.
+    if !args.dry_run && !db.is_trusted(ctx.id)? {
+        anyhow::bail!(
+            "'{name}' was imported from a file and has not been approved. Review it with: contextflow workspace trust \"{name}\"",
+            name = ctx.name
+        );
+    }
+    // Which snapshot: an explicit --version, else the pinned one, else the latest.
+    let version = match args.version {
+        Some(v) => Some(v),
+        None => db.pinned_version(ctx.id)?,
+    };
+    let snapshot = db.get_snapshot(ctx.id, version)?;
 
     // Refuse to act on a snapshot that fails its integrity check.
     let check = db.verify_snapshot(ctx.id, Some(snapshot.version))?;
@@ -84,11 +117,25 @@ pub fn restore_workspace(
         );
     }
 
+    // Only one real restore at a time: a second double-click would otherwise
+    // see "not running" and start every app again. The guard is held until this
+    // function returns (and the OS frees it if the process dies).
+    let _restore_lock = if args.dry_run {
+        None
+    } else {
+        match cf_windows::try_lock_instance(RESTORE_LOCK)? {
+            Some(lock) => Some(lock),
+            None => return Err(RestoreBusy.into()),
+        }
+    };
+
     let started = Utc::now();
     let opts = RestoreOptions {
         timeout: args.timeout,
         only: args.only.clone(),
         dry_run: args.dry_run,
+        max_tabs_per_window: args.max_tabs_per_window,
+        overall_timeout: args.overall_timeout,
         ..Default::default()
     };
     let run = cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log);

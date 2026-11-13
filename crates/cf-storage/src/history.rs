@@ -19,6 +19,9 @@ pub struct RestoreStepRecord {
     pub duration_ms: u64,
 }
 
+/// Restore runs kept per snapshot; older ones are deleted as new ones arrive.
+const MAX_RUNS_PER_SNAPSHOT: i64 = 50;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreRunSummary {
     pub started_at: DateTime<Utc>,
@@ -65,6 +68,17 @@ impl Database {
                 ],
             )?;
         }
+        // Keep only the newest runs of this snapshot. The steps of the deleted
+        // runs go with them (ON DELETE CASCADE). Ties on the timestamp fall
+        // back to insertion order, so the run just added is never the one lost.
+        tx.execute(
+            "DELETE FROM restore_runs
+             WHERE snapshot_id = ?1
+               AND id NOT IN (
+                   SELECT id FROM restore_runs WHERE snapshot_id = ?1
+                   ORDER BY started_at DESC, rowid DESC LIMIT ?2)",
+            params![snapshot_id.to_string(), MAX_RUNS_PER_SNAPSHOT],
+        )?;
         tx.commit()?;
         Ok(())
     }

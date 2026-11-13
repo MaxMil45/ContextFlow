@@ -14,19 +14,25 @@ path = "src/lib.rs"
 name = "contextflow"
 path = "src/main.rs"
 
+# Started by Chrome/Edge for the extension.
+[[bin]]
+name = "contextflow-browser-host"
+path = "src/browser_host.rs"
+
 # Windowless program that desktop shortcuts start.
 [[bin]]
 name = "contextflow-launch"
 path = "src/launch.rs"
 
 [dependencies]
-cf-adapters.workspace = true
+cf-browser.workspace = true
 cf-config.workspace = true
 cf-core.workspace = true
 cf-diff.workspace = true
 cf-engine.workspace = true
 cf-git.workspace = true
 cf-storage.workspace = true
+cf-vscode.workspace = true
 cf-windows.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -35,3 +41,6 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -32,6 +32,7 @@ pub struct Config {
     pub retention: RetentionConfig,
     pub timeouts: TimeoutConfig,
     pub logging: LoggingConfig,
+    pub browser: BrowserConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,17 +108,26 @@ impl RetentionConfig {
 pub struct TimeoutConfig {
     /// Per-command timeout for git, in milliseconds.
     pub git_ms: u64,
+    /// Longest a whole restore may take, in seconds.
+    pub restore_overall_secs: u64,
 }
 
 impl Default for TimeoutConfig {
     fn default() -> Self {
-        Self { git_ms: 10_000 }
+        Self {
+            git_ms: 10_000,
+            restore_overall_secs: 120,
+        }
     }
 }
 
 impl TimeoutConfig {
     pub fn git(&self) -> Duration {
         Duration::from_millis(self.git_ms)
+    }
+
+    pub fn restore_overall(&self) -> Duration {
+        Duration::from_secs(self.restore_overall_secs)
     }
 }
 
@@ -138,6 +148,29 @@ impl Default for LoggingConfig {
             level: "info".into(),
             file: true,
             max_files: 7,
+        }
+    }
+}
+
+/// Browser tab saving (needs the ContextFlow browser extension).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrowserConfig {
+    /// Save open tabs when capturing a browser.
+    pub capture_tabs: bool,
+    /// Tabs whose address contains any of these (case-insensitive) are never
+    /// saved, e.g. "mybank.com" or "token=".
+    pub excluded_url_patterns: Vec<String>,
+    /// Most tabs reopened per browser window on restore.
+    pub max_tabs_per_window: usize,
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            capture_tabs: true,
+            excluded_url_patterns: Vec::new(),
+            max_tabs_per_window: 50,
         }
     }
 }
@@ -191,11 +224,25 @@ impl Config {
         if !(100..=600_000).contains(&self.timeouts.git_ms) {
             return invalid("timeouts.git_ms must be between 100 and 600000".into());
         }
+        if !(10..=1800).contains(&self.timeouts.restore_overall_secs) {
+            return invalid("timeouts.restore_overall_secs must be between 10 and 1800".into());
+        }
         if !LEVELS.contains(&self.logging.level.as_str()) {
             return invalid(format!(
                 "logging.level must be one of {}",
                 LEVELS.join(", ")
             ));
+        }
+        if !(1..=200).contains(&self.browser.max_tabs_per_window) {
+            return invalid("browser.max_tabs_per_window must be between 1 and 200".into());
+        }
+        if self
+            .browser
+            .excluded_url_patterns
+            .iter()
+            .any(|s| s.trim().is_empty())
+        {
+            return invalid("browser.excluded_url_patterns entries must not be empty".into());
         }
         if !(1..=365).contains(&self.logging.max_files) {
             return invalid("logging.max_files must be between 1 and 365".into());
@@ -241,6 +288,16 @@ auto_prune = false
 
 [timeouts]
 git_ms = 10000
+# Longest a whole restore may take, in seconds.
+restore_overall_secs = 120
+
+[browser]
+# Save open tabs when capturing Chrome/Edge (needs `contextflow browser install`).
+capture_tabs = true
+# Tabs whose address contains any of these are never saved (case-insensitive).
+excluded_url_patterns = []
+# Most tabs reopened per browser window.
+max_tabs_per_window = 50
 
 [logging]
 level = "info"
@@ -318,6 +375,9 @@ mod tests {
             "[timeouts]\ngit_ms = 5",
             "[logging]\nlevel = \"loud\"",
             "[logging]\nmax_files = 0",
+            "[browser]\nmax_tabs_per_window = 0",
+            "[browser]\nmax_tabs_per_window = 500",
+            "[browser]\nexcluded_url_patterns = [\" \"]",
             "[capture]\nexcluded_processes = [\"  \"]",
         ] {
             assert!(

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use cf_config::CaptureConfig;
-use cf_core::{ApplicationState, CaptureStatus, SnapshotPayload, WindowState};
+use cf_config::{BrowserConfig, CaptureConfig};
+use cf_core::{ApplicationState, CaptureStatus, DisplayState, SnapshotPayload, WindowState};
 
 /// Shell / system processes whose windows are never part of a workspace.
 const BUILTIN_EXCLUDED_PROCESSES: &[&str] = &[
@@ -30,16 +30,28 @@ pub struct CaptureOptions<'a> {
     pub repos: &'a [PathBuf],
     pub notes: Vec<String>,
     pub include_windows: bool,
+    /// Save minimized windows as normal windows.
+    pub unminimize: bool,
     pub rules: &'a CaptureConfig,
     pub git_timeout: Duration,
+    /// Browser tab saving settings.
+    pub browser: &'a BrowserConfig,
+    /// Where the browser host keeps live tab state (`None` = don't save tabs).
+    pub browser_state_dir: Option<PathBuf>,
+    /// VS Code's `storage.json` (`None` = do not save VS Code folders).
+    pub vscode_storage: Option<PathBuf>,
 }
 
 pub struct CaptureResult {
     pub payload: SnapshotPayload,
     pub status: CaptureStatus,
     pub warnings: Vec<String>,
+    /// (browser name, windows, tabs) saved for each browser.
+    pub browser_tabs: Vec<(String, usize, usize)>,
     /// Windows skipped because of configured exclusion rules.
     pub excluded_windows: usize,
+    /// Windows saved as minimized (they will reopen minimized).
+    pub minimized_windows: usize,
 }
 
 pub use cf_engine::application_id;
@@ -53,6 +65,7 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     let mut warnings = Vec::new();
     let mut component_failed = false;
     let mut excluded_windows = 0;
+    let mut minimized_windows = 0;
 
     let user_excluded = opts.rules.normalized_excluded_processes();
     let is_excluded_process = |id: &str| {
@@ -107,13 +120,23 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                                 .unwrap_or(serde_json::Value::Null),
                         }
                     });
+                    // A minimized window reopens minimized; --unminimize saves it as normal.
+                    let display_state =
+                        if opts.unminimize && w.display_state == DisplayState::Minimized {
+                            DisplayState::Normal
+                        } else {
+                            w.display_state
+                        };
+                    if display_state == DisplayState::Minimized {
+                        minimized_windows += 1;
+                    }
                     payload.windows.push(WindowState {
                         application_id: app_id,
                         title: w.title,
                         window_class: Some(w.class_name),
                         monitor_id: w.monitor_id,
                         rect: w.rect,
-                        display_state: w.display_state,
+                        display_state,
                     });
                 }
                 payload.applications = apps.into_values().collect();
@@ -122,6 +145,25 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                 component_failed = true;
                 warnings.push(format!("windows: {e}"));
             }
+        }
+    }
+
+    let mut browser_tabs = Vec::new();
+    if opts.include_windows && opts.browser.capture_tabs {
+        if let Some(dir) = &opts.browser_state_dir {
+            attach_browser_tabs(
+                &mut payload,
+                opts.browser,
+                dir,
+                &mut warnings,
+                &mut browser_tabs,
+            );
+        }
+    }
+
+    if opts.include_windows {
+        if let Some(storage) = &opts.vscode_storage {
+            attach_vscode_folders(&mut payload, storage, &mut warnings);
         }
     }
 
@@ -163,7 +205,118 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         payload,
         status,
         warnings,
+        browser_tabs,
         excluded_windows,
+        minimized_windows,
+    }
+}
+
+/// Work out which folder each captured VS Code window has open, so restore can
+/// reopen it. Windows whose folder is unknown or ambiguous are saved without
+/// one (and reported), never guessed.
+fn attach_vscode_folders(
+    payload: &mut SnapshotPayload,
+    storage: &std::path::Path,
+    warnings: &mut Vec<String>,
+) {
+    let Some(i) = payload
+        .applications
+        .iter()
+        .position(|a| cf_vscode::is_vscode(&a.application_id))
+    else {
+        return;
+    };
+    let titles: Vec<String> = payload
+        .windows
+        .iter()
+        .filter(|w| cf_vscode::is_vscode(&w.application_id))
+        .map(|w| w.title.clone())
+        .collect();
+    let known = cf_vscode::read_known_folders(storage);
+    let state = cf_vscode::build_state(&titles, &known, &cf_vscode::folder_exists);
+
+    let unresolved = state.windows.len() - state.folder_count();
+    if unresolved > 0 {
+        warnings.push(format!(
+            "VS Code: the folder for {unresolved} window(s) could not be worked out; they will reopen without one"
+        ));
+    }
+    if state.folder_count() > 0 {
+        let app = &mut payload.applications[i];
+        app.adapter_id = Some(cf_vscode::ADAPTER_ID.to_string());
+        app.adapter_state = state.to_value();
+    }
+}
+
+/// The captured windows of one application as the browser matcher needs them:
+/// title, top-left corner, and the scale (DPI / 96) of the monitor they are on.
+fn desktop_windows(
+    payload: &SnapshotPayload,
+    application_id: &str,
+) -> Vec<cf_browser::saved::DesktopWindow> {
+    payload
+        .windows
+        .iter()
+        .filter(|w| w.application_id == application_id)
+        .map(|w| {
+            let scale = w
+                .monitor_id
+                .as_deref()
+                .and_then(|id| payload.monitors.iter().find(|m| m.id == id))
+                .and_then(|m| m.dpi)
+                .map_or(1.0, |dpi| f64::from(dpi) / 96.0);
+            cf_browser::saved::DesktopWindow {
+                title: w.title.clone(),
+                x: w.rect.x,
+                y: w.rect.y,
+                scale,
+            }
+        })
+        .collect()
+}
+
+/// Attach the tabs open in each captured browser to its windows. Uses the live
+/// state kept by the browser extension; without it only the windows are saved.
+fn attach_browser_tabs(
+    payload: &mut SnapshotPayload,
+    cfg: &BrowserConfig,
+    dir: &std::path::Path,
+    warnings: &mut Vec<String>,
+    summary: &mut Vec<(String, usize, usize)>,
+) {
+    for i in 0..payload.applications.len() {
+        let id = payload.applications[i].application_id.clone();
+        if !cf_browser::is_browser(&id) {
+            continue;
+        }
+        let name = cf_browser::BROWSERS
+            .iter()
+            .find(|(b, _)| *b == id)
+            .map_or(id.as_str(), |(_, n)| *n)
+            .to_string();
+        let live = cf_browser::read_live_states(dir, &id);
+        if live.is_empty() {
+            warnings.push(format!(
+                "{name}: tabs were not saved because the ContextFlow extension isn't connected (see `contextflow browser status`)"
+            ));
+            continue;
+        }
+        let desktop = desktop_windows(payload, &id);
+        let result =
+            cf_browser::saved::match_windows(&id, &desktop, &live, &cfg.excluded_url_patterns);
+        if result.unmatched_live > 0 {
+            warnings.push(format!(
+                "{name}: {} open window(s) couldn't be matched to a desktop window and were not saved (minimized to the tray, or on another desktop?)",
+                result.unmatched_live
+            ));
+        }
+        let tabs = result.state.tab_count();
+        if tabs > 0 {
+            summary.push((name, result.state.windows.len(), tabs));
+            let app = &mut payload.applications[i];
+            app.adapter_id = Some(cf_browser::ADAPTER_ID.to_string());
+            app.adapter_state = result.state.to_value();
+        }
     }
 }
 
@@ -181,6 +334,57 @@ mod tests {
     }
 
     #[test]
+    fn browser_windows_carry_position_and_monitor_scale() {
+        use cf_core::{DisplayState, MonitorInfo, Rect};
+        let rect = |x| Rect {
+            x,
+            y: 40,
+            width: 800,
+            height: 600,
+        };
+        let monitor = |id: &str, dpi| MonitorInfo {
+            id: id.into(),
+            primary: false,
+            rect: rect(0),
+            work_area: rect(0),
+            dpi,
+        };
+        let win = |app: &str, title: &str, x, mon: Option<&str>| WindowState {
+            application_id: app.into(),
+            title: title.into(),
+            window_class: None,
+            monitor_id: mon.map(String::from),
+            rect: rect(x),
+            display_state: DisplayState::Normal,
+        };
+        let payload = SnapshotPayload {
+            monitors: vec![monitor("HI", Some(144)), monitor("LO", Some(96))],
+            windows: vec![
+                win("chrome", "A - Google Chrome", 100, Some("HI")),
+                win("chrome", "B - Google Chrome", 2000, Some("LO")),
+                win("chrome", "C - Google Chrome", 3000, Some("GONE")),
+                win("chrome", "D - Google Chrome", 4000, None),
+                win("code", "not a browser window", 5, Some("HI")),
+            ],
+            ..Default::default()
+        };
+        let d = desktop_windows(&payload, "chrome");
+        let got: Vec<(&str, i32, i32, f64)> = d
+            .iter()
+            .map(|w| (w.title.as_str(), w.x, w.y, w.scale))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("A - Google Chrome", 100, 40, 1.5), // 144 dpi = 150%
+                ("B - Google Chrome", 2000, 40, 1.0),
+                ("C - Google Chrome", 3000, 40, 1.0), // monitor no longer known
+                ("D - Google Chrome", 4000, 40, 1.0),
+            ]
+        );
+    }
+
+    #[test]
     fn excluded_processes_never_appear() {
         // Exclude every process: the capture must then contain no windows,
         // whatever happens to be open on this machine.
@@ -193,8 +397,12 @@ mod tests {
             repos: &[],
             notes: vec![],
             include_windows: true,
+            unminimize: false,
             rules: &rules,
             git_timeout: Duration::from_secs(5),
+            browser: &BrowserConfig::default(),
+            browser_state_dir: None,
+            vscode_storage: None,
         });
         assert!(r.payload.windows.is_empty());
         assert!(r.payload.applications.is_empty());

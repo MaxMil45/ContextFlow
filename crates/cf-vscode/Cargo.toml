@@ -1,16 +1,14 @@
 [package]
-name = "cf-adapters"
-description = "ContextFlow integration framework: the ContextAdapter contract and registry"
+name = "cf-vscode"
+description = "ContextFlow VS Code integration: which folder each window has open"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+tempfile.workspace = true

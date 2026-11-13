@@ -14,6 +14,15 @@ use thiserror::Error;
 mod control;
 #[cfg(windows)]
 mod imp;
+#[cfg(windows)]
+mod lock;
+
+#[cfg(windows)]
+pub use lock::InstanceLock;
+
+/// Placeholder so callers compile off Windows; it never excludes anything.
+#[cfg(not(windows))]
+pub struct InstanceLock;
 
 #[derive(Debug, Error)]
 pub enum PlatformError {
@@ -79,6 +88,21 @@ pub fn place_window(hwnd: isize, rect: Rect, state: DisplayState) -> Result<()> 
     {
         let _ = (hwnd, rect, state);
         Err(PlatformError::Unsupported)
+    }
+}
+
+/// Take a machine-wide (per login session) lock called `name`, e.g.
+/// `Local\ContextFlow.Restore`. `Ok(None)` means another process holds it. The
+/// lock is released when the returned guard is dropped or the process exits.
+pub fn try_lock_instance(name: &str) -> Result<Option<InstanceLock>> {
+    #[cfg(windows)]
+    {
+        lock::try_lock(name).map_err(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        Ok(Some(InstanceLock))
     }
 }
 
@@ -228,6 +252,22 @@ mod tests {
         for m in &monitors {
             assert!(m.rect.width > 0 && m.rect.height > 0);
         }
+    }
+
+    #[test]
+    fn instance_lock_is_exclusive_until_dropped() {
+        let name = format!(r"Local\ContextFlow.Test.{}", std::process::id());
+        let first = try_lock_instance(&name).unwrap();
+        assert!(first.is_some(), "first caller gets the lock");
+        assert!(
+            try_lock_instance(&name).unwrap().is_none(),
+            "second caller is refused while it is held"
+        );
+        drop(first);
+        assert!(
+            try_lock_instance(&name).unwrap().is_some(),
+            "free again after the holder drops it"
+        );
     }
 
     #[test]

@@ -10,14 +10,20 @@
 //! Applications are independent: a failure in one never stops the others, and
 //! nothing is ever force-closed. Every application gets an explicit result.
 
+mod browser;
 mod desktop;
+mod resolve;
+mod vscode;
+mod window_open;
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cf_adapters::RestoreStatus;
 use cf_core::geometry::placement_for;
+use cf_core::RestoreStatus;
 use cf_core::{ApplicationState, MonitorInfo, SnapshotPayload, WindowState};
 use cf_windows::DiscoveredWindow;
 use serde::Serialize;
@@ -35,6 +41,13 @@ pub struct RestoreOptions {
     pub only: Vec<String>,
     /// Report what would happen without launching or moving anything.
     pub dry_run: bool,
+    /// Most saved tabs reopened per browser window.
+    pub max_tabs_per_window: usize,
+    /// Longest the whole restore may take, however many applications there are.
+    pub overall_timeout: Duration,
+    /// Set this flag (from another thread) to stop the restore early. Nothing
+    /// already started is closed; applications not yet started are skipped.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for RestoreOptions {
@@ -44,6 +57,44 @@ impl Default for RestoreOptions {
             settle: Duration::from_millis(1500),
             only: Vec::new(),
             dry_run: false,
+            max_tabs_per_window: 50,
+            overall_timeout: Duration::from_secs(120),
+            cancel: None,
+        }
+    }
+}
+
+/// The time and cancellation limits of one restore.
+pub(crate) struct Budget {
+    end: Instant,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Budget {
+    fn new(opts: &RestoreOptions) -> Self {
+        Self {
+            end: Instant::now() + opts.overall_timeout,
+            cancel: opts.cancel.clone(),
+        }
+    }
+
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+    }
+
+    /// Out of time, or cancelled.
+    pub(crate) fn expired(&self) -> bool {
+        self.cancelled() || Instant::now() >= self.end
+    }
+
+    /// Time left; zero once expired or cancelled.
+    pub(crate) fn remaining(&self) -> Duration {
+        if self.cancelled() {
+            Duration::ZERO
+        } else {
+            self.end.saturating_duration_since(Instant::now())
         }
     }
 }
@@ -83,8 +134,9 @@ pub fn application_id(executable_path: &str) -> String {
 
 /// How an application that is not running gets started.
 enum LaunchPlan {
-    /// Run its executable.
-    Exe,
+    /// Run this executable (the saved path, or the same program in a newer
+    /// version folder if the app updated).
+    Exe(String),
     /// Microsoft Store app: start it by its package id (`Family!AppId`).
     Packaged(String),
 }
@@ -122,18 +174,39 @@ fn plan_launch(desktop: &dyn Desktop, app: &ApplicationState) -> Result<LaunchPl
             )),
         };
     }
-    if desktop.exe_exists(&app.executable_path) {
-        Ok(LaunchPlan::Exe)
-    } else {
-        Err((
+    // Only ever start a full path to a real program file. A relative path would
+    // be resolved against whatever folder ContextFlow runs in, and scripts or
+    // shortcuts are not programs the user chose to save.
+    let path = Path::new(&app.executable_path);
+    let is_exe = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+    if !path.is_absolute() || !is_exe {
+        return Err((
             RestoreStatus::Failed,
-            "EXE_NOT_FOUND",
-            format!(
-                "{} was not found; is it still installed?",
-                app.executable_path
-            ),
-        ))
+            "UNSAFE_PATH",
+            "not started: only full paths to .exe files can be launched".into(),
+        ));
     }
+    if desktop.exe_exists(&app.executable_path) {
+        return Ok(LaunchPlan::Exe(app.executable_path.clone()));
+    }
+    // Apps that install into `app-<version>` folders move on every update.
+    if let Some(updated) = resolve::newest_versioned_sibling(
+        &app.executable_path,
+        &|dir| desktop.list_dirs(dir),
+        &|path| desktop.exe_exists(path),
+    ) {
+        return Ok(LaunchPlan::Exe(updated));
+    }
+    Err((
+        RestoreStatus::Failed,
+        "EXE_NOT_FOUND",
+        format!(
+            "{} was not found; is it still installed?",
+            app.executable_path
+        ),
+    ))
 }
 
 struct Pending<'a> {
@@ -145,6 +218,37 @@ struct Pending<'a> {
     started: Instant,
     last_count: usize,
     last_change: Instant,
+    /// Tabs or folders added to an already-running browser / VS Code, if any.
+    tabs: Option<browser::TabRestore>,
+    /// How `tabs` is described in the report.
+    wording: &'static browser::Wording,
+}
+
+/// What a deferred application needs opened.
+enum DeferredWork {
+    Tabs(cf_browser::BrowserAppState),
+    Folders(cf_vscode::VsCodeState),
+}
+
+/// A browser or VS Code that is not running and has saved tabs or folders. It
+/// is started only after every other application, because opening its windows
+/// is the slowest part.
+struct Deferred<'a> {
+    app: &'a ApplicationState,
+    exe: String,
+    work: DeferredWork,
+    saved: Vec<&'a WindowState>,
+    began: Instant,
+}
+
+fn cancelled_step(app: &ApplicationState) -> StepReport {
+    StepReport {
+        application_id: app.application_id.clone(),
+        status: RestoreStatus::Skipped,
+        code: Some("CANCELLED"),
+        message: "restore was cancelled".into(),
+        duration_ms: 0,
+    }
 }
 
 /// Restore `payload` onto `desktop`. `log` receives short progress lines.
@@ -164,11 +268,18 @@ pub fn restore(
         Vec::new()
     });
 
+    let budget = Budget::new(opts);
     let only: Vec<String> = opts.only.iter().map(|s| s.to_lowercase()).collect();
     let mut pending: Vec<Pending> = Vec::new();
+    let mut deferred: Vec<Deferred> = Vec::new();
 
     for app in &payload.applications {
         if !only.is_empty() && !only.contains(&app.application_id) {
+            continue;
+        }
+        // Once cancelled, this and every remaining application is skipped.
+        if budget.cancelled() {
+            steps.push(cancelled_step(app));
             continue;
         }
         let began = Instant::now();
@@ -204,25 +315,99 @@ pub fn restore(
             None
         };
 
+        let tabs = browser::tab_state(app);
+        let folders = vscode::folder_state(app);
+
         if opts.dry_run {
-            let msg = if plan.is_some() {
-                "would be started"
-            } else {
-                "already running; its windows would be repositioned"
+            let msg = match (&plan, &tabs, &folders) {
+                (Some(_), Some(t), _) => format!(
+                    "would be started with {} tab(s) in {} window(s)",
+                    t.tab_count(),
+                    t.windows.len()
+                ),
+                (None, Some(t), _) => format!(
+                    "already running; its windows would be repositioned and any of its {} saved tab(s) that aren't open would be added",
+                    t.tab_count()
+                ),
+                (Some(_), None, Some(f)) => {
+                    format!("would be started with {} folder(s)", f.folder_count())
+                }
+                (None, None, Some(f)) => format!(
+                    "already running; its windows would be repositioned and any of its {} saved folder(s) that aren't open would be added",
+                    f.folder_count()
+                ),
+                (Some(_), None, None) => "would be started".to_string(),
+                (None, None, None) => "already running; its windows would be repositioned".to_string(),
             };
-            steps.push(step(RestoreStatus::Skipped, Some("DRY_RUN"), msg.into()));
+            steps.push(step(RestoreStatus::Skipped, Some("DRY_RUN"), msg));
             continue;
         }
+
+        // A browser or VS Code that isn't running is started by opening its saved
+        // windows. That is slow, so it waits until every other app has started.
+        let work = match (&plan, &tabs, &folders) {
+            (Some(LaunchPlan::Exe(_)), Some(t), _) => Some(DeferredWork::Tabs(t.clone())),
+            (Some(LaunchPlan::Exe(_)), None, Some(f)) => Some(DeferredWork::Folders(f.clone())),
+            _ => None,
+        };
+        if let (Some(work), Some(LaunchPlan::Exe(exe))) = (work, &plan) {
+            deferred.push(Deferred {
+                app,
+                exe: exe.clone(),
+                work,
+                saved,
+                began,
+            });
+            continue;
+        }
+        // A running browser gets any tabs it is missing; a running VS Code any
+        // folders that have no window yet.
+        let current_titles: Vec<String> = baseline_windows
+            .iter()
+            .filter(|w| window_app_id(w).as_deref() == Some(app.application_id.as_str()))
+            .map(|w| w.title.clone())
+            .collect();
+        let (tab_outcome, wording) = match (&plan, &tabs, &folders) {
+            (None, Some(t), _) => (
+                Some(browser::restore_tabs(
+                    desktop,
+                    app,
+                    &app.executable_path,
+                    t,
+                    &saved,
+                    &monitors,
+                    true,
+                    opts,
+                    &budget,
+                    log,
+                )),
+                &browser::TABS,
+            ),
+            (None, None, Some(f)) => (
+                Some(vscode::restore_folders(
+                    desktop,
+                    app,
+                    &app.executable_path,
+                    f,
+                    &saved,
+                    &monitors,
+                    &current_titles,
+                    opts,
+                    &budget,
+                    log,
+                )),
+                &browser::FOLDERS,
+            ),
+            _ => (None, &browser::TABS),
+        };
 
         let mut launched = false;
         if let Some(plan) = plan {
             log(&format!("starting {}", app.application_id));
             let result = match &plan {
-                LaunchPlan::Exe => desktop.launch(
-                    &app.executable_path,
-                    &app.launch_arguments,
-                    app.working_directory.as_deref(),
-                ),
+                LaunchPlan::Exe(exe) => {
+                    desktop.launch(exe, &app.launch_arguments, app.working_directory.as_deref())
+                }
                 LaunchPlan::Packaged(id) => desktop.launch_packaged(id).map(|()| 0),
             };
             match result {
@@ -248,7 +433,60 @@ pub fn restore(
             started: now,
             last_count: 0,
             last_change: now,
+            tabs: tab_outcome,
+            wording,
         });
+    }
+
+    // Every ordinary app has been started. Now the browsers that need their
+    // windows opened, one after another, within the overall budget.
+    for d in deferred {
+        if budget.cancelled() {
+            steps.push(cancelled_step(d.app));
+            continue;
+        }
+        let (out, wording) = match &d.work {
+            DeferredWork::Tabs(t) => {
+                log(&format!(
+                    "starting {} with saved tabs",
+                    d.app.application_id
+                ));
+                (
+                    browser::restore_tabs(
+                        desktop, d.app, &d.exe, t, &d.saved, &monitors, false, opts, &budget, log,
+                    ),
+                    &browser::TABS,
+                )
+            }
+            DeferredWork::Folders(f) => {
+                log(&format!(
+                    "starting {} with saved folders",
+                    d.app.application_id
+                ));
+                (
+                    vscode::restore_folders(
+                        desktop,
+                        d.app,
+                        &d.exe,
+                        f,
+                        &d.saved,
+                        &monitors,
+                        &[],
+                        opts,
+                        &budget,
+                        log,
+                    ),
+                    &browser::FOLDERS,
+                )
+            }
+        };
+        steps.push(browser::started_report(
+            &d.app.application_id,
+            wording,
+            &out,
+            d.began,
+            budget.expired(),
+        ));
     }
 
     // Wait for all launched apps together, so total time is bounded by the
@@ -259,9 +497,12 @@ pub fn restore(
         let now = Instant::now();
         let mut still_waiting = Vec::new();
         for mut p in pending {
+            // Windows opened for tabs were already placed; leave them alone.
+            let claimed = p.tabs.as_ref().map(|t| &t.claimed);
             let current: Vec<&DiscoveredWindow> = windows
                 .iter()
                 .filter(|w| window_app_id(w).as_deref() == Some(p.app.application_id.as_str()))
+                .filter(|w| !claimed.is_some_and(|c| c.contains(&w.hwnd)))
                 .collect();
             let new_count = if p.launched {
                 current
@@ -277,11 +518,16 @@ pub fn restore(
             }
             let ready =
                 !p.launched || (new_count > 0 && now.duration_since(p.last_change) >= opts.settle);
-            let timed_out = now.duration_since(p.started) >= opts.timeout;
+            // Out of overall time (or cancelled): stop waiting for everything.
+            let timed_out = now.duration_since(p.started) >= opts.timeout || budget.expired();
 
             if ready || timed_out {
                 log(&format!("arranging {}", p.app.application_id));
-                steps.push(finish(desktop, &p, &current, &monitors, opts.timeout));
+                let report = finish(desktop, &p, &current, &monitors, opts.timeout);
+                steps.push(match &p.tabs {
+                    Some(t) => browser::merge_into(report, p.wording, t),
+                    None => report,
+                });
             } else {
                 still_waiting.push(p);
             }

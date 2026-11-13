@@ -7,6 +7,8 @@ use crate::{Result, StorageError};
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_version_counter.sql"),
+    include_str!("../migrations/0003_trust.sql"),
+    include_str!("../migrations/0004_pinned_version.sql"),
 ];
 
 pub fn run(conn: &mut Connection) -> Result<()> {

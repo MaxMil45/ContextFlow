@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 
 use cf_cli::logging;
-use cf_cli::session::{self, RestoreArgs};
+use cf_cli::session::{self, RestoreArgs, RestoreBusy};
 use cf_config::Config;
 use cf_engine::RestoreRun;
 use cf_storage::Database;
@@ -79,6 +79,8 @@ fn run() -> Result<Option<String>> {
         only: Vec::new(),
         dry_run: false,
         timeout: Duration::from_secs(30),
+        max_tabs_per_window: cfg.browser.max_tabs_per_window,
+        overall_timeout: cfg.timeouts.restore_overall(),
     };
     let (ctx, _snap, run) =
         session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {
@@ -91,6 +93,10 @@ fn main() {
     match run() {
         Ok(None) => {}
         Ok(Some(problems)) => cf_windows::message_box(TITLE, &problems, true),
+        // A restore is already running (a second double-click): do nothing.
+        Err(e) if e.downcast_ref::<RestoreBusy>().is_some() => {
+            tracing::info!("another restore is already running; this one did nothing");
+        }
         Err(e) => {
             tracing::error!(target: logging::EXIT_TARGET, "{e:#}");
             cf_windows::message_box(

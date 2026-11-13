@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "ContextFlow",
+  "version": "0.2.0",
+  "description": "Tells the ContextFlow app on this computer which tabs are open, so it can reopen them later. Nothing leaves your computer.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvFog0QysrJJEeq9KCcXoFzMYK6vW5wrGrBp/Han7rXKi8i91sRLxxwIk3YzpL94mheumI7hZaDerEGUeN3ESUAzhRJ1QeMBR/BjTFAeN8Ecru4LGDsTnOtD4DYaVmn/+dpzE1D09uWnN4MjTkk8Xi6UErG5EBwoNPJOFHXj7tIN71kchA0HLsCOgh5FOSDAoCdINUg1c4g91ZiIONyFnpwiRa9TbQwkhHF6intY0K0wl9MLesOtTtM0ZHu8i//+EecoR29EvPhj0ME7wCYa6DMdszHc0aR6OlO7oApcFwnPH9y1R7xigPEX27HM3uNwQXNnJIrDU7kIcpU9x7ryDJQIDAQAB",
+  "minimum_chrome_version": "110",
+  "permissions": ["tabs", "nativeMessaging", "storage", "alarms"],
+  "background": { "service_worker": "background.js" }
+}

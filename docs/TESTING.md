@@ -89,6 +89,47 @@ Tick each one off. "Expect" is what a correct build does.
 
 Known limits: Microsoft Store apps (new Notepad, Calculator, Windows Terminal) are skipped and reported. Apps that run as administrator can't be moved (reported as needing your action). Only each app's windows come back, not what was open inside (which folder, which tabs).
 
+### 00. Browser tabs
+1. Run `contextflow browser install`, then load the extension in Chrome/Edge (see the README), and confirm with `contextflow browser status`.
+2. Open a browser window with a few tabs (for example a Google Drive folder and two docs). Capture: `contextflow capture UniWork --only chrome,code --note "tabs"`. **Expect:** `chrome  1 window(s), N tab(s) saved`. `contextflow show UniWork` lists the addresses, `*` marking the front tab.
+3. Close Chrome completely, then double-click the icon. **Expect:** Chrome opens with the same tabs in the same window position.
+4. Double-click again while Chrome is open. **Expect:** no duplicate tabs or windows.
+5. Disable the extension and capture again. **Expect:** a warning that tabs were not saved, and the windows still saved.
+6. Add `excluded_url_patterns = ["drive.google.com"]` under `[browser]` in the config and capture. **Expect:** those tabs are not saved.
+
+To try browser restore without touching your own Chrome: `contextflow show <workspace> --json > snapshot.json`, then `cargo run -p cf-engine --example real_chrome -- <empty-folder> snapshot.json`.
+
+### 000. Approval, pinning, minimized windows, double-clicks and VS Code
+Use a throwaway database for the first three (see section 2).
+
+**Approving an imported workspace**
+1. Create a workspace, capture it (`contextflow capture A --no-windows`), then `contextflow export A --out %TEMP%\a.json` and `contextflow import %TEMP%\a.json --as B`.
+2. Run `contextflow workspace list`. **Expect:** `B` is marked `[needs approval]`.
+3. Run `contextflow restore B`. **Expect:** it is refused with "has not been approved". `restore B --dry-run` still works.
+4. Run `contextflow workspace trust B`. **Expect:** it lists every program from every snapshot version, approves nothing and exits with an error.
+5. Run `contextflow workspace trust B --yes`, then `contextflow restore B`. **Expect:** approved, and the restore now runs.
+
+**Pinning a version**
+1. Capture workspace `A` twice with notes "one" and "two". Run `contextflow pin A --version 1`.
+2. Run `contextflow snapshots A`. **Expect:** v1 is marked `(pinned)`. `contextflow restore A --dry-run` shows v1 and the note "one".
+3. Capture a third time. **Expect:** a note saying restore and the icon still use v1.
+4. Run `contextflow delete-snapshot A --version 1 --yes`. **Expect:** refused because v1 is pinned. `contextflow prune A --keep-last 1 --yes` also leaves v1.
+5. Run `contextflow unpin A`. **Expect:** `restore A --dry-run` now shows v3.
+
+**Minimized windows**
+1. Minimize one of your apps, then run `contextflow capture A --dry-run`. **Expect:** a warning that N window(s) are minimized and will reopen minimized.
+2. Run `contextflow capture A --unminimize` and `contextflow show A --json`. **Expect:** none of the saved windows has `"display_state": "minimized"`.
+
+**Double-clicking the icon twice quickly**
+1. Close the apps in a workspace, then double-click its icon twice within a second or two.
+2. **Expect:** only one set of apps starts, and no error message appears. (The second click exits silently because a restore is already running.)
+
+**VS Code reopening its folder**
+1. Open VS Code on a project folder and capture: `contextflow capture UniWork --only code`. **Expect:** `code ... 1 folder(s) saved`, and `contextflow show UniWork` lists a `file:///` address under "Folders in code".
+2. Close VS Code completely and double-click the icon. **Expect:** VS Code opens that folder in a window at its saved position.
+3. Double-click again with VS Code open. **Expect:** no second window for the same folder.
+4. If two of your folders share a name, capture the one that is not open in a window. **Expect:** a warning that the folder couldn't be worked out, and the window reopens without a folder.
+
 ### A. Capture and inspect
 1. Open a few apps (VS Code, File Explorer, a browser) across your monitors.
 2. Run these:
@@ -171,7 +212,7 @@ Known limits: Microsoft Store apps (new Notepad, Calculator, Windows Terminal) a
 
 ## 4. Not built yet
 
-Restoring what is *inside* an app (VS Code folders and tabs, browser tabs, terminal directories) comes with the Phase 3 integrations. Today only the apps and their windows come back.
+Apps, their windows, browser tabs and VS Code folders come back. Not built yet: VS Code's open files, terminal directories, and the contents of any other app (only their windows return). Tab and folder comparison in `diff` is also not built yet.
 
 ## 5. Reporting a problem
 

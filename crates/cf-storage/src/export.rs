@@ -172,8 +172,8 @@ impl Database {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let res = tx.execute(
             "INSERT INTO contexts
-             (id, name, description, created_at, updated_at, is_archived, last_version)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, name, description, created_at, updated_at, is_archived, last_version, is_trusted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
             params![
                 id.to_string(),
                 name,

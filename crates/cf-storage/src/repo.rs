@@ -276,6 +276,74 @@ impl Database {
         Ok(())
     }
 
+    /// Whether the user has approved this workspace for restoring. Workspaces
+    /// created here are trusted; imported ones are not until approved.
+    pub fn is_trusted(&self, id: ContextId) -> Result<bool> {
+        let trusted: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT is_trusted FROM contexts WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        trusted
+            .map(|t| t != 0)
+            .ok_or_else(|| StorageError::NotFound(format!("no workspace with id {id}")))
+    }
+
+    pub fn set_trusted(&self, id: ContextId, trusted: bool) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE contexts SET is_trusted = ?1 WHERE id = ?2",
+            params![trusted as i64, id.to_string()],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        Ok(())
+    }
+
+    /// The snapshot version restore uses for this workspace; `None` means the
+    /// latest one.
+    pub fn pinned_version(&self, id: ContextId) -> Result<Option<u32>> {
+        let row: Option<Option<u32>> = self
+            .conn
+            .query_row(
+                "SELECT pinned_version FROM contexts WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        row.ok_or_else(|| StorageError::NotFound(format!("no workspace with id {id}")))
+    }
+
+    /// Pin restore to `version`, or go back to "latest" with `None`.
+    pub fn set_pinned_version(&self, id: ContextId, version: Option<u32>) -> Result<()> {
+        if let Some(v) = version {
+            let exists: Option<i64> = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM context_snapshots WHERE context_id = ?1 AND version_number = ?2",
+                    params![id.to_string(), v],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if exists.is_none() {
+                return Err(StorageError::NotFound(format!(
+                    "snapshot version {v} does not exist"
+                )));
+            }
+        }
+        let n = self.conn.execute(
+            "UPDATE contexts SET pinned_version = ?1 WHERE id = ?2",
+            params![version, id.to_string()],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        Ok(())
+    }
+
     // ---------------------------------------------------------------- snapshots
 
     /// Validate, hash and store a new snapshot as the next version of `context_id`.
@@ -420,6 +488,11 @@ impl Database {
     /// Permanently delete one snapshot and its projections. Version numbers
     /// are never reused afterwards.
     pub fn delete_snapshot(&self, context_id: ContextId, version: u32) -> Result<()> {
+        if self.pinned_version(context_id)? == Some(version) {
+            return Err(StorageError::Conflict(format!(
+                "v{version} is pinned; run `contextflow unpin` first"
+            )));
+        }
         let n = self.conn.execute(
             "DELETE FROM context_snapshots WHERE context_id = ?1 AND version_number = ?2",
             params![context_id.to_string(), version],
@@ -456,11 +529,13 @@ impl Database {
         if policy.keep_last.is_none() && policy.max_age.is_none() {
             return Ok(Vec::new());
         }
+        let pinned = self.pinned_version(context_id)?;
         let all = self.list_snapshots(context_id)?;
         Ok(all
             .into_iter()
             .enumerate()
             .skip(1) // the latest snapshot is always kept
+            .filter(|(_, s)| Some(s.version) != pinned) // and so is the pinned one
             .filter(|(rank, s)| {
                 let outside_count = policy.keep_last.map(|n| *rank >= n as usize);
                 let too_old = policy.max_age.map(|age| s.created_at < now - age);

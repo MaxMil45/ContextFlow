@@ -4,7 +4,7 @@
 
 ContextFlow is a local-first workspace continuity engine for Windows. It captures windows, monitors, Git state and progress notes into immutable, versioned snapshots. It can compare any snapshot with another one or with the live environment, and (from Phase 2) restore them.
 
-> Status: **Phase 1 complete, first Phase 2 slice working.** Save your open apps, then restore them (and their window layout) from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. VS Code/browser contents and the Tauri UI come next. See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
+> Status: **Phase 1 complete, Phase 2 and the first Phase 3 integrations working.** Save your open apps, then restore them, their window layout, browser tabs and VS Code folders from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. The Tauri UI comes next. See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
 
 ## Quick start
 
@@ -31,13 +31,30 @@ contextflow shortcut "University Development"
 
 You can also run it from a terminal: `contextflow restore "University Development"` (add `--dry-run` to preview).
 
-Not every app can be restored. Microsoft Store apps (such as the new Notepad, Calculator and Windows Terminal) are skipped and reported. ContextFlow also reopens each app's windows, not what was inside them (which folder, which tabs). That comes with the VS Code and browser integrations in Phase 3.
+Store apps such as Teams and Claude are started by their package id. **Chrome and Edge also come back with their tabs** (see below), and **VS Code windows reopen the folder they had open**. For other apps ContextFlow reopens the windows, not what was inside them.
+
+**VS Code folders.** At capture, each VS Code window's folder name is taken from its title and looked up in VS Code's own `storage.json`; on restore the folder is reopened with `code --folder-uri`. If a name could mean more than one folder, no folder is saved for that window (capture says so) rather than guessing.
+
+**Pinning.** The icon restores the *latest* snapshot, so one bad capture would change it. `contextflow pin <workspace> --version N` makes restore (and the icon) always use version N until you `unpin`. A pinned version can't be deleted or pruned. `capture --unminimize` saves minimized windows as normal windows, so they don't reopen minimized.
+
+**Imported workspaces must be approved.** A workspace brought in with `import` could name any program, so it can't be restored until you review it with `contextflow workspace trust <name>` (it lists every program in every version) and approve it with `--yes`. Dry runs are always allowed.
+
+### Reopening browser tabs (one-time setup)
+
+```bash
+contextflow browser install
+```
+
+Then in Chrome or Edge open `chrome://extensions` (or `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and choose the folder the command printed. `contextflow browser status` should then say the extension is connected. After that, `capture` saves each browser window's tabs and the desktop icon reopens them. The extension sees only tab addresses and titles; it cannot read cookies, history, passwords or page content, and it ignores private windows. Keep a tab out of saves with `excluded_url_patterns` in the config.
 
 | Command | Purpose |
 |---|---|
 | `workspace create/list/archive/unarchive/delete` | Manage workspaces |
-| `capture <ws> [--only a,b] [--note N] [--dry-run]` | Save the open applications and windows as a new snapshot version (`--repo P` optionally adds Git info) |
-| `restore <ws> [--version N] [--only a,b] [--dry-run]` | Reopen the saved applications and put their windows back |
+| `workspace trust <name> [--yes]` | Review and approve an imported workspace so it can be restored |
+| `capture <ws> [--only a,b] [--note N] [--unminimize] [--dry-run]` | Save the open applications and windows as a new snapshot version (`--unminimize` saves minimized windows as normal; `--repo P` optionally adds Git info) |
+| `restore <ws> [--version N] [--only a,b] [--dry-run]` | Reopen the saved applications and put their windows back (uses the pinned version if there is one) |
+| `pin <ws> [--version N]` / `unpin <ws>` | Make restore always use one snapshot version / go back to the latest |
+| `browser install/status/uninstall` | Set up and check the Chrome/Edge extension |
 | `shortcut <ws> [--name N] [--folder DIR] [--force]` | Create a desktop icon that restores the workspace |
 | `snapshots <ws>` | Version history |
 | `show <ws> [--version N] [--json]` | Inspect a snapshot |
@@ -59,7 +76,9 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 |---|---|
 | `cf-core` | Domain model, canonical SHA-256 hashing, validation, placement geometry (no I/O) |
 | `cf-storage` | SQLite (WAL, FK, migrations), immutable snapshots enforced by triggers |
-| `cf-adapters` | `ContextAdapter` integration contract and registry |
+| `cf-config` | `config.toml` loading and validation |
+| `cf-browser` | Browser extension protocol, native-messaging host, tab matching and install |
+| `cf-vscode` | Works out which folder each VS Code window has open |
 | `cf-git` | Read-only Git inspection (`status --porcelain=v2`, `--no-optional-locks`) |
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |

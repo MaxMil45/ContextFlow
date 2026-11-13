@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use cf_adapters::RestoreStatus;
+use cf_core::RestoreStatus;
 use cf_core::{ApplicationState, DisplayState, MonitorInfo, Rect, SnapshotPayload, WindowState};
 use cf_windows::DiscoveredWindow;
 
@@ -71,10 +71,25 @@ struct Fake {
     /// Windows that appear when an app (by id) is launched.
     on_launch: Vec<(String, Vec<DiscoveredWindow>)>,
     missing_exes: HashSet<String>,
+    /// Sub-folders by parent folder, for `list_dirs`: (parent path, folder names).
+    dirs: Vec<(String, Vec<String>)>,
+    /// When set, only these exact paths exist (overrides `missing_exes`).
+    existing_paths: Option<HashSet<String>>,
+    /// Full path of every executable launched.
+    launched_paths: RefCell<Vec<String>>,
+    /// Everything done, in order: "launch:<app>" and "open:<number of urls>".
+    events: RefCell<Vec<String>>,
     launch_fails: HashSet<String>,
     /// Store apps the fake knows: (application id, package id).
     packaged: Vec<(String, String)>,
     packaged_launched: RefCell<Vec<String>>,
+    /// Tabs open in the running browser, as the extension reports (None = no extension).
+    live_urls: Option<Vec<String>>,
+    /// Windows that appear, one per call, when a browser window is opened.
+    browser_windows: RefCell<Vec<DiscoveredWindow>>,
+    browser_opens: RefCell<Vec<Vec<String>>>,
+    /// Arguments of every `open_app_window` call (e.g. VS Code folders).
+    app_window_opens: RefCell<Vec<Vec<String>>>,
     denied: HashSet<isize>,
     launched: RefCell<Vec<String>>,
     placed: RefCell<Vec<(isize, Rect, DisplayState)>>,
@@ -88,7 +103,41 @@ impl Desktop for Fake {
         Ok(self.monitors.clone())
     }
     fn exe_exists(&self, path: &str) -> bool {
+        if let Some(existing) = &self.existing_paths {
+            return existing.contains(path);
+        }
         !self.missing_exes.contains(&application_id(path))
+    }
+    fn list_dirs(&self, dir: &str) -> Vec<String> {
+        self.dirs
+            .iter()
+            .find(|(parent, _)| parent == dir)
+            .map(|(_, names)| names.clone())
+            .unwrap_or_default()
+    }
+    fn open_app_window(&self, _exe: &str, args: &[String]) -> Result<(), String> {
+        self.app_window_opens.borrow_mut().push(args.to_vec());
+        let mut queue = self.browser_windows.borrow_mut();
+        if !queue.is_empty() {
+            let w = queue.remove(0);
+            self.open.borrow_mut().push(w);
+        }
+        Ok(())
+    }
+    fn open_browser_window(&self, _exe: &str, urls: &[String]) -> Result<(), String> {
+        self.browser_opens.borrow_mut().push(urls.to_vec());
+        self.events
+            .borrow_mut()
+            .push(format!("open:{}", urls.len()));
+        let mut queue = self.browser_windows.borrow_mut();
+        if !queue.is_empty() {
+            let w = queue.remove(0);
+            self.open.borrow_mut().push(w);
+        }
+        Ok(())
+    }
+    fn live_browser_urls(&self, _browser: &str) -> Option<Vec<String>> {
+        self.live_urls.clone()
     }
     fn packaged_app_id(&self, exe: &str) -> Option<String> {
         let id = application_id(exe);
@@ -117,6 +166,8 @@ impl Desktop for Fake {
             return Err("access is denied".into());
         }
         self.launched.borrow_mut().push(id.clone());
+        self.launched_paths.borrow_mut().push(exe.to_string());
+        self.events.borrow_mut().push(format!("launch:{id}"));
         for (app, wins) in &self.on_launch {
             if *app == id {
                 self.open.borrow_mut().extend(wins.clone());
@@ -413,6 +464,194 @@ fn running_store_app_is_repositioned_not_skipped() {
 }
 
 #[test]
+fn relative_or_non_exe_paths_are_never_launched() {
+    let mut relative = app("evil");
+    relative.executable_path = "evil.exe".into();
+    let mut script = app("script");
+    script.executable_path = r"C:\Apps\script.bat".into();
+    let p = SnapshotPayload {
+        applications: vec![relative, script],
+        ..Default::default()
+    };
+    let d = Fake::default();
+    let result = run(&d, &p, &fast());
+    assert_eq!(result.steps.len(), 2);
+    assert!(
+        result
+            .steps
+            .iter()
+            .all(|s| s.status == RestoreStatus::Failed && s.code == Some("UNSAFE_PATH")),
+        "{result:#?}"
+    );
+    assert!(d.launched.borrow().is_empty(), "nothing may be started");
+}
+
+#[test]
+fn updated_app_is_found_in_its_new_version_folder() {
+    let base = r"C:\Users\u\AppData\Local\Discord";
+    let mut discord = app("discord");
+    discord.executable_path = format!(r"{base}\app-1.0.9\Discord.exe");
+    let p = SnapshotPayload {
+        applications: vec![discord],
+        windows: vec![saved_window("discord", "Friends", r(0, 0, 800, 600), "M1")],
+        ..Default::default()
+    };
+    let new_exe = format!(r"{base}\app-1.0.10\Discord.exe");
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        // The 1.0.9 folder is gone; only 1.0.10 has the program.
+        dirs: vec![(
+            base.to_string(),
+            vec!["app-1.0.9".into(), "app-1.0.10".into(), "packages".into()],
+        )],
+        existing_paths: Some([new_exe.clone()].into()),
+        on_launch: vec![("discord".into(), vec![open_window(1, "discord", "Friends")])],
+        ..Default::default()
+    };
+    let result = run(&d, &p, &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    assert_eq!(result.steps[0].status, RestoreStatus::Success);
+    let launched = d.launched_paths.borrow();
+    assert_eq!(launched.len(), 1);
+    assert!(launched[0].contains("app-1.0.10"), "launched {launched:?}");
+    assert_eq!(launched[0], new_exe);
+}
+
+#[test]
+fn saved_path_wins_when_it_still_exists() {
+    let base = r"C:\Users\u\AppData\Local\Discord";
+    let saved = format!(r"{base}\app-1.0.9\Discord.exe");
+    let mut discord = app("discord");
+    discord.executable_path = saved.clone();
+    let p = SnapshotPayload {
+        applications: vec![discord],
+        ..Default::default()
+    };
+    let d = Fake {
+        dirs: vec![(
+            base.to_string(),
+            vec!["app-1.0.9".into(), "app-1.0.10".into()],
+        )],
+        // Both exist: the saved one is used, not the newer one.
+        existing_paths: Some([saved.clone(), format!(r"{base}\app-1.0.10\Discord.exe")].into()),
+        on_launch: vec![("discord".into(), vec![open_window(1, "discord", "x")])],
+        ..Default::default()
+    };
+    run(&d, &p, &fast());
+    assert_eq!(*d.launched_paths.borrow(), vec![saved]);
+}
+
+#[test]
+fn missing_app_with_no_newer_folder_is_still_reported() {
+    let base = r"C:\Users\u\AppData\Local\Discord";
+    let mut discord = app("discord");
+    discord.executable_path = format!(r"{base}\app-1.0.9\Discord.exe");
+    let p = SnapshotPayload {
+        applications: vec![discord],
+        ..Default::default()
+    };
+    let d = Fake {
+        dirs: vec![(
+            base.to_string(),
+            vec!["app-1.0.9".into(), "packages".into()],
+        )],
+        existing_paths: Some(HashSet::new()),
+        ..Default::default()
+    };
+    let result = run(&d, &p, &fast());
+    assert_eq!(result.steps[0].code, Some("EXE_NOT_FOUND"));
+    assert!(d.launched.borrow().is_empty());
+}
+
+#[test]
+fn ordinary_apps_start_before_browser_tabs() {
+    // The browser is listed first, but its slow window-opening must wait.
+    let mut p = chrome_payload();
+    p.applications.push(app("code"));
+    p.windows
+        .push(saved_window("code", "main.rs", r(0, 0, 500, 500), "M1"));
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![
+            open_window(11, "chrome", "x"),
+            open_window(12, "chrome", "y"),
+        ]),
+        on_launch: vec![("code".into(), vec![open_window(1, "code", "main.rs")])],
+        ..Default::default()
+    };
+    let result = run(&d, &p, &fast());
+    let events = d.events.borrow();
+    let launch_code = events
+        .iter()
+        .position(|e| e == "launch:code")
+        .expect("code was launched");
+    let first_open = events
+        .iter()
+        .position(|e| e.starts_with("open:"))
+        .expect("browser windows were opened");
+    assert!(launch_code < first_open, "order was {events:?}");
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    // Reports still follow the snapshot's order.
+    assert_eq!(result.steps[0].application_id, "chrome");
+}
+
+#[test]
+fn overall_timeout_bounds_the_whole_restore() {
+    // Three apps start but never show a window; each would wait 10 s on its own.
+    let p = SnapshotPayload {
+        applications: vec![app("a"), app("b"), app("c")],
+        ..Default::default()
+    };
+    let d = Fake::default();
+    let opts = RestoreOptions {
+        timeout: Duration::from_secs(10),
+        overall_timeout: Duration::from_millis(200),
+        ..fast()
+    };
+    let started = std::time::Instant::now();
+    let result = run(&d, &p, &opts);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(result.steps.len(), 3);
+    assert!(
+        result
+            .steps
+            .iter()
+            .all(|s| s.status == RestoreStatus::Failed),
+        "{result:#?}"
+    );
+    assert_eq!(result.overall, RestoreStatus::Failed);
+}
+
+#[test]
+fn cancel_before_start_launches_nothing() {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let opts = RestoreOptions {
+        cancel: Some(cancel),
+        ..fast()
+    };
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        ..Default::default()
+    };
+    let result = run(&d, &payload(), &opts);
+    assert_eq!(result.steps.len(), 3);
+    assert!(
+        result
+            .steps
+            .iter()
+            .all(|s| s.status == RestoreStatus::Skipped && s.code == Some("CANCELLED")),
+        "{result:#?}"
+    );
+    assert!(d.launched.borrow().is_empty() && d.events.borrow().is_empty());
+    // Nothing failed, so the run is not reported as a failure.
+    assert_eq!(result.overall, RestoreStatus::Success);
+}
+
+#[test]
 fn maximized_state_is_applied() {
     let mut w = saved_window("code", "x", r(100, 100, 800, 600), "M1");
     w.display_state = DisplayState::Maximized;
@@ -429,3 +668,7 @@ fn maximized_state_is_applied() {
     run(&d, &p, &fast());
     assert_eq!(d.placed.borrow()[0].2, DisplayState::Maximized);
 }
+
+include!("tests_browser.rs");
+
+include!("tests_vscode.rs");

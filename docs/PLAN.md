@@ -1,6 +1,6 @@
 # ContextFlow: Implementation Plan
 
-**Status:** Phase 0 complete (repository scaffold, core engine, storage, CLI). Phase 1 is mostly done.
+**Status:** Phases 0 and 1 complete. The first slice of Phase 2 is done: `restore` and the desktop icon (see below). Remaining Phase 2: stable monitor ids, process identity, a real-window test app. See [TESTING.md](TESTING.md) to test what exists.
 **Spec:** ContextFlow Comprehensive Project Specification v2.0 (save it as `docs/SPEC.md`).
 **Audience:** whoever builds ContextFlow next. Every phase below lists concrete tasks, the files they touch, acceptance tests, and an exit gate.
 
@@ -64,6 +64,7 @@ ContextFlow/
 │   ├── cf-git/                read-only git inspection (porcelain v2)          [done]
 │   ├── cf-diff/               deterministic Context Diff                       [done: git/apps/windows/monitors/notes]
 │   ├── cf-windows/            Win32 window/monitor discovery                   [discovery done; restore in Phase 2]
+│   ├── cf-config/             config.toml loading and validation               [done]
 │   ├── cf-cli/                `contextflow` binary                             [done for Phase 1]
 │   ├── cf-engine/             (Phase 2) capture/restore orchestration, DB actor
 │   ├── cf-adapter-vscode/     (Phase 3)
@@ -94,20 +95,18 @@ ContextFlow/
 * `cf-adapters`: adapter contract, capabilities, registry.
 * `cf-cli`: `workspace create|list|archive|unarchive`, `capture`, `snapshots`, `show`, `diff --from/--to/--live`, `verify`, `windows`.
 
-### Phase 1: Core engine and persistence (≈ 1–2 weeks remaining)
+### Phase 1: Core engine and persistence ✅ (done)
 
-Most of the spec's Phase 1 is already implemented. What is left:
+| WP | Task | Status |
+|----|------|--------|
+| 1.1 | **CI.** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) on `windows-latest`: fmt, clippy `-D warnings`, tests, and the release CLI uploaded as a build artifact. [`scripts/check.ps1`](../scripts/check.ps1) runs the same checks locally. | ✅ Passes locally. To block a failing PR, mark the CI job as a required check under the GitHub repo's branch-protection settings. |
+| 1.2 | **Configuration.** New crate `cf-config`. `config.toml` sections: storage, capture exclusions (processes, title patterns), retention, git timeout, logging. Unknown keys and out-of-range values are rejected with file and line. CLI: `config path/show/init`. | ✅ 7 tests |
+| 1.3 | **Retention and deletion.** `delete-snapshot`, `workspace delete`, and `prune` (dry-run unless `--yes`; optional `auto_prune`). A snapshot is pruned only if it breaks every configured rule, and the latest is never pruned. Migration `0002` makes sure version numbers are never reused. | ✅ |
+| 1.4 | **Export, import and backup.** The export carries the canonical payload bytes and hashes. Import verifies everything before writing anything and keeps version numbers. Backup uses `VACUUM INTO` (consistent and compact), then reopens and integrity-checks the copy. | ✅ |
+| 1.5 | **Crash safety.** [`tests/crash.rs`](../crates/cf-storage/tests/crash.rs) kills a writer process mid-write, 25 times by default. Set `CF_CRASH_ITERATIONS=100` for the full run. | ✅ |
+| 1.6 | **Logging.** Daily rolling file next to the database (`tracing-appender`), level from config. `cf_core::redact` strips URL credentials, query strings and fragments, and replaces the home directory with `~`. Window titles and notes are never logged. | ✅ |
 
-| WP | Task | Done when |
-|----|------|-----------|
-| 1.1 | **CI.** GitHub Actions on `windows-latest`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace`. Cache `~/.cargo` and `target`. | A green pipeline on main. A PR with a failing test is blocked. |
-| 1.2 | **Configuration** (`config.toml` in the config dir, loaded with `toml` + serde). Settings: DB path, excluded processes, excluded directories, retention, timeouts. Validate on load and report errors with file and line. | Unit tests for defaults, overrides, and invalid values. |
-| 1.3 | **Retention and deletion.** `delete_snapshot` and `delete_workspace` (explicit, confirmed), plus a retention policy (keep last N / newer than D days, never delete the latest). | Tests prove retention never deletes the newest snapshot and cascades its projections. |
-| 1.4 | **Backup and export.** `contextflow export <ws> --out file.json` (all versions, hashes included). `contextflow backup` uses the SQLite online backup API to write a timestamped copy. `import` re-verifies hashes before inserting. | Round-trip test: export → import into a fresh DB → identical hashes. |
-| 1.5 | **Crash safety test.** Kill a child process mid-`create_snapshot` in a loop, then reopen the DB. | 100 iterations with no partial snapshot and a clean `integrity_check`. |
-| 1.6 | **Structured logging.** Rolling log file in the data dir (`tracing-appender`), with a redaction helper for paths and URLs at `info` level and above. | Test asserts that URL query strings are not logged. |
-
-**Exit gate:** spec Phase 1 acceptance criteria all covered by tests: multiple workspaces, multiple snapshots, immutability, survives restart, invalid data rejected. ✅ is already true for all five. 1.1 to 1.6 harden it.
+**Exit gate:** ✅ All of spec Phase 1's acceptance criteria are covered by automated tests. For manual checks, see [TESTING.md](TESTING.md).
 
 ### Phase 2: Windows discovery and layout restoration (≈ 4–5 weeks)
 
@@ -195,9 +194,10 @@ Start only after the v1.0 definition of success (§8) is met. Candidates, in sug
 
 * Schema v1 is in [`crates/cf-storage/migrations/0001_initial.sql`](../crates/cf-storage/migrations/0001_initial.sql). It covers every spec §6.1 table plus immutability triggers.
 * Additions to the spec schema: `context_snapshots.payload_json` (canonical source of truth), and `snapshot_windows.title` / `window_class` (needed for identification).
+* `0002` (shipped): `contexts.last_version` counter, so deleting the newest snapshot never lets its version number be reused. Also adds an index for age-based retention.
 * Planned migrations:
-  * `0002`: `restore_steps.error_code` index, plus `context_snapshots.label` (user-named versions such as "Database implementation").
-  * `0003`: browser tab projection table (`snapshot_browser_tabs`) for Phase 4 diffing.
+  * `0003`: `restore_steps.error_code` index, plus `context_snapshots.label` (user-named versions such as "Database implementation").
+  * `0004`: browser tab projection table (`snapshot_browser_tabs`) for Phase 4 diffing.
 * Every adapter's `adapter_state` has a `schema_version`. Adapters must read N−1 versions.
 
 ---
@@ -286,3 +286,28 @@ A usable **developer preview** (CLI capture, restore and diff for windows, VS Co
 2. WP 1.1: add CI.
 3. WP 2.4: build `cf-testwin` first. Every Phase 2 test depends on it.
 4. WP 2.5–2.8: the restore pipeline, leading to `contextflow restore`.
+
+---
+
+## 13. Update: apps-first restore and the desktop icon
+
+Decision: the main way to save is **applications and windows**, not Git repositories. Repositories remain an optional extra (`capture --repo`).
+
+Delivered ahead of the rest of Phase 2:
+
+| Piece | Where | Covers plan item |
+|---|---|---|
+| `cf-windows`: `launch_process`, `place_window` (`SetWindowPlacement`), `message_box`; maximized/minimized windows now store their restored rectangle | [crates/cf-windows](../crates/cf-windows/src) | 2.3, 2.5, 2.7 |
+| `cf-engine`: preflight, launch, bounded wait with settle, window pairing, monitor fallback, per-app status, idempotency. The OS sits behind a `Desktop` trait so it is fully unit-tested | [crates/cf-engine](../crates/cf-engine/src) | 2.5–2.9 |
+| `contextflow restore` with `--only`, `--dry-run`, `--version` | [main.rs](../crates/cf-cli/src/main.rs) | 2.10 |
+| Restore history in `restore_runs` / `restore_steps` | [history.rs](../crates/cf-storage/src/history.rs) | 2.8 |
+| `contextflow-launch.exe` (no console window) and `contextflow shortcut` | [launch.rs](../crates/cf-cli/src/launch.rs), [shortcut.rs](../crates/cf-cli/src/shortcut.rs) | new |
+| `capture --only` and built-in skipping of Store-app host windows | [capture.rs](../crates/cf-cli/src/capture.rs) | new |
+
+Known gaps, in priority order:
+
+1. **App contents are not restored.** Windows come back, but not which folder VS Code had open or which tabs a browser had. Launch arguments are not captured yet. This is the Phase 3 adapters (3.3 to 3.7), and is the next most valuable step.
+2. **Microsoft Store apps** (new Notepad, Calculator, Windows Terminal) are skipped. They need launch by app id (`IApplicationActivationManager`), WP 2.5.
+3. **Several windows of one app:** only as many windows come back as the app opens by itself.
+4. Still open from Phase 2: stable monitor ids (2.2), process identity with start time (2.1), the `cf-testwin` test app (2.4), and DPI scaling between monitors of different scale (2.7).
+5. The icon has no custom image yet.

@@ -1,0 +1,341 @@
+//! ContextFlow configuration.
+//!
+//! Configuration lives in `config.toml` in the per-user config directory. A
+//! missing file means "all defaults". Unknown keys are rejected so typos are
+//! reported instead of silently ignored, and every value is range-checked.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("could not read {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{path}: {message}")]
+    Parse { path: PathBuf, message: String },
+    #[error("invalid configuration: {0}")]
+    Invalid(String),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    pub storage: StorageConfig,
+    pub capture: CaptureConfig,
+    pub retention: RetentionConfig,
+    pub timeouts: TimeoutConfig,
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StorageConfig {
+    /// Overrides the default database location.
+    pub database_path: Option<PathBuf>,
+    /// Where `contextflow backup` writes by default.
+    pub backup_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CaptureConfig {
+    pub include_windows: bool,
+    /// Process names (with or without `.exe`, case-insensitive) never captured.
+    pub excluded_processes: Vec<String>,
+    /// Windows whose title contains any of these (case-insensitive) are skipped.
+    pub excluded_title_patterns: Vec<String>,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            include_windows: true,
+            excluded_processes: Vec::new(),
+            excluded_title_patterns: Vec::new(),
+        }
+    }
+}
+
+impl CaptureConfig {
+    /// Excluded process names normalised to lower-case stems (`Code.exe` -> `code`).
+    pub fn normalized_excluded_processes(&self) -> Vec<String> {
+        self.excluded_processes
+            .iter()
+            .map(|p| {
+                let p = p.trim().to_lowercase();
+                p.strip_suffix(".exe").map(str::to_string).unwrap_or(p)
+            })
+            .collect()
+    }
+
+    pub fn title_is_excluded(&self, title: &str) -> bool {
+        let title = title.to_lowercase();
+        self.excluded_title_patterns
+            .iter()
+            .any(|p| title.contains(&p.to_lowercase()))
+    }
+}
+
+/// A snapshot is pruned only when it breaks *every* configured rule, and the
+/// latest snapshot of a workspace is never pruned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// Keep at least this many newest snapshots per workspace.
+    pub keep_last: Option<u32>,
+    /// Keep snapshots newer than this many days.
+    pub max_age_days: Option<u32>,
+    /// Prune automatically after each capture. Off by default.
+    pub auto_prune: bool,
+}
+
+impl RetentionConfig {
+    pub fn is_configured(&self) -> bool {
+        self.keep_last.is_some() || self.max_age_days.is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TimeoutConfig {
+    /// Per-command timeout for git, in milliseconds.
+    pub git_ms: u64,
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self { git_ms: 10_000 }
+    }
+}
+
+impl TimeoutConfig {
+    pub fn git(&self) -> Duration {
+        Duration::from_millis(self.git_ms)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoggingConfig {
+    /// trace | debug | info | warn | error
+    pub level: String,
+    /// Write a daily rolling log file in the data directory.
+    pub file: bool,
+    /// How many daily log files to keep.
+    pub max_files: usize,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".into(),
+            file: true,
+            max_files: 7,
+        }
+    }
+}
+
+const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+
+impl Config {
+    /// Load from `path`. A missing file yields the defaults.
+    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(source) => {
+                return Err(ConfigError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })
+            }
+        };
+        Self::parse(&text).map_err(|e| match e {
+            ConfigError::Parse { message, .. } => ConfigError::Parse {
+                path: path.to_path_buf(),
+                message,
+            },
+            other => other,
+        })
+    }
+
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        let cfg: Config = toml::from_str(text).map_err(|e| ConfigError::Parse {
+            path: PathBuf::from("config.toml"),
+            message: e.to_string().trim().to_string(),
+        })?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |m: String| Err(ConfigError::Invalid(m));
+        if self.retention.keep_last == Some(0) {
+            return invalid("retention.keep_last must be at least 1".into());
+        }
+        if self.retention.max_age_days == Some(0) {
+            return invalid("retention.max_age_days must be at least 1".into());
+        }
+        if self.retention.auto_prune && !self.retention.is_configured() {
+            return invalid(
+                "retention.auto_prune needs retention.keep_last or retention.max_age_days".into(),
+            );
+        }
+        if !(100..=600_000).contains(&self.timeouts.git_ms) {
+            return invalid("timeouts.git_ms must be between 100 and 600000".into());
+        }
+        if !LEVELS.contains(&self.logging.level.as_str()) {
+            return invalid(format!(
+                "logging.level must be one of {}",
+                LEVELS.join(", ")
+            ));
+        }
+        if !(1..=365).contains(&self.logging.max_files) {
+            return invalid("logging.max_files must be between 1 and 365".into());
+        }
+        if self
+            .capture
+            .excluded_processes
+            .iter()
+            .chain(&self.capture.excluded_title_patterns)
+            .any(|s| s.trim().is_empty())
+        {
+            return invalid("capture exclusion entries must not be empty".into());
+        }
+        Ok(())
+    }
+
+    pub fn to_toml(&self) -> String {
+        toml::to_string_pretty(self).expect("config always serialises")
+    }
+}
+
+/// Commented starter file written by `contextflow config init`.
+pub const TEMPLATE: &str = r#"# ContextFlow configuration
+# Every setting is optional; the values shown are the defaults.
+
+[storage]
+# database_path = 'C:\Users\you\ContextFlow\contextflow.db'
+# backup_dir = 'D:\Backups\ContextFlow'
+
+[capture]
+include_windows = true
+# Process names to never capture (".exe" optional, case-insensitive).
+excluded_processes = []
+# Skip windows whose title contains any of these (case-insensitive).
+excluded_title_patterns = []
+
+[retention]
+# A snapshot is pruned only when it breaks every rule set here.
+# The latest snapshot of a workspace is never pruned.
+# keep_last = 50
+# max_age_days = 90
+auto_prune = false
+
+[timeouts]
+git_ms = 10000
+
+[logging]
+level = "info"
+file = true
+max_files = 7
+"#;
+
+/// The per-user directories ContextFlow stores its data and config in.
+/// Shared by the CLI and the desktop launcher so they always agree.
+pub fn project_dirs() -> Option<directories::ProjectDirs> {
+    directories::ProjectDirs::from("dev", "ContextFlow", "ContextFlow")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_equals_defaults() {
+        assert_eq!(Config::parse(TEMPLATE).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn empty_file_is_defaults() {
+        assert_eq!(Config::parse("").unwrap(), Config::default());
+    }
+
+    #[test]
+    fn missing_file_is_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::load(&dir.path().join("nope.toml")).unwrap();
+        assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn overrides_apply() {
+        let cfg = Config::parse(
+            r#"
+            [capture]
+            excluded_processes = ["Spotify.exe", " Discord "]
+            excluded_title_patterns = ["Private"]
+            [retention]
+            keep_last = 10
+            auto_prune = true
+            [timeouts]
+            git_ms = 2500
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.capture.normalized_excluded_processes(),
+            vec!["spotify", "discord"]
+        );
+        assert!(cfg.capture.title_is_excluded("my private notes"));
+        assert!(!cfg.capture.title_is_excluded("public"));
+        assert_eq!(cfg.retention.keep_last, Some(10));
+        assert_eq!(cfg.timeouts.git(), Duration::from_millis(2500));
+        assert!(cfg.logging.file, "untouched sections keep defaults");
+    }
+
+    #[test]
+    fn unknown_keys_report_line_numbers() {
+        let err = Config::parse("[capture]\ninclude_windowz = true\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("include_windowz"), "{msg}");
+        assert!(msg.contains("line 2"), "{msg}");
+    }
+
+    #[test]
+    fn invalid_values_are_rejected() {
+        for bad in [
+            "[retention]\nkeep_last = 0",
+            "[retention]\nmax_age_days = 0",
+            "[retention]\nauto_prune = true",
+            "[timeouts]\ngit_ms = 5",
+            "[logging]\nlevel = \"loud\"",
+            "[logging]\nmax_files = 0",
+            "[capture]\nexcluded_processes = [\"  \"]",
+        ] {
+            assert!(
+                matches!(Config::parse(bad), Err(ConfigError::Invalid(_))),
+                "{bad}"
+            );
+        }
+        assert!(matches!(
+            Config::parse("[timeouts]\ngit_ms = \"fast\""),
+            Err(ConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn round_trips_through_toml() {
+        let mut cfg = Config::default();
+        cfg.retention.keep_last = Some(5);
+        cfg.storage.database_path = Some(PathBuf::from(r"C:\data\cf.db"));
+        assert_eq!(Config::parse(&cfg.to_toml()).unwrap(), cfg);
+    }
+}

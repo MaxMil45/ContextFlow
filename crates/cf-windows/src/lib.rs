@@ -11,6 +11,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[cfg(windows)]
+mod control;
+#[cfg(windows)]
 mod imp;
 
 #[derive(Debug, Error)]
@@ -66,6 +68,152 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     }
 }
 
+/// Place a window (see `control::place_window`). Fails with an OS error 5
+/// ("access denied") for windows of elevated processes.
+pub fn place_window(hwnd: isize, rect: Rect, state: DisplayState) -> Result<()> {
+    #[cfg(windows)]
+    {
+        control::place_window(hwnd, rect, state).map_err(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hwnd, rect, state);
+        Err(PlatformError::Unsupported)
+    }
+}
+
+/// For an executable inside a Microsoft Store package
+/// (`...\WindowsApps\<Name>_<ver>_<arch>__<publisher>\...`), return its
+/// Application User Model ID (`<Name>_<publisher>!<AppId>`), read from the
+/// package's `AppxManifest.xml`. `None` for anything else.
+pub fn packaged_app_id(exe_path: &str) -> Option<String> {
+    let manifest_for =
+        |root: &str| std::fs::read_to_string(format!("{root}\\AppxManifest.xml")).ok();
+    packaged_app_id_with(exe_path, &manifest_for)
+}
+
+/// [`packaged_app_id`] with the manifest reader injected, for testing.
+pub fn packaged_app_id_with(
+    exe_path: &str,
+    read_manifest: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let norm = exe_path.replace('/', "\\");
+    let lower = norm.to_lowercase();
+    let marker = "\\windowsapps\\";
+    let start = lower.find(marker)? + marker.len();
+    let rest = &norm[start..];
+    let (folder, relative) = rest.split_once('\\')?;
+    let root = &norm[..start + folder.len()];
+
+    // Folder: Name_Version_Arch_ResourceId_PublisherId; family = Name_PublisherId.
+    let parts: Vec<&str> = folder.split('_').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    let family = format!("{}_{}", parts[0], parts[parts.len() - 1]);
+
+    let manifest = read_manifest(root)?;
+    let app_id = pick_manifest_application(&manifest, relative)?;
+    Some(format!("{family}!{app_id}"))
+}
+
+/// Choose the `<Application Id=...>` whose `Executable` is `relative`. Some
+/// packages list several entries for one executable (Teams has a "remote
+/// module container" next to the real app), so prefer full-trust entries.
+fn pick_manifest_application(manifest: &str, relative: &str) -> Option<String> {
+    fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+        let key = format!("{name}=\"");
+        let i = tag.find(&key)? + key.len();
+        Some(&tag[i..i + tag[i..].find('"')?])
+    }
+    let wanted = relative.replace('/', "\\").to_lowercase();
+    let mut candidates: Vec<(bool, String)> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = manifest[from..].find("<Application ") {
+        let begin = from + i;
+        let end = begin + manifest[begin..].find('>')?;
+        let tag = &manifest[begin..end];
+        from = end;
+        let (Some(id), Some(exe)) = (attr(tag, "Id"), attr(tag, "Executable")) else {
+            continue;
+        };
+        if exe.replace('/', "\\").to_lowercase() == wanted {
+            let full_trust = attr(tag, "EntryPoint") == Some("Windows.FullTrustApplication");
+            candidates.push((full_trust, id.to_string()));
+        }
+    }
+    candidates
+        .iter()
+        .find(|(full, _)| *full)
+        .or_else(|| candidates.first())
+        .map(|(_, id)| id.clone())
+}
+
+/// Start a Microsoft Store app by its Application User Model ID. If it is
+/// already running, Windows brings its window forward.
+pub fn launch_packaged(app_user_model_id: &str) -> std::io::Result<()> {
+    let valid = !app_user_model_id.is_empty()
+        && app_user_model_id.contains('!')
+        && app_user_model_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-!".contains(c));
+    if !valid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a valid app package id",
+        ));
+    }
+    use std::process::{Command, Stdio};
+    // explorer.exe resolves the id and activates the app, then exits.
+    Command::new("explorer.exe")
+        .arg(format!("shell:AppsFolder\\{app_user_model_id}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+/// Show a modal message box. No-op off Windows.
+pub fn message_box(title: &str, text: &str, warning: bool) {
+    #[cfg(windows)]
+    control::message_box(title, text, warning);
+    #[cfg(not(windows))]
+    let _ = (title, text, warning);
+}
+
+/// Start `exe` as an independent process (no shell, no inherited console) and
+/// return its process id. Console programs get their own window.
+pub fn launch_process(
+    exe: &str,
+    args: &[String],
+    working_dir: Option<&str>,
+) -> std::io::Result<u32> {
+    use std::process::{Command, Stdio};
+    if exe.contains('\0') || args.iter().any(|a| a.contains('\0')) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "launch parameters must not contain NUL characters",
+        ));
+    }
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(dir) = working_dir.filter(|d| std::path::Path::new(d).is_dir()) {
+        cmd.current_dir(dir);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    // Dropping the Child handle detaches it; the app keeps running after we exit.
+    Ok(cmd.spawn()?.id())
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -89,6 +237,66 @@ mod tests {
         let windows = enumerate_windows().unwrap();
         for w in &windows {
             assert!(!w.title.is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod packaged_tests {
+    use super::*;
+
+    const TEAMS: &str = r#"<Package><Applications>
+      <Application Id="MSTeamsRemoteModuleContainer" Executable="ms-teams.exe" EntryPoint="Windows.PartialTrustApplication" uap10:RuntimeBehavior="packagedClassicApp">
+      <Application Id="MSTeams" Executable="ms-teams.exe" EntryPoint="Windows.FullTrustApplication">
+      <Application Id="MSTeams.Update" Executable="ms-teamsupdate.exe" EntryPoint="Windows.FullTrustApplication">
+    </Applications></Package>"#;
+
+    #[test]
+    fn picks_the_full_trust_entry_for_a_shared_executable() {
+        let id = packaged_app_id_with(
+            r"C:\Program Files\WindowsApps\MSTeams_26304.1201.5310.7985_x64__8wekyb3d8bbwe\ms-teams.exe",
+            &|root| {
+                assert!(root.ends_with("8wekyb3d8bbwe"));
+                Some(TEAMS.into())
+            },
+        );
+        assert_eq!(id.as_deref(), Some("MSTeams_8wekyb3d8bbwe!MSTeams"));
+    }
+
+    #[test]
+    fn handles_subfolder_executables_and_other_paths() {
+        let manifest = r#"<Application Id="Claude" Executable="app\Claude.exe" EntryPoint="Windows.FullTrustApplication">
+                          <Application Id="SshProxy" Executable="app\resources\claude-ssh-proxy.exe">"#;
+        let id = packaged_app_id_with(
+            r"C:\Program Files\WindowsApps\Claude_5.11492.0.0_x64__pzs8sxrjxfjjc\app\claude.exe",
+            &|_| Some(manifest.into()),
+        );
+        assert_eq!(id.as_deref(), Some("Claude_pzs8sxrjxfjjc!Claude"));
+
+        let never = |_: &str| -> Option<String> { panic!("must not read") };
+        assert_eq!(
+            packaged_app_id_with(r"C:\Windows\notepad.exe", &never),
+            None
+        );
+        // Unreadable manifest or unknown executable -> None, not a guess.
+        assert_eq!(
+            packaged_app_id_with(r"C:\Program Files\WindowsApps\A_1_x64__pub\x.exe", &|_| {
+                None
+            }),
+            None
+        );
+        assert_eq!(
+            packaged_app_id_with(r"C:\Program Files\WindowsApps\A_1_x64__pub\x.exe", &|_| {
+                Some(manifest.into())
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_ids() {
+        for bad in ["", "NoBang", "A!B C", "A!B&calc", "A!B\"", r"..\x!y"] {
+            assert!(launch_packaged(bad).is_err(), "{bad}");
         }
     }
 }

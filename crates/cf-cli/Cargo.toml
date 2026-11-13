@@ -1,24 +1,37 @@
 [package]
 name = "cf-cli"
-description = "ContextFlow command-line interface"
+description = "ContextFlow command-line interface and desktop launcher"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "cf_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "contextflow"
 path = "src/main.rs"
 
+# Windowless program that desktop shortcuts start.
+[[bin]]
+name = "contextflow-launch"
+path = "src/launch.rs"
+
 [dependencies]
+cf-adapters.workspace = true
+cf-config.workspace = true
 cf-core.workspace = true
 cf-diff.workspace = true
+cf-engine.workspace = true
 cf-git.workspace = true
 cf-storage.workspace = true
 cf-windows.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
-directories.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tracing-appender.workspace = true
 tracing-subscriber.workspace = true

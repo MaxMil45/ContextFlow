@@ -16,8 +16,12 @@ cf-adapters = { path = "crates/cf-adapters" }
 cf-git = { path = "crates/cf-git" }
 cf-diff = { path = "crates/cf-diff" }
 cf-windows = { path = "crates/cf-windows" }
+cf-config = { path = "crates/cf-config" }
+cf-engine = { path = "crates/cf-engine" }
 
 anyhow = "1"
+toml = "0.8"
+tracing-appender = "0.2"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 clap = { version = "4", features = ["derive", "env"] }

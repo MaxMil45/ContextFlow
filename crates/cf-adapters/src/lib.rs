@@ -102,6 +102,18 @@ pub enum RestoreStatus {
     RequiresUserIntervention,
 }
 
+impl RestoreStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::PartialSuccess => "partial_success",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+            Self::RequiresUserIntervention => "requires_user_intervention",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoreReport {
     pub status: RestoreStatus,

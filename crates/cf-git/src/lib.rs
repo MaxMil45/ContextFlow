@@ -4,11 +4,15 @@
 //! repository. Every command here is read-only and runs with
 //! `--no-optional-locks` so it cannot contend with the user's own Git usage.
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use cf_core::GitState;
 use thiserror::Error;
+
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -16,34 +20,83 @@ pub enum GitError {
     Spawn(#[source] std::io::Error),
     #[error("git {args} failed: {stderr}")]
     Command { args: String, stderr: String },
+    #[error("git {args} did not finish within {timeout:?} and was stopped")]
+    Timeout { args: String, timeout: Duration },
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+fn run_git(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, GitError> {
     let mut cmd = Command::new("git");
-    cmd.arg("--no-optional-locks").arg("-C").arg(dir).args(args);
+    cmd.arg("--no-optional-locks")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let output = cmd.output().map_err(GitError::Spawn)?;
-    if !output.status.success() {
+    let mut child = cmd.spawn().map_err(GitError::Spawn)?;
+
+    // Drain both pipes on threads so a chatty git cannot block on a full pipe.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(GitError::Spawn)? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(GitError::Timeout {
+                args: args.join(" "),
+                timeout,
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if !status.success() {
         return Err(GitError::Command {
             args: args.join(" "),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
-/// Inspect the repository containing `path`.
+/// Inspect the repository containing `path` (default timeout per git command).
 pub fn inspect(path: &Path) -> Result<GitState, GitError> {
-    let toplevel = run_git(path, &["rev-parse", "--show-toplevel"])?;
-    let status = run_git(path, &["status", "--porcelain=v2", "--branch"])?;
+    inspect_with_timeout(path, DEFAULT_TIMEOUT)
+}
+
+/// Inspect the repository containing `path`; each git command is stopped if it
+/// runs longer than `timeout`.
+pub fn inspect_with_timeout(path: &Path, timeout: Duration) -> Result<GitState, GitError> {
+    let toplevel = run_git(path, &["rev-parse", "--show-toplevel"], timeout)?;
+    let status = run_git(path, &["status", "--porcelain=v2", "--branch"], timeout)?;
     let mut state = parse_status_v2(&status);
     state.repository_path = native_path(toplevel.trim());
-    tracing::debug!(repo = %state.repository_path, branch = ?state.branch, "inspected repository");
+    tracing::debug!(
+        repo = %cf_core::redact::home(&state.repository_path),
+        branch = ?state.branch,
+        "inspected repository"
+    );
     Ok(state)
 }
 
@@ -181,5 +234,9 @@ u UU N... 100644 100644 100644 100644 a b c conflict.rs
         assert!(!s.repository_path.is_empty());
 
         assert!(inspect(&repo.join("does-not-exist")).is_err());
+
+        // A git command that overruns its budget is stopped, not waited on forever.
+        let err = inspect_with_timeout(repo, Duration::from_nanos(1)).unwrap_err();
+        assert!(matches!(err, GitError::Timeout { .. }), "{err}");
     }
 }

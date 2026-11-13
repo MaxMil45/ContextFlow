@@ -1,0 +1,18 @@
+[package]
+name = "cf-engine"
+description = "ContextFlow restore pipeline: launch apps, identify windows, restore layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cf-adapters.workspace = true
+cf-core.workspace = true
+cf-windows.workspace = true
+serde.workspace = true
+
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

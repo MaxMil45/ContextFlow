@@ -15,8 +15,9 @@ use windows_sys::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GW_OWNER,
+    EnumWindows, GetClassNameW, GetWindow, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GW_OWNER,
+    WINDOWPLACEMENT,
 };
 
 use cf_core::{DisplayState, MonitorInfo, Rect};
@@ -123,6 +124,11 @@ pub fn enumerate_windows() -> Result<Vec<DiscoveredWindow>> {
             if title.trim().is_empty() {
                 continue;
             }
+            // The desktop itself ("Program Manager") is not a window to restore.
+            let class = class_name(hwnd);
+            if class == "Progman" || class == "WorkerW" {
+                continue;
+            }
             let mut r: RECT = zeroed();
             if GetWindowRect(hwnd, &mut r) == 0 {
                 continue;
@@ -140,13 +146,27 @@ pub fn enumerate_windows() -> Result<Vec<DiscoveredWindow>> {
             let monitor_id = monitor_device_name(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST))
                 .map(|(name, _)| name);
 
+            // For maximized/minimized windows store the *restored* rectangle, so
+            // restoring can place the window and then maximize it correctly.
+            let mut rect = rect_from(&r);
+            if display_state != DisplayState::Normal {
+                let mut wp: WINDOWPLACEMENT = zeroed();
+                wp.length = size_of::<WINDOWPLACEMENT>() as u32;
+                if GetWindowPlacement(hwnd, &mut wp) != 0 {
+                    let normal = rect_from(&wp.rcNormalPosition);
+                    if normal.width > 0 && normal.height > 0 {
+                        rect = normal;
+                    }
+                }
+            }
+
             out.push(DiscoveredWindow {
                 hwnd: hwnd as isize,
                 process_id: pid,
                 executable_path: process_image_path(pid),
                 title,
-                class_name: class_name(hwnd),
-                rect: rect_from(&r),
+                class_name: class,
+                rect,
                 display_state,
                 monitor_id,
             });

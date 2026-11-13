@@ -14,7 +14,7 @@ use crate::{migrations, Result, StorageError};
 
 /// Handle to the ContextFlow database.
 pub struct Database {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 /// Result of re-hashing a stored snapshot.
@@ -24,6 +24,15 @@ pub struct IntegrityReport {
     pub stored_hash: String,
     pub computed_hash: String,
     pub payload_parses: bool,
+}
+
+/// Which snapshots to keep. See [`Database::retention_candidates`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionPolicy {
+    /// Keep the newest `keep_last` snapshots.
+    pub keep_last: Option<u32>,
+    /// Keep snapshots younger than `max_age`.
+    pub max_age: Option<chrono::TimeDelta>,
 }
 
 impl IntegrityReport {
@@ -36,12 +45,12 @@ const CONTEXT_COLS: &str = "id, name, description, created_at, updated_at, is_ar
 const SNAPSHOT_COLS: &str =
     "id, context_id, version_number, created_at, snapshot_hash, capture_status, payload_json";
 
-fn now() -> DateTime<Utc> {
+pub(crate) fn now() -> DateTime<Utc> {
     // Stored with millisecond precision; truncate so in-memory values round-trip.
     Utc::now().trunc_subsecs(3)
 }
 
-fn ts(dt: &DateTime<Utc>) -> String {
+pub(crate) fn ts(dt: &DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
@@ -125,7 +134,7 @@ impl RawSnapshot {
     }
 }
 
-fn is_unique_violation(e: &rusqlite::Error) -> bool {
+pub(crate) fn is_unique_violation(e: &rusqlite::Error) -> bool {
     matches!(
         e,
         rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation
@@ -289,49 +298,42 @@ impl Database {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
 
-        let archived: Option<i64> = tx
+        let row: Option<(i64, u32)> = tx
             .query_row(
-                "SELECT is_archived FROM contexts WHERE id = ?1",
+                "SELECT is_archived, last_version FROM contexts WHERE id = ?1",
                 [context_id.to_string()],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        match archived {
+        let last_version = match row {
             None => {
                 return Err(StorageError::NotFound(format!(
                     "no workspace with id {context_id}"
                 )))
             }
-            Some(1) => {
+            Some((1, _)) => {
                 return Err(StorageError::Conflict(
                     "workspace is archived; unarchive it before capturing".into(),
                 ))
             }
-            Some(_) => {}
-        }
+            Some((_, v)) => v,
+        };
+        let version = last_version + 1;
 
-        let version: u32 = tx.query_row(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM context_snapshots WHERE context_id = ?1",
-            [context_id.to_string()],
-            |r| r.get(0),
-        )?;
-
-        tx.execute(
-            &format!("INSERT INTO context_snapshots ({SNAPSHOT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
-            params![
-                id.to_string(),
-                context_id.to_string(),
-                version,
-                ts(&created_at),
-                snapshot_hash,
-                capture_status.as_str(),
-                payload_json
-            ],
+        insert_snapshot_row(
+            &tx,
+            id,
+            context_id,
+            version,
+            &created_at,
+            &snapshot_hash,
+            capture_status,
+            &payload_json,
         )?;
         insert_projections(&tx, id, &payload, &created_at)?;
         tx.execute(
-            "UPDATE contexts SET updated_at = ?1 WHERE id = ?2",
-            params![ts(&created_at), context_id.to_string()],
+            "UPDATE contexts SET updated_at = ?1, last_version = ?2 WHERE id = ?3",
+            params![ts(&created_at), version, context_id.to_string()],
         )?;
         tx.commit()?;
 
@@ -413,6 +415,113 @@ impl Database {
         self.raw_snapshot(context_id, version)?.into_snapshot()
     }
 
+    // ------------------------------------------------------ deletion / retention
+
+    /// Permanently delete one snapshot and its projections. Version numbers
+    /// are never reused afterwards.
+    pub fn delete_snapshot(&self, context_id: ContextId, version: u32) -> Result<()> {
+        let n = self.conn.execute(
+            "DELETE FROM context_snapshots WHERE context_id = ?1 AND version_number = ?2",
+            params![context_id.to_string(), version],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!(
+                "snapshot version {version} does not exist"
+            )));
+        }
+        tracing::info!(%context_id, version, "snapshot deleted");
+        Ok(())
+    }
+
+    /// Permanently delete a workspace and all of its snapshots.
+    pub fn delete_context(&self, id: ContextId) -> Result<()> {
+        let n = self
+            .conn
+            .execute("DELETE FROM contexts WHERE id = ?1", [id.to_string()])?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        tracing::info!(context_id = %id, "workspace deleted");
+        Ok(())
+    }
+
+    /// Snapshots that `policy` would prune, newest first. Never includes the
+    /// latest snapshot. A snapshot qualifies only if it breaks every rule set.
+    pub fn retention_candidates(
+        &self,
+        context_id: ContextId,
+        policy: &RetentionPolicy,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<SnapshotSummary>> {
+        if policy.keep_last.is_none() && policy.max_age.is_none() {
+            return Ok(Vec::new());
+        }
+        let all = self.list_snapshots(context_id)?;
+        Ok(all
+            .into_iter()
+            .enumerate()
+            .skip(1) // the latest snapshot is always kept
+            .filter(|(rank, s)| {
+                let outside_count = policy.keep_last.map(|n| *rank >= n as usize);
+                let too_old = policy.max_age.map(|age| s.created_at < now - age);
+                [outside_count, too_old].into_iter().flatten().all(|b| b)
+            })
+            .map(|(_, s)| s)
+            .collect())
+    }
+
+    /// Delete the snapshots selected by [`Self::retention_candidates`] in one
+    /// transaction. Returns the deleted versions.
+    pub fn prune(
+        &mut self,
+        context_id: ContextId,
+        policy: &RetentionPolicy,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<u32>> {
+        let versions: Vec<u32> = self
+            .retention_candidates(context_id, policy, now)?
+            .into_iter()
+            .map(|s| s.version)
+            .collect();
+        let tx = self.conn.transaction()?;
+        for v in &versions {
+            tx.execute(
+                "DELETE FROM context_snapshots WHERE context_id = ?1 AND version_number = ?2",
+                params![context_id.to_string(), v],
+            )?;
+        }
+        tx.commit()?;
+        if !versions.is_empty() {
+            tracing::info!(%context_id, ?versions, "pruned snapshots");
+        }
+        Ok(versions)
+    }
+
+    // ------------------------------------------------------------------ backup
+
+    /// Write a consistent, compacted copy of the whole database to `dest`.
+    /// Refuses to overwrite an existing file.
+    pub fn backup_to(&self, dest: &Path) -> Result<()> {
+        if dest.exists() {
+            return Err(StorageError::Conflict(format!(
+                "{} already exists; choose another file",
+                dest.display()
+            )));
+        }
+        if let Some(parent) = dest.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        self.conn
+            .execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
+        tracing::info!(
+            dest = %cf_core::redact::home(&dest.display().to_string()),
+            "database backup written"
+        );
+        Ok(())
+    }
+
     /// Re-hash the stored canonical payload and compare with the stored hash.
     pub fn verify_snapshot(
         &self,
@@ -431,7 +540,35 @@ impl Database {
     }
 }
 
-fn insert_projections(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_snapshot_row(
+    tx: &Transaction<'_>,
+    id: SnapshotId,
+    context_id: ContextId,
+    version: u32,
+    created_at: &DateTime<Utc>,
+    hash: &str,
+    status: CaptureStatus,
+    payload_json: &str,
+) -> Result<()> {
+    tx.execute(
+        &format!(
+            "INSERT INTO context_snapshots ({SNAPSHOT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        ),
+        params![
+            id.to_string(),
+            context_id.to_string(),
+            version,
+            ts(created_at),
+            hash,
+            status.as_str(),
+            payload_json
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn insert_projections(
     tx: &Transaction<'_>,
     snapshot_id: SnapshotId,
     p: &SnapshotPayload,

@@ -5,40 +5,44 @@
 //! than aborting the whole capture.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use cf_config::CaptureConfig;
 use cf_core::{ApplicationState, CaptureStatus, SnapshotPayload, WindowState};
 
 /// Shell / system processes whose windows are never part of a workspace.
-const EXCLUDED_PROCESSES: &[&str] = &[
+const BUILTIN_EXCLUDED_PROCESSES: &[&str] = &[
     "textinputhost",
     "searchhost",
     "shellexperiencehost",
     "startmenuexperiencehost",
     "lockapp",
+    "applicationframehost",
     "systemsettings",
     "contextflow",
 ];
 
 pub struct CaptureOptions<'a> {
+    /// Capture only these application ids (empty = every application).
+    pub only: &'a [String],
+    /// Optional extra: Git repositories to record alongside the applications.
     pub repos: &'a [PathBuf],
     pub notes: Vec<String>,
     pub include_windows: bool,
+    pub rules: &'a CaptureConfig,
+    pub git_timeout: Duration,
 }
 
 pub struct CaptureResult {
     pub payload: SnapshotPayload,
     pub status: CaptureStatus,
     pub warnings: Vec<String>,
+    /// Windows skipped because of configured exclusion rules.
+    pub excluded_windows: usize,
 }
 
-pub fn application_id(executable_path: &str) -> String {
-    Path::new(executable_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_lowercase())
-        .unwrap_or_else(|| "unknown".into())
-}
+pub use cf_engine::application_id;
 
 pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     let started = Instant::now();
@@ -47,11 +51,21 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         ..Default::default()
     };
     let mut warnings = Vec::new();
+    let mut component_failed = false;
+    let mut excluded_windows = 0;
+
+    let user_excluded = opts.rules.normalized_excluded_processes();
+    let is_excluded_process = |id: &str| {
+        BUILTIN_EXCLUDED_PROCESSES.contains(&id) || user_excluded.iter().any(|e| e == id)
+    };
 
     if opts.include_windows {
         match cf_windows::enumerate_monitors() {
             Ok(m) => payload.monitors = m,
-            Err(e) => warnings.push(format!("monitors: {e}")),
+            Err(e) => {
+                component_failed = true;
+                warnings.push(format!("monitors: {e}"));
+            }
         }
         match cf_windows::enumerate_windows() {
             Ok(windows) => {
@@ -63,24 +77,36 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                     }
                     let Some(exe) = w.executable_path.clone() else {
                         warnings.push(format!(
-                            "window '{}' skipped: process {} is not accessible (elevated?)",
-                            w.title, w.process_id
+                            "a window of process {} was skipped: the process is not accessible (probably running as administrator)",
+                            w.process_id
                         ));
                         continue;
                     };
                     let app_id = application_id(&exe);
-                    if EXCLUDED_PROCESSES.contains(&app_id.as_str()) {
+                    if is_excluded_process(&app_id)
+                        || (!opts.only.is_empty() && !opts.only.contains(&app_id))
+                    {
                         continue;
                     }
-                    apps.entry(app_id.clone())
-                        .or_insert_with(|| ApplicationState {
+                    if opts.rules.title_is_excluded(&w.title) {
+                        excluded_windows += 1;
+                        continue;
+                    }
+                    apps.entry(app_id.clone()).or_insert_with(|| {
+                        // Microsoft Store apps are started by package id; save it
+                        // now so restore still works after the app updates.
+                        let aumid = cf_windows::packaged_app_id(&exe);
+                        ApplicationState {
                             application_id: app_id.clone(),
                             executable_path: exe,
                             launch_arguments: Vec::new(),
                             working_directory: None,
-                            adapter_id: None,
-                            adapter_state: serde_json::Value::Null,
-                        });
+                            adapter_id: aumid.as_ref().map(|_| "packaged-app".to_string()),
+                            adapter_state: aumid
+                                .map(|id| serde_json::json!({ "aumid": id }))
+                                .unwrap_or(serde_json::Value::Null),
+                        }
+                    });
                     payload.windows.push(WindowState {
                         application_id: app_id,
                         title: w.title,
@@ -92,14 +118,20 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                 }
                 payload.applications = apps.into_values().collect();
             }
-            Err(e) => warnings.push(format!("windows: {e}")),
+            Err(e) => {
+                component_failed = true;
+                warnings.push(format!("windows: {e}"));
+            }
         }
     }
 
     for repo in opts.repos {
-        match cf_git::inspect(repo) {
+        match cf_git::inspect_with_timeout(repo, opts.git_timeout) {
             Ok(state) => payload.git.push(state),
-            Err(e) => warnings.push(format!("git {}: {e}", repo.display())),
+            Err(e) => {
+                component_failed = true;
+                warnings.push(format!("git {}: {e}", repo.display()));
+            }
         }
     }
 
@@ -112,15 +144,26 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         (started.elapsed().as_millis() as u64).into(),
     );
 
-    let status = if warnings.iter().any(|w| !w.starts_with("window '")) {
+    let status = if component_failed {
         CaptureStatus::Partial
     } else {
         CaptureStatus::Complete
     };
+    tracing::info!(
+        applications = payload.applications.len(),
+        windows = payload.windows.len(),
+        monitors = payload.monitors.len(),
+        repositories = payload.git.len(),
+        excluded_windows,
+        status = status.as_str(),
+        duration_ms = started.elapsed().as_millis() as u64,
+        "capture finished"
+    );
     CaptureResult {
         payload,
         status,
         warnings,
+        excluded_windows,
     }
 }
 
@@ -135,5 +178,25 @@ mod tests {
             "code"
         );
         assert_eq!(application_id(r"C:\Windows\explorer.exe"), "explorer");
+    }
+
+    #[test]
+    fn excluded_processes_never_appear() {
+        // Exclude every process: the capture must then contain no windows,
+        // whatever happens to be open on this machine.
+        let rules = CaptureConfig {
+            excluded_title_patterns: vec!["".into()],
+            ..Default::default()
+        };
+        let r = capture(CaptureOptions {
+            only: &[],
+            repos: &[],
+            notes: vec![],
+            include_windows: true,
+            rules: &rules,
+            git_timeout: Duration::from_secs(5),
+        });
+        assert!(r.payload.windows.is_empty());
+        assert!(r.payload.applications.is_empty());
     }
 }

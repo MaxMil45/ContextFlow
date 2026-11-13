@@ -8,6 +8,7 @@ pub mod error;
 pub mod geometry;
 pub mod hash;
 pub mod model;
+pub mod redact;
 pub mod validate;
 
 pub use error::{CoreError, Result};

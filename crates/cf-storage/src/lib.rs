@@ -9,8 +9,14 @@
 //! `tokio::task::spawn_blocking`, never directly on the async executor.
 
 mod error;
+mod export;
+mod history;
 mod migrations;
 mod repo;
 
 pub use error::{Result, StorageError};
-pub use repo::{Database, IntegrityReport};
+pub use export::{
+    ExportFile, ExportedSnapshot, ExportedWorkspace, EXPORT_FORMAT, EXPORT_FORMAT_VERSION,
+};
+pub use history::{RestoreRunSummary, RestoreStepRecord};
+pub use repo::{Database, IntegrityReport, RetentionPolicy};

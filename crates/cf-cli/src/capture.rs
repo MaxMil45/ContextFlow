@@ -109,9 +109,20 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                         // Microsoft Store apps are started by package id; save it
                         // now so restore still works after the app updates.
                         let aumid = cf_windows::packaged_app_id(&exe);
+                        // A window may belong to a helper process (Steam's
+                        // steamwebhelper.exe) that does nothing when started on
+                        // its own: save the program from the same install that
+                        // started it. The application id stays the window's own,
+                        // so restore still recognises the window.
+                        let executable_path = if aumid.is_some() {
+                            exe
+                        } else {
+                            let ancestors = cf_windows::process_ancestors(w.process_id);
+                            cf_engine::launcher_from_ancestry(&exe, &ancestors).unwrap_or(exe)
+                        };
                         ApplicationState {
                             application_id: app_id.clone(),
-                            executable_path: exe,
+                            executable_path,
                             launch_arguments: Vec::new(),
                             working_directory: None,
                             adapter_id: aumid.as_ref().map(|_| "packaged-app".to_string()),

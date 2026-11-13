@@ -1,0 +1,43 @@
+[package]
+name = "contextflow-app"
+description = "ContextFlow desktop application (Tauri shell around cf-engine)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "cf_app"
+# `staticlib`/`cdylib` are only needed for mobile targets; keep the desktop build lean.
+crate-type = ["rlib"]
+
+[[bin]]
+name = "contextflow-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+cf-browser.workspace = true
+cf-cli.workspace = true
+cf-config.workspace = true
+cf-core.workspace = true
+cf-storage.workspace = true
+cf-vscode.workspace = true
+cf-windows.workspace = true
+anyhow.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -81,6 +81,7 @@ fn run() -> Result<Option<String>> {
         timeout: Duration::from_secs(30),
         max_tabs_per_window: cfg.browser.max_tabs_per_window,
         overall_timeout: cfg.timeouts.restore_overall(),
+        cancel: None,
     };
     let (ctx, _snap, run) =
         session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {

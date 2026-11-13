@@ -29,6 +29,7 @@ use cf_windows::DiscoveredWindow;
 use serde::Serialize;
 
 pub use desktop::{Desktop, PlaceError, WindowsDesktop};
+pub use resolve::launcher_from_ancestry;
 
 #[derive(Debug, Clone)]
 pub struct RestoreOptions {
@@ -187,6 +188,14 @@ fn plan_launch(desktop: &dyn Desktop, app: &ApplicationState) -> Result<LaunchPl
             "UNSAFE_PATH",
             "not started: only full paths to .exe files can be launched".into(),
         ));
+    }
+    // A helper process (Steam's `steamwebhelper.exe`) does nothing when started
+    // on its own; start the app it belongs to. Newer captures already save the
+    // launcher; this covers snapshots saved before that.
+    if let Some(launcher) =
+        resolve::helper_launcher(&app.executable_path, &|p| desktop.exe_exists(p))
+    {
+        return Ok(LaunchPlan::Exe(launcher));
     }
     if desktop.exe_exists(&app.executable_path) {
         return Ok(LaunchPlan::Exe(app.executable_path.clone()));
@@ -399,6 +408,19 @@ pub fn restore(
                 &browser::FOLDERS,
             ),
             _ => (None, &browser::TABS),
+        };
+
+        // Positions taken by windows opened for tabs or folders are not handed
+        // out again: otherwise an already-open window could be moved into the
+        // spot of a window that was just reopened.
+        let saved: Vec<&WindowState> = match &tab_outcome {
+            Some(t) if !t.used_saved.is_empty() => saved
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !t.used_saved.contains(i))
+                .map(|(_, w)| w)
+                .collect(),
+            _ => saved,
         };
 
         let mut launched = false;

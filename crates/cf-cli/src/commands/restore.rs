@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 
 use cf_cli::session::{self, Paths, RestoreArgs};
-use cf_cli::shortcut;
+use cf_cli::{icons, shortcut};
 use cf_storage::Database;
 
 use super::util::{latest, normalize_app_names};
@@ -30,6 +30,7 @@ pub(crate) fn restore_cmd(
         timeout: Duration::from_secs(timeout.clamp(1, 600)),
         max_tabs_per_window,
         overall_timeout,
+        cancel: None,
     };
     let (ctx, snap, run) =
         session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
@@ -63,14 +64,20 @@ pub(crate) fn restore_cmd(
     Ok(())
 }
 
+pub(crate) struct ShortcutOpts {
+    pub name: Option<String>,
+    pub folder: Option<PathBuf>,
+    pub force: bool,
+    pub icon: Option<PathBuf>,
+    pub default_icon: bool,
+}
+
 pub(crate) fn shortcut_cmd(
     db: &Database,
     paths: &Paths,
     db_flag: &Option<PathBuf>,
     workspace: &str,
-    name: Option<String>,
-    folder: Option<PathBuf>,
-    force: bool,
+    opts: ShortcutOpts,
 ) -> Result<()> {
     let ctx = db.find_context(workspace)?;
     if latest(db, &ctx)?.is_none() {
@@ -80,21 +87,47 @@ pub(crate) fn shortcut_cmd(
             ctx.name
         );
     }
+    let id = ctx.id.to_string();
+    let icon_dir = icons::icon_dir(&paths.db);
+    let icon_changed = opts.icon.is_some() || opts.default_icon;
+    if let Some(picture) = &opts.icon {
+        let bytes =
+            std::fs::read(picture).with_context(|| format!("reading {}", picture.display()))?;
+        icons::set_custom_icon(&icon_dir, &id, &bytes)?;
+    } else if opts.default_icon {
+        icons::clear_custom_icon(&icon_dir, &id);
+    }
+    let icon = icons::custom_icon(&icon_dir, &id);
+
     // Remember a non-default database/config so the icon opens the same data.
     let db_arg = db_flag.as_deref().map(|_| paths.db.as_path());
     let config_arg = std::env::var_os("CONTEXTFLOW_CONFIG")
         .map(PathBuf::from)
         .filter(|p| p.exists());
-    let id = ctx.id.to_string();
-    let path = shortcut::create(&shortcut::ShortcutSpec {
+    let display_name = opts.name.as_deref().unwrap_or(&ctx.name);
+    let created = shortcut::create(&shortcut::ShortcutSpec {
         workspace_id: &id,
-        display_name: name.as_deref().unwrap_or(&ctx.name),
-        folder: folder.as_deref(),
+        display_name,
+        folder: opts.folder.as_deref(),
         db: db_arg,
         config: config_arg.as_deref(),
-        overwrite: force,
-    })?;
-    println!("Created {}", path.display());
-    println!("Double-click it to reopen '{}'.", ctx.name);
-    Ok(())
+        overwrite: opts.force,
+        icon: icon.as_deref(),
+    });
+    match created {
+        Ok(path) => {
+            println!("Created {}", path.display());
+            println!("Double-click it to reopen '{}'.", ctx.name);
+            Ok(())
+        }
+        // Only the icon was asked for: change it on the shortcut that's there.
+        Err(e) if icon_changed && e.downcast_ref::<shortcut::ShortcutExists>().is_some() => {
+            let path =
+                shortcut::update_icon(display_name, opts.folder.as_deref(), icon.as_deref())?
+                    .context("the shortcut disappeared while its icon was being changed")?;
+            println!("Changed the icon of {}", path.display());
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }

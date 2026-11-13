@@ -84,10 +84,7 @@ pub(crate) fn restore_folders(
 
         let geometry = (0..saved.len())
             .find(|&i| !used_saved[i] && saved[i].title == window.window_title)
-            .map(|i| {
-                used_saved[i] = true;
-                saved[i]
-            });
+            .inspect(|&i| used_saved[i] = true);
 
         if budget.expired() {
             out.failures
@@ -116,7 +113,7 @@ pub(crate) fn restore_folders(
         };
         opened += 1;
         let wait = wait.min(budget.remaining());
-        match wait_for_new_window(desktop, &app.application_id, &known, wait) {
+        match wait_for_new_window(desktop, &app.application_id, &known, wait, opts.settle) {
             None => out.failures.push(format!(
                 "a window for a saved folder did not appear within {} seconds",
                 wait.as_secs()
@@ -124,8 +121,9 @@ pub(crate) fn restore_folders(
             Some(hwnd) => {
                 known.insert(hwnd);
                 out.claimed.insert(hwnd);
-                if let Some(saved_window) = geometry {
-                    match place_saved(desktop, hwnd, saved_window, monitors) {
+                if let Some(i) = geometry {
+                    out.used_saved.push(i);
+                    match place_saved(desktop, hwnd, saved[i], monitors) {
                         Ok(()) => out.placed += 1,
                         Err(PlaceError::AccessDenied) => out.failures.push(
                             "a VS Code window belongs to a program running as administrator and can't be moved"

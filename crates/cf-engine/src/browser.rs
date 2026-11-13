@@ -28,6 +28,9 @@ pub(crate) struct TabRestore {
     pub placed: usize,
     /// Desktop windows opened here; the generic arranging step must leave them alone.
     pub claimed: HashSet<isize>,
+    /// Indices into the app's saved windows that a window opened here took;
+    /// the generic arranging step must not hand those positions out again.
+    pub used_saved: Vec<usize>,
     pub failures: Vec<String>,
     pub notes: Vec<String>,
 }
@@ -137,10 +140,7 @@ pub(crate) fn restore_tabs(
 
         let geometry = (0..saved.len())
             .find(|&i| !used_saved[i] && saved[i].title == window.window_title)
-            .map(|i| {
-                used_saved[i] = true;
-                saved[i]
-            });
+            .inspect(|&i| used_saved[i] = true);
 
         // Out of overall time (or cancelled): open nothing more.
         if budget.expired() {
@@ -171,7 +171,8 @@ pub(crate) fn restore_tabs(
         };
         // Never wait past the overall budget.
         let wait = wait.min(budget.remaining());
-        let new_window = wait_for_new_window(desktop, &app.application_id, &known, wait);
+        let new_window =
+            wait_for_new_window(desktop, &app.application_id, &known, wait, opts.settle);
 
         match new_window {
             None => out.failures.push(format!(
@@ -182,8 +183,9 @@ pub(crate) fn restore_tabs(
             Some(hwnd) => {
                 known.insert(hwnd);
                 out.claimed.insert(hwnd);
-                if let Some(saved_window) = geometry {
-                    match place_saved(desktop, hwnd, saved_window, monitors) {
+                if let Some(i) = geometry {
+                    out.used_saved.push(i);
+                    match place_saved(desktop, hwnd, saved[i], monitors) {
                         Ok(()) => out.placed += 1,
                         Err(PlaceError::AccessDenied) => out.failures.push(
                             "a browser window belongs to a program running as administrator and can't be moved"

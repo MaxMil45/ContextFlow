@@ -247,3 +247,59 @@ fn browser_without_saved_tabs_behaves_like_any_other_app() {
     assert_eq!(*d.launched.borrow(), vec!["chrome".to_string()]);
     assert!(d.browser_opens.borrow().is_empty());
 }
+
+/// The "Chess" report: Chrome is already running with one window whose title
+/// has changed since capture; the other saved window (YouTube, left screen) is
+/// reopened for its missing tab. Each must end up on its own screen.
+#[test]
+fn reopened_window_keeps_its_slot_and_running_window_gets_the_other() {
+    let mut payload = SnapshotPayload {
+        applications: vec![browser_app(vec![
+            saved_tabs_window("YouTube - Google Chrome", &["https://www.youtube.com/"]),
+            saved_tabs_window(
+                "Home - Chess.com - Google Chrome",
+                &["https://www.chess.com/home"],
+            ),
+        ])],
+        windows: vec![
+            saved_window("chrome", "YouTube - Google Chrome", r(100, 100, 1200, 900), "LEFT"),
+            saved_window(
+                "chrome",
+                "Home - Chess.com - Google Chrome",
+                r(2700, 100, 900, 900),
+                "RIGHT",
+            ),
+        ],
+        ..Default::default()
+    };
+    for w in &mut payload.windows {
+        w.display_state = DisplayState::Maximized;
+    }
+    let d = Fake {
+        monitors: vec![
+            monitor("LEFT", true, r(0, 0, 2560, 1440)),
+            monitor("RIGHT", false, r(2560, 0, 1920, 1080)),
+        ],
+        // The open window's title no longer matches what was saved.
+        open: RefCell::new(vec![open_window(1, "chrome", "Live game - Chess.com - Google Chrome")]),
+        live_urls: Some(vec!["https://www.chess.com/game/live/1".into(), "https://www.chess.com/home".into()]),
+        browser_windows: RefCell::new(vec![open_window(2, "chrome", "YouTube - Google Chrome")]),
+        ..Default::default()
+    };
+    let result = run(&d, &payload, &fast());
+    let placed = d.placed.borrow();
+    assert_eq!(
+        *placed,
+        vec![
+            (2, r(100, 100, 1200, 900), DisplayState::Maximized),
+            (1, r(2700, 100, 900, 900), DisplayState::Maximized),
+        ],
+        "{result:#?}"
+    );
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    assert!(
+        !result.steps[0].message.contains("only opened"),
+        "{}",
+        result.steps[0].message
+    );
+}

@@ -8,6 +8,7 @@ function Step($name, [scriptblock]$cmd) {
     if ($LASTEXITCODE -ne 0) { Write-Host "FAILED: $name" -ForegroundColor Red; exit $LASTEXITCODE }
 }
 
+Step 'Frontend' { Push-Location app; npm ci; if ($LASTEXITCODE -eq 0) { npm run build }; Pop-Location }
 Step 'Format'  { cargo fmt --all -- --check }
 Step 'Clippy'  { cargo clippy --workspace --all-targets -- -D warnings }
 Step 'Test'    { cargo test --workspace }

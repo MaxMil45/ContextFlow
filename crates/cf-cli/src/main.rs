@@ -107,6 +107,13 @@ pub(crate) enum Command {
         /// Replace an existing shortcut.
         #[arg(long)]
         force: bool,
+        /// Picture to use as the icon (PNG, JPEG, BMP or ICO). It is kept for
+        /// this workspace, and an existing shortcut just gets the new icon.
+        #[arg(long, conflicts_with = "default_icon")]
+        icon: Option<PathBuf>,
+        /// Go back to the standard ContextFlow icon.
+        #[arg(long)]
+        default_icon: bool,
     },
 
     /// List a workspace's snapshot history.
@@ -353,7 +360,21 @@ fn run(
             name,
             folder,
             force,
-        } => commands::restore::shortcut_cmd(db, paths, db_flag, &workspace, name, folder, force),
+            icon,
+            default_icon,
+        } => commands::restore::shortcut_cmd(
+            db,
+            paths,
+            db_flag,
+            &workspace,
+            commands::restore::ShortcutOpts {
+                name,
+                folder,
+                force,
+                icon,
+                default_icon,
+            },
+        ),
         Command::Snapshots { workspace } => commands::history::snapshots(db, &workspace),
         Command::Show {
             workspace,

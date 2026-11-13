@@ -9,18 +9,47 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context as _, Result};
 
-/// Where the launcher is expected: next to the running `contextflow.exe`.
+const LAUNCHER: &str = "contextflow-launch.exe";
+
+/// Where the launcher is: next to the running program (`contextflow.exe` or
+/// the desktop app), else on `PATH` (e.g. `~/.cargo/bin` after
+/// `cargo install`).
 pub fn launcher_path() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("could not locate contextflow.exe")?;
-    let launcher = exe.with_file_name("contextflow-launch.exe");
-    if !launcher.is_file() {
-        bail!(
-            "{} was not found. Build or install both programs: cargo install --path crates/cf-cli",
-            launcher.display()
-        );
+    let exe = std::env::current_exe().context("could not locate the running program")?;
+    let beside = exe.with_file_name(LAUNCHER);
+    if beside.is_file() {
+        return Ok(beside);
     }
-    Ok(launcher)
+    if let Some(found) = std::env::var_os("PATH")
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join(LAUNCHER))
+        .find(|p| p.is_file())
+    {
+        return Ok(found);
+    }
+    bail!(
+        "{LAUNCHER} was not found next to {} or on PATH. Install it with: cargo install --path crates/cf-cli",
+        exe.display()
+    )
 }
+
+/// Returned by [`create`] when a shortcut with that name is already there and
+/// `overwrite` is off.
+#[derive(Debug)]
+pub struct ShortcutExists(pub PathBuf);
+
+impl std::fmt::Display for ShortcutExists {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} already exists; use --force to replace it",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for ShortcutExists {}
 
 /// Make a workspace name safe to use as a Windows file name.
 pub fn file_safe_name(name: &str) -> String {
@@ -57,6 +86,8 @@ pub struct ShortcutSpec<'a> {
     pub db: Option<&'a Path>,
     pub config: Option<&'a Path>,
     pub overwrite: bool,
+    /// `.ico` to show (see [`crate::icons`]); `None` = the launcher's own icon.
+    pub icon: Option<&'a Path>,
 }
 
 /// Create the shortcut and return its path.
@@ -83,31 +114,28 @@ $s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
 $s.TargetPath = $env:CF_TARGET
 $s.Arguments = $env:CF_ARGS
 $s.WorkingDirectory = Split-Path -Parent $env:CF_TARGET
-$s.IconLocation = $env:CF_TARGET + ',0'
+$s.IconLocation = $(if ($env:CF_ICON) { $env:CF_ICON } else { $env:CF_TARGET }) + ',0'
 $s.Description = 'Restore ' + $env:CF_NAME + ' with ContextFlow'
 $s.Save()
 [Console]::Out.Write($path)
 "#;
-    let mut cmd = Command::new("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("CF_NAME", file_safe_name(spec.display_name))
+    let mut cmd = powershell(SCRIPT);
+    cmd.env("CF_NAME", file_safe_name(spec.display_name))
         .env("CF_TARGET", &launcher)
         .env("CF_ARGS", args.join(" "))
         .env("CF_OVERWRITE", if spec.overwrite { "1" } else { "0" })
         .env(
+            "CF_ICON",
+            spec.icon.map(|p| p.as_os_str()).unwrap_or_default(),
+        )
+        .env(
             "CF_FOLDER",
             spec.folder.map(|f| f.as_os_str()).unwrap_or_default(),
-        )
-        .stdin(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+        );
     let out = cmd.output().context("could not run PowerShell")?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if let Some(existing) = stdout.trim().strip_prefix("EXISTS:") {
-        bail!("{existing} already exists; use --force to replace it");
+        return Err(ShortcutExists(PathBuf::from(existing)).into());
     }
     if !out.status.success() {
         bail!(
@@ -116,6 +144,59 @@ $s.Save()
         );
     }
     Ok(PathBuf::from(stdout.trim()))
+}
+
+/// Change the icon of the shortcut [`create`] made for `display_name` in
+/// `folder` (default: the Desktop), if it is there. `icon = None` goes back to
+/// the launcher's own icon. Returns the shortcut's path, or `None` if there is
+/// no such shortcut (nothing is created).
+pub fn update_icon(
+    display_name: &str,
+    folder: Option<&Path>,
+    icon: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$dir = if ($env:CF_FOLDER) { $env:CF_FOLDER } else { [Environment]::GetFolderPath('Desktop') }
+$path = Join-Path $dir ($env:CF_NAME + '.lnk')
+if (-not (Test-Path -LiteralPath $path)) { [Console]::Out.Write('MISSING'); exit 0 }
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
+$s.IconLocation = $(if ($env:CF_ICON) { $env:CF_ICON } else { $s.TargetPath }) + ',0'
+$s.Save()
+[Console]::Out.Write($path)
+"#;
+    let out = powershell(SCRIPT)
+        .env("CF_NAME", file_safe_name(display_name))
+        .env("CF_ICON", icon.map(|p| p.as_os_str()).unwrap_or_default())
+        .env(
+            "CF_FOLDER",
+            folder.map(|f| f.as_os_str()).unwrap_or_default(),
+        )
+        .output()
+        .context("could not run PowerShell")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        bail!(
+            "could not change the shortcut's icon: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(match stdout.trim() {
+        "MISSING" => None,
+        p => Some(PathBuf::from(p)),
+    })
+}
+
+fn powershell(script: &str) -> Command {
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
 }
 
 #[cfg(test)]

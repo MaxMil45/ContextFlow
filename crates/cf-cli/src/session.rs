@@ -2,6 +2,8 @@
 //! and the desktop launcher.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -81,6 +83,9 @@ pub struct RestoreArgs {
     pub max_tabs_per_window: usize,
     /// Longest the whole restore may take.
     pub overall_timeout: Duration,
+    /// Set from another thread to stop the restore early (the desktop app's
+    /// Cancel button). Applications already started are left running.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Restore a workspace's snapshot onto the real desktop and record the run.
@@ -136,6 +141,7 @@ pub fn restore_workspace(
         dry_run: args.dry_run,
         max_tabs_per_window: args.max_tabs_per_window,
         overall_timeout: args.overall_timeout,
+        cancel: args.cancel.clone(),
         ..Default::default()
     };
     let run = cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log);

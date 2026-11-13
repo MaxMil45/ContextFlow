@@ -103,8 +103,9 @@ impl Desktop for Fake {
         Ok(self.monitors.clone())
     }
     fn exe_exists(&self, path: &str) -> bool {
+        // Windows file names are case-insensitive.
         if let Some(existing) = &self.existing_paths {
-            return existing.contains(path);
+            return existing.iter().any(|p| p.eq_ignore_ascii_case(path));
         }
         !self.missing_exes.contains(&application_id(path))
     }
@@ -672,3 +673,37 @@ fn maximized_state_is_applied() {
 include!("tests_browser.rs");
 
 include!("tests_vscode.rs");
+
+/// The "R" report: Steam was saved by its window's helper process.
+/// Restore must start Steam.exe, then still find and place the helper's window.
+#[test]
+fn helper_process_is_started_through_its_app() {
+    let helper = r"C:\Program Files (x86)\Steam\bin\cef\cef.win64\steamwebhelper.exe";
+    let steam = r"C:\Program Files (x86)\Steam\Steam.exe";
+    let mut a = app("steamwebhelper");
+    a.executable_path = helper.into();
+    let payload = SnapshotPayload {
+        applications: vec![a],
+        windows: vec![saved_window(
+            "steamwebhelper",
+            "Steam",
+            r(69, 519, 1515, 900),
+            "M1",
+        )],
+        ..Default::default()
+    };
+    let mut window = open_window(7, "steamwebhelper", "Steam");
+    window.executable_path = Some(helper.into());
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 2560, 1440))],
+        existing_paths: Some([helper.to_string(), steam.to_string()].into()),
+        on_launch: vec![("steam".into(), vec![window])],
+        ..Default::default()
+    };
+    let result = run(&d, &payload, &fast());
+    let launched = d.launched_paths.borrow();
+    assert_eq!(launched.len(), 1);
+    assert!(launched[0].eq_ignore_ascii_case(steam), "{launched:?}");
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    assert_eq!(d.placed.borrow()[0].0, 7);
+}

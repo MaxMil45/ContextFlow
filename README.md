@@ -4,7 +4,7 @@
 
 ContextFlow is a local-first workspace continuity engine for Windows. It captures windows, monitors, Git state and progress notes into immutable, versioned snapshots. It can compare any snapshot with another one or with the live environment, and (from Phase 2) restore them.
 
-> Status: **Phase 1 complete, Phase 2 and the first Phase 3 integrations working.** Save your open apps, then restore them, their window layout, browser tabs and VS Code folders from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. The Tauri UI comes next. See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
+> Status: **Phase 1 complete, Phase 2 and the first Phase 3 integrations working.** Save your open apps, then restore them, their window layout, browser tabs and VS Code folders from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. A first Tauri desktop app is in [app/](app/README.md). See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
 
 ## Quick start
 
@@ -84,6 +84,7 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |
 | `cf-engine` | The restore pipeline: launch, wait for windows, place them, report per app |
 | `cf-cli` | `contextflow` (CLI) and `contextflow-launch` (windowless, started by desktop icons) |
+| `app/src-tauri` | Tauri desktop app (`contextflow-app`): thin commands over the crates above, React UI in `app/src` |
 
 ## Development
 

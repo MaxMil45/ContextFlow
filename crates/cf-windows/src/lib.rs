@@ -11,6 +11,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 #[cfg(windows)]
+mod ancestry;
+#[cfg(windows)]
 mod control;
 #[cfg(windows)]
 mod imp;
@@ -74,6 +76,20 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     #[cfg(not(windows))]
     {
         Err(PlatformError::Unsupported)
+    }
+}
+
+/// Executable paths of the programs that started process `pid`, parent
+/// first. Empty when unknown (or not on Windows).
+pub fn process_ancestors(pid: u32) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        ancestry::process_ancestors(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        Vec::new()
     }
 }
 

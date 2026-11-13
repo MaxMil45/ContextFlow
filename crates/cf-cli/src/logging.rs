@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use cf_config::LoggingConfig;
-use tracing_appender::non_blocking::WorkerGuard;
+pub use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{Builder, Rotation};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 

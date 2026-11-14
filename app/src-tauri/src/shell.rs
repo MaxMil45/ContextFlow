@@ -3,7 +3,7 @@
 
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_notification::NotificationExt as _;
 
 use cf_storage::Database;
@@ -14,10 +14,6 @@ use crate::state::AppState;
 const TRAY_ID: &str = "main";
 const MAX_RECENT: usize = 5;
 const RESTORE_PREFIX: &str = "restore:";
-
-/// Events the tray sends to the window.
-pub const EVENT_CAPTURE: &str = "tray://capture";
-pub const EVENT_RESTORE: &str = "tray://restore";
 
 /// The workspaces the tray offers to restore: the most recently used ones that
 /// have a snapshot and can be restored.
@@ -92,14 +88,35 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "open" => crate::show_main_window(app),
                 "quick_capture" => crate::hotkey::quick_capture(app.clone()),
                 "capture" => {
-                    crate::show_main_window(app);
-                    let _ = app.emit(EVENT_CAPTURE, ());
+                    // The workspace you're in (else the one used last), worked out here
+                    // because the window may still be loading.
+                    let state = app.state::<AppState>();
+                    let target = cf_storage::Database::open(&state.paths.db)
+                        .ok()
+                        .and_then(|db| crate::hotkey::target_workspace(&db).ok());
+                    match target {
+                        Some(ctx) => crate::ui::send(
+                            app,
+                            crate::ui::UiAction {
+                                kind: "capture".into(),
+                                workspace_id: ctx.id.to_string(),
+                                report: None,
+                            },
+                        ),
+                        None => crate::show_main_window(app),
+                    }
                 }
                 "quit" => app.exit(0),
                 _ => {
                     if let Some(workspace_id) = id.strip_prefix(RESTORE_PREFIX) {
-                        crate::show_main_window(app);
-                        let _ = app.emit(EVENT_RESTORE, workspace_id.to_string());
+                        crate::ui::send(
+                            app,
+                            crate::ui::UiAction {
+                                kind: "restore".into(),
+                                workspace_id: workspace_id.to_string(),
+                                report: None,
+                            },
+                        );
                     }
                 }
             }

@@ -302,6 +302,14 @@ pub(crate) enum WorkspaceCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// What happens to a workspace when you switch away from it: `auto` (save its
+    /// changes), `notify` (save and say so) or `fixed` (never save: it always
+    /// restores as captured).
+    SaveMode {
+        name: String,
+        #[arg(value_parser = ["auto", "notify", "fixed"])]
+        mode: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

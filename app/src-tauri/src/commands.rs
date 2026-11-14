@@ -123,6 +123,7 @@ fn summarize(db: &Database, ctx: &Context) -> CmdResult<WorkspaceSummary> {
         pinned_version: db.pinned_version(ctx.id)?,
         latest,
         is_active: db.active_context()? == Some(ctx.id),
+        save_mode: db.save_mode(ctx.id)?.into(),
     })
 }
 
@@ -137,6 +138,7 @@ fn summary_from_overview(o: &cf_storage::ContextOverview) -> WorkspaceSummary {
         pinned_version: o.pinned_version,
         latest: o.latest.as_ref().map(entry_from_summary),
         is_active: o.is_active,
+        save_mode: o.save_mode.into(),
     }
 }
 
@@ -421,6 +423,14 @@ pub(crate) async fn run_restore(
         let outcome =
             cf_app::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;
         let left = outcome.left;
+        // "Save and tell me": say so even if the window isn't open.
+        if let (true, Some(v), Some(from)) = (left.notify, left.saved_version, &left.from) {
+            crate::shell::toast(
+                &app,
+                &format!("Saved “{from}”"),
+                &format!("Version {v}, saved as you switched away."),
+            );
+        }
         let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
         Ok(RestoreReport {
             workspace_id: ctx.id.to_string(),
@@ -565,6 +575,23 @@ pub async fn update_workspace(
             workspace: summarize(&db, &updated)?,
             icon_error,
         })
+    })
+    .await
+}
+
+/// Choose what happens to a workspace when you switch away from it or leave it.
+#[tauri::command]
+pub async fn set_save_mode(
+    state: State<'_, AppState>,
+    workspace: String,
+    mode: SaveMode,
+) -> CmdResult<WorkspaceSummary> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        db.set_save_mode(ctx.id, mode.into())?;
+        summarize(&db, &ctx)
     })
     .await
 }

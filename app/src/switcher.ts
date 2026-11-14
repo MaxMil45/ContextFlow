@@ -1,7 +1,6 @@
 // The global workspace switcher. Its own small page with no framework: the
 // window is created on first use and kept, so it stays light.
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 
 type Workspace = {
   id: string;
@@ -125,5 +124,5 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "Enter") choose(shown[index]);
 });
 
-void listen("switcher://open", () => void open());
+// The picker is a fresh window each time it opens.
 void open();

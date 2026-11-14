@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Keyboard, Plus, Search, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Keyboard, Lock, Plus, Search, Settings } from "lucide-react";
 
 import { Kbd, SkeletonList, WorkspaceDot } from "../components/ui";
 import { relativeTime } from "../format";
@@ -47,6 +47,9 @@ export function Sidebar({
         <span className="ws-name">
           {ws.name}
           {ws.isActive && <span className="live-dot" role="img" aria-label="You are in this workspace" />}
+          {ws.saveMode === "fixed" && (
+            <Lock size={11} className="faint" aria-label="Always restores as captured" />
+          )}
         </span>
         <span className="ws-meta">
           {ws.latest ? `Saved ${relativeTime(ws.latest.createdAt)}` : "Nothing saved yet"}

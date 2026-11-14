@@ -28,6 +28,8 @@ import type { Settings } from "../bindings/Settings";
 import type { VerifyResult } from "../bindings/VerifyResult";
 import type { DeleteOutcome } from "../bindings/DeleteOutcome";
 import type { LeaveReport } from "../bindings/LeaveReport";
+import type { SaveMode } from "../bindings/SaveMode";
+import type { UiAction } from "../bindings/UiAction";
 import type { HotkeyStatusDto } from "../bindings/HotkeyStatusDto";
 import type { RestoreRunEntry } from "../bindings/RestoreRunEntry";
 import type { WorkspaceUpdate } from "../bindings/WorkspaceUpdate";
@@ -43,8 +45,7 @@ import type { WorkspaceIcon } from "../bindings/WorkspaceIcon";
 import type { WorkspaceSummary } from "../bindings/WorkspaceSummary";
 
 export const RESTORE_PROGRESS_EVENT = "restore://progress";
-export const TRAY_CAPTURE_EVENT = "tray://capture";
-export const TRAY_RESTORE_EVENT = "tray://restore";
+export const UI_PENDING_EVENT = "ui://pending";
 export const CAPTURE_SAVED_EVENT = "capture://saved";
 
 /** What the on-screen confirmation card shows (sent by the Rust side). */
@@ -113,6 +114,14 @@ export const api = {
   /** Change name and description together; desktop icons follow a rename. */
   updateWorkspace: (workspace: string, name: string, description: string | null) =>
     call<WorkspaceUpdate>("update_workspace", { workspace, name, description }),
+
+  /** What happens to the workspace when you switch away: save, save and tell me, or keep as captured. */
+  setSaveMode: (workspace: string, mode: SaveMode) => call<WorkspaceSummary>("set_save_mode", { workspace, mode }),
+
+  /** Something the tray or switcher asked the window to do, if it is waiting. */
+  takeUiAction: () => call<UiAction | null>("take_ui_action"),
+  /** An action is waiting (the window was already open). */
+  onUiPending: (handler: () => void): Promise<UnlistenFn> => listen(UI_PENDING_EVENT, () => handler()),
 
   /** The workspace's recent restores, newest first. */
   listRestoreRuns: (workspace: string) => call<RestoreRunEntry[]>("list_restore_runs", { workspace }),
@@ -189,13 +198,6 @@ export const api = {
     listen<string>(CAPTURE_SAVED_EVENT, (e) => handler(e.payload)),
 
 
-  onTrayCapture: (handler: () => void): Promise<UnlistenFn> => listen(TRAY_CAPTURE_EVENT, () => handler()),
-  onTrayRestore: (handler: (workspace: string) => void): Promise<UnlistenFn> =>
-    listen<string>(TRAY_RESTORE_EVENT, (e) => handler(e.payload)),
-
-  /** A switch from the switcher needs attention: show its report. */
-  onSwitchReport: (handler: (r: RestoreReport) => void): Promise<UnlistenFn> =>
-    listen<RestoreReport>("switch://report", (e) => handler(e.payload)),
 
   onRestoreProgress: (handler: (p: RestoreProgress) => void): Promise<UnlistenFn> =>
     listen<RestoreProgress>(RESTORE_PROGRESS_EVENT, (e) => handler(e.payload)),
@@ -203,6 +205,8 @@ export const api = {
 
 export type {
   LeaveReport,
+  SaveMode,
+  UiAction,
   RestoreRunEntry,
   WorkspaceUpdate,
   BrowserStatus,

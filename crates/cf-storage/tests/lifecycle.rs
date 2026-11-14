@@ -550,3 +550,14 @@ fn descriptions_can_be_set_and_cleared() {
     assert_eq!(ctx.description, None);
     assert!(db.set_description(id, Some(&"x".repeat(501))).is_err());
 }
+
+#[test]
+fn workspaces_save_their_changes_unless_told_otherwise() {
+    use cf_storage::SaveMode;
+    let (db, id) = db_with_versions(1);
+    assert_eq!(db.save_mode(id).unwrap(), SaveMode::Auto);
+    db.set_save_mode(id, SaveMode::Fixed).unwrap();
+    assert_eq!(db.save_mode(id).unwrap(), SaveMode::Fixed);
+    let listed = db.list_overview(false).unwrap();
+    assert_eq!(listed[0].save_mode, SaveMode::Fixed);
+}

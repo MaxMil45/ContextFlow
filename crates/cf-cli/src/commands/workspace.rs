@@ -96,6 +96,22 @@ pub(crate) fn workspace(db: &Database, paths: &Paths, cmd: WorkspaceCmd) -> Resu
             }
         }
         WorkspaceCmd::Trust { name, yes } => trust(db, &name, yes)?,
+        WorkspaceCmd::SaveMode { name, mode } => {
+            let ctx = db.find_context(&name)?;
+            if let Some(mode) = mode {
+                db.set_save_mode(ctx.id, cf_storage::SaveMode::parse(&mode))?;
+            }
+            let explain = match db.save_mode(ctx.id)? {
+                cf_storage::SaveMode::Auto => "saves its changes when you switch away",
+                cf_storage::SaveMode::Notify => {
+                    "saves its changes when you switch away, and says so"
+                }
+                cf_storage::SaveMode::Fixed => {
+                    "is never saved automatically: it always restores as captured"
+                }
+            };
+            println!("'{}' {explain}.", ctx.name);
+        }
     }
     Ok(())
 }

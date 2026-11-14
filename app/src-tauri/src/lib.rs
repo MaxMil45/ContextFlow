@@ -15,18 +15,16 @@ mod settings;
 mod shell;
 mod state;
 mod switcher;
+mod ui;
 
-use tauri::{Manager, WindowEvent};
+use tauri::Manager;
 
 pub use error::{CommandError, ErrorCode};
 
-/// Bring the main window to the front (tray click, second launch).
+/// Bring the main window to the front (tray click, second launch), creating it
+/// if it was closed. See [`ui`].
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    ui::show_main(app);
 }
 
 pub fn run() {
@@ -58,10 +56,6 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             shell::build_tray(app.handle())?;
-            // The on-screen confirmation for quick capture, ready (hidden) before it's needed.
-            if let Err(e) = overlay::preload(app.handle()) {
-                tracing::warn!("could not prepare the capture confirmation: {e}");
-            }
             // The quick-capture shortcut. If another program already owns it, say so
             // instead of failing silently.
             let keys = app.state::<state::AppState>().config().app;
@@ -70,20 +64,12 @@ pub fn run() {
             if let Some(problem) = status.summary() {
                 shell::toast(app.handle(), "A shortcut is not available", &problem);
             }
-            // The window is created hidden; show it unless Windows started us at sign-in.
+            // The window is only created when it's wanted: not at all when Windows
+            // starts ContextFlow at sign-in, so the tray costs almost nothing.
             if !std::env::args().any(|a| a == "--hidden") {
                 show_main_window(app.handle());
             }
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            // "Close to tray": the window hides and ContextFlow keeps running.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.state::<state::AppState>().config().app.close_to_tray {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -104,6 +90,7 @@ pub fn run() {
             commands::rename_workspace,
             commands::update_workspace,
             commands::list_restore_runs,
+            commands::set_save_mode,
             commands::set_workspace_archived,
             commands::get_workspace_shortcuts,
             commands::delete_workspace,
@@ -133,7 +120,19 @@ pub fn run() {
             settings::preview_retention,
             settings::apply_retention,
             shell::refresh_tray_menu,
+            ui::take_ui_action,
+            overlay::current_toast,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ContextFlow");
+        .build(tauri::generate_context!())
+        .expect("error while starting ContextFlow")
+        .run(|app, event| {
+            // "Close to tray": closing the window really closes it (freeing its
+            // web view), and ContextFlow carries on in the tray. Quit in the tray
+            // menu still exits, because that asks with an exit code.
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() && app.state::<state::AppState>().config().app.close_to_tray {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

@@ -103,12 +103,24 @@ pub async fn run_cleanup_now(
 
 /// Leave the active workspace: save it, run its "when leaving" cleanup and clear it.
 #[tauri::command]
-pub async fn leave_workspace(state: State<'_, AppState>) -> CmdResult<LeaveReport> {
+pub async fn leave_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<LeaveReport> {
     let path = state.paths.db.clone();
     let cfg = state.config();
     blocking(move || {
         let mut db = open(&path)?;
         let out = cf_app::session::leave_active_workspace(&mut db, Some(&cfg), &mut |_| {})?;
+        if let (true, Some(v), Some(from)) =
+            (out.saved.notify, out.saved.saved_version, &out.saved.from)
+        {
+            crate::shell::toast(
+                &app,
+                &format!("Saved “{from}”"),
+                &format!("Version {v}, saved as you left it."),
+            );
+        }
         Ok(LeaveReport {
             workspace: out.workspace,
             cleanup: out.cleanup.map(Into::into),

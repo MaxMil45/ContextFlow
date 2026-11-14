@@ -35,6 +35,36 @@ impl SnapshotOrigin {
     }
 }
 
+/// What happens to a workspace when you switch away from it or leave it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SaveMode {
+    /// Save its changes.
+    #[default]
+    Auto,
+    /// Save its changes and tell the user.
+    Notify,
+    /// Never save automatically: it always restores exactly as captured.
+    Fixed,
+}
+
+impl SaveMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Notify => "notify",
+            Self::Fixed => "fixed",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "notify" => Self::Notify,
+            "fixed" => Self::Fixed,
+            _ => Self::Auto,
+        }
+    }
+}
+
 /// Auto-saves kept per workspace by retention, on top of the user's own rules.
 pub const AUTO_SAVES_KEPT: usize = 5;
 
@@ -46,6 +76,7 @@ pub struct ContextOverview {
     pub pinned_version: Option<u32>,
     pub latest: Option<SnapshotSummary>,
     pub is_active: bool,
+    pub save_mode: SaveMode,
 }
 
 /// Result of re-hashing a stored snapshot.
@@ -267,7 +298,8 @@ impl Database {
         let sql = "SELECT c.id, c.name, c.description, c.created_at, c.updated_at, c.is_archived,
                           c.is_trusted, c.pinned_version,
                           s.id, s.version_number, s.created_at, s.snapshot_hash, s.capture_status,
-                          (c.id = (SELECT value FROM app_state WHERE key = 'active_context'))
+                          (c.id = (SELECT value FROM app_state WHERE key = 'active_context')),
+                          c.save_mode
                    FROM contexts c
                    LEFT JOIN context_snapshots s
                      ON s.context_id = c.id
@@ -291,11 +323,19 @@ impl Database {
                 )),
             };
             let is_active = row.get::<_, Option<bool>>(13)?.unwrap_or(false);
-            Ok((context, is_trusted, pinned_version, latest, is_active))
+            let save_mode = SaveMode::parse(&row.get::<_, String>(14)?);
+            Ok((
+                context,
+                is_trusted,
+                pinned_version,
+                latest,
+                is_active,
+                save_mode,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (context, is_trusted, pinned_version, latest, is_active) = row?;
+            let (context, is_trusted, pinned_version, latest, is_active, save_mode) = row?;
             let latest = match latest {
                 None => None,
                 Some((id, version, created_at, hash, status)) => Some(SnapshotSummary {
@@ -312,6 +352,7 @@ impl Database {
                 pinned_version,
                 latest,
                 is_active,
+                save_mode,
             });
         }
         Ok(out)
@@ -371,6 +412,31 @@ impl Database {
             ))),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// What happens to the workspace when you switch away from it or leave it.
+    pub fn save_mode(&self, id: ContextId) -> Result<SaveMode> {
+        let mode: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT save_mode FROM contexts WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        mode.map(|m| SaveMode::parse(&m))
+            .ok_or_else(|| StorageError::NotFound(format!("no workspace with id {id}")))
+    }
+
+    pub fn set_save_mode(&self, id: ContextId, mode: SaveMode) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE contexts SET save_mode = ?1 WHERE id = ?2",
+            params![mode.as_str(), id.to_string()],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        Ok(())
     }
 
     /// Set or clear a workspace's description (blank clears it).

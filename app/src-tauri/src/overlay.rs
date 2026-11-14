@@ -3,10 +3,12 @@
 //! becomes "Saved …", and fades away. It never takes focus and lets clicks
 //! through, so it doesn't get in the way of what you were doing.
 //!
-//! The window is created hidden at start-up, so showing it is instant. It loads
-//! `toast.html`, a tiny page with no framework, so keeping it costs little memory.
+//! The window is created when a card is shown and closed when it fades, so no
+//! web view stays in memory between captures. It loads `toast.html`, a tiny page
+//! with no framework, which asks for the current card as soon as it loads.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -31,15 +33,17 @@ const LINGER_PROBLEM: Duration = Duration::from_millis(9000);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Serialize)]
-struct Message {
+pub struct Message {
     /// `saving`, `saved` or `error`.
     kind: &'static str,
     title: String,
     body: String,
 }
 
-/// Create the (hidden) card window. Call once at start-up.
-pub fn preload(app: &AppHandle) -> tauri::Result<()> {
+/// The card being shown, for a card window that has only just loaded.
+static CURRENT: Mutex<Option<Message>> = Mutex::new(None);
+
+fn build(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("toast.html".into()))
         .title("ContextFlow")
         .inner_size(WIDTH, HEIGHT)
@@ -55,7 +59,13 @@ pub fn preload(app: &AppHandle) -> tauri::Result<()> {
         .build()?;
     // Clicks go to whatever is underneath.
     window.set_ignore_cursor_events(true)?;
-    Ok(())
+    Ok(window)
+}
+
+/// The card to show, asked for by `toast.html` when it loads.
+#[tauri::command]
+pub async fn current_toast() -> crate::error::CmdResult<Option<Message>> {
+    Ok(CURRENT.lock().ok().and_then(|c| c.clone()))
 }
 
 /// Put the card in the bottom-right corner of the screen the mouse is on.
@@ -77,39 +87,52 @@ fn place(app: &AppHandle, window: &WebviewWindow) {
     let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
-/// Show `kind` ("saving", "saved" or "error") on screen. Returns `false` if
-/// the card window isn't available, so the caller can fall back to a
-/// notification. `saved` and `error` fade away by themselves.
+/// Show `kind` ("saving", "saved" or "error") on screen. The window is built
+/// if needed (on its own thread, so this never blocks a shortcut handler).
+/// `saved` and `error` fade away by themselves, and then the window is closed.
 pub fn show(app: &AppHandle, kind: &'static str, title: &str, body: &str) -> bool {
-    let Some(window) = app.get_webview_window(LABEL) else {
-        return false;
+    let message = Message {
+        kind,
+        title: title.to_string(),
+        body: body.to_string(),
     };
-    place(app, &window);
-    if window.show().is_err() {
-        return false;
+    if let Ok(mut c) = CURRENT.lock() {
+        *c = Some(message.clone());
     }
-    let _ = app.emit_to(
-        LABEL,
-        EVENT,
-        Message {
-            kind,
-            title: title.to_string(),
-            body: body.to_string(),
-        },
-    );
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    if kind != "saving" {
-        let linger = if kind == "error" {
-            LINGER_PROBLEM
-        } else {
-            LINGER
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let window = match app.get_webview_window(LABEL) {
+            Some(w) => w,
+            None => match build(&app) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("could not show the on-screen card: {e}");
+                    if kind != "saving" {
+                        crate::shell::toast(&app, &message.title, &message.body);
+                    }
+                    return;
+                }
+            },
         };
-        std::thread::spawn(move || {
+        place(&app, &window);
+        let _ = window.show();
+        let _ = app.emit_to(LABEL, EVENT, message);
+        if kind != "saving" {
+            let linger = if kind == "error" {
+                LINGER_PROBLEM
+            } else {
+                LINGER
+            };
             std::thread::sleep(linger);
             if GENERATION.load(Ordering::SeqCst) == generation {
-                let _ = window.hide();
+                if let Ok(mut c) = CURRENT.lock() {
+                    c.take();
+                }
+                // Closed, not hidden: a hidden web view still holds its memory.
+                let _ = window.close();
             }
-        });
-    }
+        }
+    });
     true
 }

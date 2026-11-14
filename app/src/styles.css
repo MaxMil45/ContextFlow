@@ -444,3 +444,13 @@ button.primary kbd { background: transparent; color: inherit; border-color: rgb(
 .shortcut-list { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .shortcut-list > div { display: grid; grid-template-columns: 150px 1fr; gap: var(--s3); align-items: baseline; }
 .shortcut-list dd { margin: 0; color: var(--muted); }
+
+/* Save mode choice */
+.choice-list { display: flex; flex-direction: column; gap: var(--s2); }
+.choice { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s3); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color 120ms var(--ease), background 120ms var(--ease); }
+.choice:hover { border-color: var(--border-strong); }
+.choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+.choice input { margin-top: 3px; accent-color: var(--accent); }
+.choice > span { display: flex; flex-direction: column; gap: 2px; }
+.choice-title { font-weight: 600; }
+.choice-hint { color: var(--muted); font-size: 12px; }

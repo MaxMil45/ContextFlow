@@ -20,6 +20,41 @@ pub struct WorkspaceSummary {
     pub latest: Option<SnapshotEntry>,
     /// The workspace last restored: the one you are "in".
     pub is_active: bool,
+    /// What happens to it when you switch away from it or leave it.
+    pub save_mode: SaveMode,
+}
+
+/// What happens to a workspace when you switch away from it or leave it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub enum SaveMode {
+    /// Save its changes.
+    Auto,
+    /// Save its changes and show a notification.
+    Notify,
+    /// Never save automatically ("one and done"): it always restores as captured.
+    Fixed,
+}
+
+impl From<cf_storage::SaveMode> for SaveMode {
+    fn from(m: cf_storage::SaveMode) -> Self {
+        match m {
+            cf_storage::SaveMode::Auto => Self::Auto,
+            cf_storage::SaveMode::Notify => Self::Notify,
+            cf_storage::SaveMode::Fixed => Self::Fixed,
+        }
+    }
+}
+
+impl From<SaveMode> for cf_storage::SaveMode {
+    fn from(m: SaveMode) -> Self {
+        match m {
+            SaveMode::Auto => Self::Auto,
+            SaveMode::Notify => Self::Notify,
+            SaveMode::Fixed => Self::Fixed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

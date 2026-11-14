@@ -20,10 +20,6 @@ use crate::hotkey::EVENT_CAPTURE_SAVED;
 use crate::state::AppState;
 
 const LABEL: &str = "switcher";
-const OPEN_EVENT: &str = "switcher://open";
-/// Sent to the main window when a switch needs attention, with its report.
-pub const REPORT_EVENT: &str = "switch://report";
-
 /// A switch started from the picker is running (the shortcut then cancels it).
 static SWITCHING: AtomicBool = AtomicBool::new(false);
 const WIDTH: f64 = 520.0;
@@ -48,7 +44,8 @@ fn window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let handle = w.clone();
     w.on_window_event(move |e| {
         if matches!(e, WindowEvent::Focused(false)) {
-            let _ = handle.hide();
+            // Closed, not hidden: a hidden web view still holds its memory.
+            let _ = handle.close();
         }
     });
     Ok(w)
@@ -72,8 +69,10 @@ fn place(app: &AppHandle, w: &WebviewWindow) {
     let _ = w.set_position(PhysicalPosition::new(x, y));
 }
 
-/// Show the picker, or hide it if it is already open (the shortcut toggles).
+/// Show the picker, or close it if it is already open (the shortcut toggles).
 /// While a switch from the picker is running, the shortcut cancels it instead.
+/// The picker is built fresh each time and closed afterwards, so it holds no
+/// memory while you aren't using it.
 pub fn toggle(app: &AppHandle) {
     if SWITCHING.load(Ordering::SeqCst) {
         let state = app.state::<AppState>();
@@ -90,28 +89,33 @@ pub fn toggle(app: &AppHandle) {
         }
         return;
     }
-    let Ok(w) = window(app) else {
-        crate::shell::toast(
-            app,
-            "Switcher not available",
-            "The switcher window could not be opened.",
-        );
-        return;
-    };
-    if w.is_visible().unwrap_or(false) {
-        let _ = w.hide();
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.close();
         return;
     }
-    place(app, &w);
-    let _ = w.show();
-    let _ = w.set_focus();
-    let _ = app.emit_to(LABEL, OPEN_EVENT, ());
+    // Building waits for the event loop, which is running this shortcut handler.
+    let app = app.clone();
+    std::thread::spawn(move || match window(&app) {
+        Ok(w) => {
+            place(&app, &w);
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        Err(e) => {
+            tracing::warn!("could not open the switcher: {e}");
+            crate::shell::toast(
+                &app,
+                "Switcher not available",
+                "The switcher window could not be opened.",
+            );
+        }
+    });
 }
 
 #[tauri::command]
 pub async fn hide_switcher(app: AppHandle) -> CmdResult<()> {
     if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.hide();
+        let _ = w.close();
     }
     Ok(())
 }
@@ -125,7 +129,7 @@ pub async fn quick_switch(
 ) -> CmdResult<()> {
     let _ = state; // the task below fetches its own handle; this only ensures the state exists
     if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.hide();
+        let _ = w.close();
     }
     tauri::async_runtime::spawn(async move {
         crate::overlay::show(
@@ -177,8 +181,14 @@ pub async fn quick_switch(
                 crate::overlay::show(&app, kind, &title, &body);
                 if problems > 0 {
                     // Open the window on the full report, with Retry.
-                    crate::show_main_window(&app);
-                    let _ = app.emit_to("main", REPORT_EVENT, report.clone());
+                    crate::ui::send(
+                        &app,
+                        crate::ui::UiAction {
+                            kind: "report".into(),
+                            workspace_id: report.workspace_id.clone(),
+                            report: Some(report.clone()),
+                        },
+                    );
                 }
                 let _ = app.emit(EVENT_CAPTURE_SAVED, report.workspace);
             }

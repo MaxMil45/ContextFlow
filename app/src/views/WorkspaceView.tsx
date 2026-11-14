@@ -57,6 +57,7 @@ import {
   type CleanupReport,
   type CommandError,
   type RestoreReport,
+  type SaveMode,
   type SnapshotDetail,
   type SnapshotEntry,
   type WorkspaceSummary,
@@ -377,6 +378,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               />
               {snapshot.error && <ErrorBanner error={snapshot.error} />}
               {snapshot.loading && !snapshot.data && <SkeletonText lines={4} />}
+              <SaveModeCard workspace={workspace} onChanged={onChanged} />
               <SwitcherTip />
               {snapshot.data && <BrowserNotice snapshot={snapshot.data} />}
               {snapshot.data ? (
@@ -910,5 +912,65 @@ function SwitcherTip() {
     >
       Tip: press <Kbd>{hotkey}</Kbd> anywhere in Windows to switch workspaces without opening this window.
     </Notice>
+  );
+}
+
+const SAVE_MODES: Array<{ mode: SaveMode; title: string; hint: string }> = [
+  {
+    mode: "notify",
+    title: "Save my changes and tell me",
+    hint: "For work in progress: your layout is saved as you leave, and a notification says which version.",
+  },
+  {
+    mode: "auto",
+    title: "Save my changes quietly",
+    hint: "The same, without the notification.",
+  },
+  {
+    mode: "fixed",
+    title: "Keep it as I captured it",
+    hint: "One and done: never saved automatically, so it always comes back exactly the same. Capture again to change it.",
+  },
+];
+
+/** What happens to this workspace when you switch away from it or leave it. */
+function SaveModeCard({ workspace, onChanged }: { workspace: WorkspaceSummary; onChanged: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const choose = async (mode: SaveMode) => {
+    if (mode === workspace.saveMode) return;
+    setBusy(true);
+    try {
+      await api.setSaveMode(workspace.id, mode);
+      onChanged();
+    } catch (e) {
+      toast.show(toCommandError(e).message, { tone: "bad" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card">
+      <header className="card-header">
+        <h3>When you leave this workspace</h3>
+      </header>
+      <div className="choice-list" role="radiogroup" aria-label="When you leave this workspace">
+        {SAVE_MODES.map((o) => (
+          <label key={o.mode} className={`choice${workspace.saveMode === o.mode ? " selected" : ""}`}>
+            <input
+              type="radio"
+              name={`save-mode-${workspace.id}`}
+              checked={workspace.saveMode === o.mode}
+              disabled={busy}
+              onChange={() => void choose(o.mode)}
+            />
+            <span>
+              <span className="choice-title">{o.title}</span>
+              <span className="choice-hint">{o.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </section>
   );
 }

@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use cf_config::Config;
 use cf_core::{ContextId, SnapshotPayload};
-use cf_storage::{Database, SnapshotOrigin};
+use cf_storage::{Database, SaveMode, SnapshotOrigin};
 use serde_json::Value;
 
 use crate::capture;
@@ -31,6 +31,8 @@ pub struct AutoSave {
     pub saved_version: Option<u32>,
     /// Why nothing was saved, in words for the user.
     pub note: Option<String>,
+    /// The workspace asks to be told when it is saved automatically.
+    pub notify: bool,
 }
 
 /// Whether a capture should become an auto-save.
@@ -147,6 +149,15 @@ pub fn save_active(
     if prev.is_archived {
         out.note = Some("It is archived, so it was not saved.".into());
         return out;
+    }
+    match db.save_mode(prev.id).unwrap_or_default() {
+        SaveMode::Fixed => {
+            out.note =
+                Some("It is set to always restore as you captured it, so it was not saved.".into());
+            return out;
+        }
+        SaveMode::Notify => out.notify = true,
+        SaveMode::Auto => {}
     }
     let previous = db.get_snapshot(prev.id, None).ok();
     let repos: Vec<PathBuf> = previous
@@ -285,5 +296,30 @@ mod tests {
     fn a_first_save_needs_something_open() {
         assert_eq!(decide(None, &payload(&[], vec![])), Decision::NothingOpen);
         assert_eq!(decide(None, &payload(&["code"], vec![])), Decision::Save);
+    }
+
+    #[test]
+    fn a_workspace_kept_as_captured_is_never_auto_saved() {
+        let mut db = Database::open_in_memory().unwrap();
+        let chess = db.create_context("Chess", None).unwrap();
+        let focus = db.create_context("Focus", None).unwrap();
+        db.set_active_context(Some(chess.id)).unwrap();
+        db.set_save_mode(chess.id, SaveMode::Fixed).unwrap();
+        let out = save_active(&mut db, &Config::default(), Some(focus.id), &mut |_| {});
+        assert_eq!(out.from.as_deref(), Some("Chess"));
+        assert_eq!(out.saved_version, None);
+        assert!(out.note.unwrap().contains("always restore"));
+        assert!(db.list_snapshots(chess.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn switching_to_the_same_workspace_saves_nothing() {
+        let mut db = Database::open_in_memory().unwrap();
+        let a = db.create_context("A", None).unwrap();
+        db.set_active_context(Some(a.id)).unwrap();
+        assert_eq!(
+            save_active(&mut db, &Config::default(), Some(a.id), &mut |_| {}),
+            AutoSave::default()
+        );
     }
 }

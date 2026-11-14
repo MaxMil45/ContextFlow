@@ -20,5 +20,6 @@ pub use export::{
 };
 pub use history::{RestoreRunRecord, RestoreRunSummary, RestoreStepRecord};
 pub use repo::{
-    ContextOverview, Database, IntegrityReport, RetentionPolicy, SnapshotOrigin, AUTO_SAVES_KEPT,
+    ContextOverview, Database, IntegrityReport, RetentionPolicy, SaveMode, SnapshotOrigin,
+    AUTO_SAVES_KEPT,
 };

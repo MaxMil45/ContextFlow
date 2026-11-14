@@ -60,25 +60,25 @@ function Shell() {
     const unlisteners: Array<() => void> = [];
     const keep = (u: () => void) => (disposed ? u() : unlisteners.push(u));
 
-    // Tray: "Capture current…" works on the workspace you're in.
-    api
-      .onTrayCapture(() => {
-        const { list = [], currentId } = latest.current;
-        const target = list.find((w) => w.isActive) ?? list.find((w) => w.id === currentId) ?? list[0];
-        if (target) ask("capture", target.id);
-      })
-      .then(keep);
-    // Tray: "Restore recent ▸ <workspace>" (the menu carries the workspace id).
-    api.onTrayRestore((id) => ask("restore", id)).then(keep);
-    // A switch from the switcher needs attention: open its report here.
-    api
-      .onSwitchReport((report) => {
-        setView("workspace");
-        setSelectedId(report.workspaceId);
-        setPending({ kind: "report", workspaceId: report.workspaceId, key: Date.now(), report });
-        latest.current.reload();
-      })
-      .then(keep);
+    // The tray and the switcher leave an action for the window (which may have
+    // only just been opened for it): take it now, and whenever another arrives.
+    const take = () =>
+      void api
+        .takeUiAction()
+        .then((a) => {
+          if (!a) return;
+          if (a.kind === "report" && a.report) {
+            setView("workspace");
+            setSelectedId(a.workspaceId);
+            setPending({ kind: "report", workspaceId: a.workspaceId, key: Date.now(), report: a.report });
+            latest.current.reload();
+          } else if (a.kind === "capture" || a.kind === "restore") {
+            ask(a.kind, a.workspaceId);
+          }
+        })
+        .catch(() => {});
+    take();
+    api.onUiPending(take).then(keep);
     // A quick capture (shortcut or tray) saved a snapshot: show the new version.
     api.onCaptureSaved(() => latest.current.reload()).then(keep);
     return () => {

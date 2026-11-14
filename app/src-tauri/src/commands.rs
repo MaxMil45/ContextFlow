@@ -86,6 +86,10 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
                     cf_explorer::ExplorerState::from_value(&a.adapter_state)
                         .map(|v| v.path_count() as u32)
                 })
+                .or_else(|| {
+                    cf_jetbrains::JetBrainsState::from_value(&a.adapter_state)
+                        .map(|v| v.path_count() as u32)
+                })
                 .unwrap_or(0),
         })
         .collect();
@@ -292,6 +296,7 @@ pub(crate) fn do_capture(
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
         explorer_folders: true,
+        jetbrains_recent: cf_jetbrains::default_recent_files(),
     });
 
     let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
@@ -467,6 +472,7 @@ pub(crate) async fn run_restore(
             auto_saved_version: left.saved_version,
             auto_save_note: left.note,
             layout_note: outcome.layout_note,
+            commands: outcome.commands.into_iter().map(Into::into).collect(),
         })
     })
     .await;

@@ -17,6 +17,8 @@ pub struct CaptureSettings {
     pub excluded_title_patterns: Vec<String>,
     /// Programs that belong to every workspace: never saved in one, never closed by Focus rules.
     pub always_on: Vec<String>,
+    /// Windows whose title contains one of these keep "(hidden)" as their title.
+    pub hidden_title_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -126,6 +128,15 @@ pub struct FileResult {
     /// What was written or read.
     pub path: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ImportOutcome {
+    pub imported: Vec<ImportedWorkspace>,
+    /// Set when the file is passphrase-protected: ask, then import it again with this path.
+    pub needs_passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

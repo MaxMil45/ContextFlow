@@ -240,6 +240,17 @@ Use a throwaway database for the first three (see section 2).
 5. Open two folders in File Explorer, capture, close them, restore: both reopen where they were.
 6. Settings → Advanced → Run health check; Save diagnostics report.
 
+### N. Park, timeline, commands, search, JetBrains, privacy
+
+1. In a workspace, Park with a note and switch to another. The sidebar and tray offer Resume; it brings you back and the note shows.
+2. Timeline lists the switch, park and resume, with the note and a Go back button.
+3. Focus rules → add a start command (`notepad`) and a stop command that waits (`cmd /c exit 0`). Switch in and out: Notepad opens; the report lists both commands.
+4. Ctrl+K, type part of a saved tab's address: it finds the workspace that has it.
+5. Open a project in PyCharm or CLion, capture, close it, restore: it reopens.
+6. Add a private title pattern, capture: that window's title shows as "(hidden)".
+7. Export with a passphrase; import it: you're asked for the passphrase, and a wrong one is refused.
+8. Turn on Windows High Contrast: every edge and focus ring stays visible. Tab to the workspace tabs and use the arrow keys.
+
 ## 4. Not built yet
 
 Apps, their windows, browser tabs and VS Code folders come back. Not built yet: VS Code's open files, terminal directories, and the contents of any other app (only their windows return). Tab and folder comparison in `diff` is also not built yet.

@@ -9,12 +9,22 @@ import { api, type RestoreReport, type WorkspaceSummary } from "./ipc/client";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ResumeDialog } from "./components/ResumeDialog";
 import { SettingsView } from "./views/SettingsView";
+import { TimelineView } from "./views/TimelineView";
 import { Sidebar } from "./views/Sidebar";
 import { WorkspaceView } from "./views/WorkspaceView";
 
+const KIND_LABEL: Record<string, string> = {
+  tab: "Tab",
+  folder: "Folder",
+  note: "Note",
+  repository: "Branch",
+  window: "Window",
+  app: "App",
+};
+
 /** Something the tray or the palette asked for, handled by the workspace page once it is showing. */
 export type Pending =
-  | { kind: "capture" | "restore"; workspaceId: string; key: number }
+  | { kind: "capture" | "restore"; workspaceId: string; key: number; note?: string }
   | { kind: "report"; workspaceId: string; key: number; report: RestoreReport };
 
 export function App() {
@@ -31,7 +41,8 @@ function Shell() {
   const info = useCommand(() => api.appInfo(), []);
   // Workspaces are tracked by id everywhere, so renaming one mid-action can't redirect it.
   const [selectedId, setSelectedId] = useState<string>();
-  const [view, setView] = useState<"workspace" | "settings">("workspace");
+  const [view, setView] = useState<"workspace" | "settings" | "timeline">("workspace");
+  const parked = useCommand(() => api.listParked(), []);
   const [pending, setPending] = useState<Pending>();
   const [creating, setCreating] = useState(false);
   const [palette, setPalette] = useState(false);
@@ -53,11 +64,17 @@ function Shell() {
     setView("workspace");
   }, []);
 
-  const ask = useCallback((kind: "capture" | "restore", workspaceId: string) => {
+  const ask = useCallback((kind: "capture" | "restore", workspaceId: string, note?: string) => {
     setView("workspace");
     setSelectedId(workspaceId);
-    setPending({ kind, workspaceId, key: Date.now() });
+    setPending({ kind, workspaceId, key: Date.now(), note });
   }, []);
+
+  const resume = async () => {
+    const next = await api.takeResume().catch(() => null);
+    parked.reload();
+    if (next) ask("restore", next.id);
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -154,11 +171,18 @@ function Shell() {
     ]),
     { id: "new", label: "New workspace…", hint: "Ctrl+N", run: () => setCreating(true) },
     { id: "settings", label: "Settings", hint: "Ctrl+,", run: () => setView("settings") },
+    { id: "timeline", label: "Timeline", hint: "History", run: () => setView("timeline") },
+    ...(parked.data?.length
+      ? [{ id: "resume", label: `Resume ${parked.data[0]!.name}`, hint: "Parked", run: () => void resume() }]
+      : []),
     { id: "shortcuts", label: "Keyboard shortcuts", hint: "Ctrl+/", run: () => setHelp(true) },
   ];
 
   return (
     <div className="app">
+      <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.querySelector<HTMLElement>("main")?.focus(); }}>
+        Skip to content
+      </a>
       <div className="shell">
         <Sidebar
           workspaces={workspaces.data}
@@ -170,20 +194,31 @@ function Shell() {
           settingsOpen={view === "settings"}
           onSettings={() => setView("settings")}
           onHelp={() => setHelp(true)}
+          timelineOpen={view === "timeline"}
+          onTimeline={() => setView("timeline")}
+          parked={parked.data ?? []}
+          onResume={() => void resume()}
           onNew={() => setCreating(true)}
           onPalette={() => setPalette(true)}
         />
         {view === "settings" ? (
           <SettingsView info={info.data} />
+        ) : view === "timeline" ? (
+          <TimelineView onGoTo={(id) => open(id)} />
         ) : workspaces.error ? (
-          <main className="content">
+          <main id="main" tabIndex={-1} className="content">
             <ErrorBanner error={workspaces.error} />
           </main>
         ) : current ? (
           <WorkspaceView
             key={current.id}
             workspace={current}
-            onChanged={workspaces.reload}
+            onChanged={() => {
+              workspaces.reload();
+              parked.reload();
+            }}
+            onSwitchTo={(id, note) => ask("restore", id, note)}
+            others={(workspaces.data ?? []).filter((w) => w.id !== current.id && w.latest && w.isTrusted && !w.isArchived)}
             onGone={() => {
               setSelectedId(undefined);
               workspaces.reload();
@@ -193,7 +228,7 @@ function Shell() {
             onPendingHandled={() => setPending(undefined)}
           />
         ) : (
-          <main className="content">
+          <main id="main" tabIndex={-1} className="content">
             {workspaces.loading && !workspaces.data ? (
               <div className="page">
                 <SkeletonText lines={4} />
@@ -217,7 +252,20 @@ function Shell() {
         )}
       </div>
       {creating && <NewWorkspaceDialog onCreated={created} onClose={() => setCreating(false)} />}
-      {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
+      {palette && (
+        <Palette
+          commands={commands}
+          onClose={() => setPalette(false)}
+          onSearch={async (q) =>
+            (await api.searchWorkspaces(q)).map((h, i) => ({
+              id: `hit:${h.workspaceId}:${h.kind}:${i}`,
+              label: `${KIND_LABEL[h.kind] ?? h.kind}: ${h.text || h.detail || ""}`,
+              hint: h.workspace,
+              run: () => open(h.workspaceId),
+            }))
+          }
+        />
+      )}
       {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
       {recovering && (
         <ResumeDialog

@@ -1,4 +1,5 @@
 import {
+  ParkingCircle,
   ArrowRightLeft,
   Archive,
   ArchiveRestore,
@@ -28,6 +29,8 @@ import { CompareDialog } from "../components/CompareDialog";
 import { ConfirmDialog, DeleteWorkspaceDialog, EditWorkspaceDialog, TrustDialog } from "../components/dialogs";
 import { CleanupResults, CleanupSection, PlanItemStatus, PlanSummary } from "../components/CleanupSection";
 import { IconPicker } from "../components/IconPicker";
+import { CommandsSection } from "../components/CommandsSection";
+import { ExportDialog } from "../components/ExportDialogs";
 import {
   AppIcon,
   Badge,
@@ -73,6 +76,10 @@ type Props = {
   /** Something the tray asked for (capture, restore), done once this page shows. */
   pending?: Pending;
   onPendingHandled: () => void;
+  /** Go to another workspace (a switch), leaving `note` with this one. */
+  onSwitchTo: (workspaceId: string, note?: string) => void;
+  /** Workspaces you could switch to from here. */
+  others: WorkspaceSummary[];
 };
 
 type Tab = "overview" | "rules" | "history";
@@ -83,6 +90,8 @@ type Dialog =
   | "approve"
   | "replaceIcon"
   | "leave"
+  | "park"
+  | "export"
   | { deleteVersion: number }
   | { compare: { from: number; to?: number } };
 
@@ -94,12 +103,14 @@ type RestoreRun = {
   key: number;
   /** Already finished elsewhere (the switcher): just show it. */
   report?: RestoreReport;
+  /** A note for the workspace being left. */
+  leaveNote?: string;
 };
 
 const statusTone = { complete: "ok", partial: "warn", failed: "bad" } as const;
 const statusLabel = { complete: "Complete", partial: "Partial", failed: "Failed" } as const;
 
-export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pending, onPendingHandled }: Props) {
+export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pending, onPendingHandled, onSwitchTo, others }: Props) {
   const { id, name } = workspace;
   const toast = useToast();
   const history = useCommand(() => api.listSnapshots(id), [id]);
@@ -163,7 +174,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
     } else if (!workspace.isTrusted) {
       setActionError({ code: "conflict", message: "This workspace was imported and must be approved before it can be restored." });
     } else {
-      setRestore({ dryRun: false, mode, version, key: pending.key });
+      setRestore({ dryRun: false, mode, version, key: pending.key, leaveNote: pending.note });
     }
     onPendingHandled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,7 +208,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
         : "Restore";
 
   return (
-    <main className="content">
+    <main id="main" tabIndex={-1} className="content">
       <div className="page">
         <header className="page-head">
           <div className="title">
@@ -228,6 +239,15 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                 onClick={() => setDialog("leave")}
               >
                 <LogOut size={15} aria-hidden /> Leave
+              </button>
+            )}
+            {workspace.isActive && (
+              <button
+                className="ghost"
+                data-tip="Put it aside for something else, and come back with Resume"
+                onClick={() => setDialog("park")}
+              >
+                <ParkingCircle size={15} aria-hidden /> Park
               </button>
             )}
             <button
@@ -264,10 +284,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   <MenuItem
                     icon={FileDown}
                     close={close}
-                    onSelect={guard(async () => {
-                      const r = await api.exportWorkspaces([id]);
-                      if (r) toast.show(`${r.message} ${r.path}`);
-                    })}
+                    onSelect={() => setDialog("export")}
                   >
                     Export…
                   </MenuItem>
@@ -332,6 +349,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
             dryRun={restore.dryRun}
             mode={restore.mode}
             initialReport={restore.report}
+            leaveNote={restore.leaveNote}
             only={restore.only}
             onStart={() => setRestore({ dryRun: false, mode: restore.mode, version: restore.version, key: Date.now() })}
             onRetry={(ids) => setRestore({ dryRun: false, mode: "restore", version: restore.version, only: ids, key: Date.now() })}
@@ -340,7 +358,26 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
           />
         )}
 
-        <div className="tabs" role="tablist" aria-label="Workspace sections">
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Workspace sections"
+          onKeyDown={(e) => {
+            const order: Tab[] = ["overview", "rules", "history"];
+            const at = order.indexOf(tab);
+            const next =
+              e.key === "ArrowRight" ? order[(at + 1) % order.length]
+              : e.key === "ArrowLeft" ? order[(at + order.length - 1) % order.length]
+              : e.key === "Home" ? order[0]
+              : e.key === "End" ? order[order.length - 1]
+              : undefined;
+            if (next) {
+              e.preventDefault();
+              setTab(next);
+              document.getElementById(`tab-${next}`)?.focus();
+            }
+          }}
+        >
           {(
             [
               ["overview", "Overview", null],
@@ -353,6 +390,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               role="tab"
               id={`tab-${key}`}
               aria-selected={tab === key}
+              tabIndex={tab === key ? 0 : -1}
               aria-controls={`panel-${key}`}
               className="tab"
               onClick={() => setTab(key)}
@@ -394,7 +432,12 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
             </>
           )}
 
-          {tab === "rules" && <CleanupSection workspace={id} onActivity={onChanged} />}
+          {tab === "rules" && (
+            <>
+              <CleanupSection workspace={id} onActivity={onChanged} />
+              <CommandsSection workspace={id} trusted={workspace.isTrusted} />
+            </>
+          )}
 
           {tab === "history" && (
             <div className="columns">
@@ -466,10 +509,38 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
           onLeft={(r) => {
             if (r.savedVersion !== null) toast.show(`Saved “${name}” as v${r.savedVersion} and left it`);
             else toast.show(`Left “${name}”${r.saveNote ? `. ${r.saveNote}` : ""}`);
+            const failed = r.commands.filter((c) => !c.ok);
+            if (failed.length) toast.show(`A stop command didn't work: ${failed[0]!.command} (${failed[0]!.message})`, { tone: "bad", ms: 9000 });
             setLeaveReport(r.cleanup);
             history.reload();
             onChanged();
           }}
+          onClose={() => setDialog(undefined)}
+        />
+      )}
+      {dialog === "export" && (
+        <ExportDialog
+          workspaces={[id]}
+          title={`Export “${name}”`}
+          onDone={(r) => toast.show(`${r.message} ${r.path}`, { ms: 8000 })}
+          onClose={() => setDialog(undefined)}
+        />
+      )}
+      {dialog === "park" && (
+        <ParkDialog
+          name={name}
+          others={others}
+          onParked={(target, note) => {
+            toast.show(`Parked “${name}”. Resume brings you back.`);
+            onChanged();
+            if (target) onSwitchTo(target, note);
+          }}
+          onLeave={(note) =>
+            void api.leaveWorkspace(note).then(() => {
+              history.reload();
+              onChanged();
+            })
+          }
           onClose={() => setDialog(undefined)}
         />
       )}
@@ -983,5 +1054,64 @@ function SaveModeCard({ workspace, onChanged }: { workspace: WorkspaceSummary; o
         ))}
       </div>
     </section>
+  );
+}
+
+/** Park the workspace you're in: note where you were, then go somewhere else. */
+function ParkDialog({
+  name,
+  others,
+  onParked,
+  onLeave,
+  onClose,
+}: {
+  name: string;
+  others: WorkspaceSummary[];
+  onParked: (target: string | undefined, note: string) => void;
+  onLeave: (note: string) => void;
+  onClose: () => void;
+}) {
+  const [note, setNote] = useState("");
+  const [target, setTarget] = useState<string>("");
+  return (
+    <ConfirmDialog
+      title={`Park “${name}”?`}
+      confirmLabel={target ? "Park and switch" : "Park and leave"}
+      action={async () => {
+        await api.parkCurrent(note);
+        if (target) onParked(target, note);
+        else {
+          onParked(undefined, note);
+          onLeave(note);
+        }
+      }}
+      onClose={onClose}
+    >
+      <p>
+        It's saved as it is now and put aside. Resume (in the sidebar, the tray or Ctrl+K) brings you straight back,
+        even after several interruptions.
+      </p>
+      <label className="field">
+        <span className="field-label">Where you were (optional)</span>
+        <input
+          className="wide"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. halfway through the migration test"
+          maxLength={500}
+        />
+      </label>
+      <label className="field">
+        <span className="field-label">Then</span>
+        <select value={target} onChange={(e) => setTarget(e.target.value)}>
+          <option value="">Just leave it (no other workspace)</option>
+          {others.map((w) => (
+            <option key={w.id} value={w.id}>
+              Switch to {w.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </ConfirmDialog>
   );
 }

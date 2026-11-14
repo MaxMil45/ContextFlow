@@ -4,7 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 export type PaletteCommand = { id: string; label: string; hint?: string; run: () => void };
 
 /** Ctrl+K: type to find a workspace or an action, Enter to run it. */
-export function Palette({ commands, onClose }: { commands: PaletteCommand[]; onClose: () => void }) {
+export function Palette({
+  commands,
+  onClose,
+  onSearch,
+}: {
+  commands: PaletteCommand[];
+  onClose: () => void;
+  /** Extra results for a query (things inside saved workspaces). */
+  onSearch?: (query: string) => Promise<PaletteCommand[]>;
+}) {
+  const [found, setFound] = useState<PaletteCommand[]>([]);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -23,6 +33,24 @@ export function Palette({ commands, onClose }: { commands: PaletteCommand[]; onC
   }, [commands, query]);
 
   useEffect(() => setIndex(0), [query]);
+
+  // Search inside saved workspaces as you type (after a short pause).
+  useEffect(() => {
+    if (!onSearch || query.trim().length < 2) {
+      setFound([]);
+      return;
+    }
+    let live = true;
+    const t = window.setTimeout(() => {
+      void onSearch(query).then((r) => live && setFound(r)).catch(() => live && setFound([]));
+    }, 160);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
+  }, [onSearch, query]);
+
+  const all = useMemo(() => [...matches, ...found], [matches, found]);
   useEffect(() => {
     list.current?.children[index]?.scrollIntoView({ block: "nearest" });
   }, [index]);
@@ -47,26 +75,26 @@ export function Palette({ commands, onClose }: { commands: PaletteCommand[]; onC
           if (e.key === "Escape") onClose();
           else if (e.key === "ArrowDown") {
             e.preventDefault();
-            setIndex((i) => Math.min(i + 1, matches.length - 1));
+            setIndex((i) => Math.min(i + 1, all.length - 1));
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             setIndex((i) => Math.max(i - 1, 0));
-          } else if (e.key === "Enter") run(matches[index]);
+          } else if (e.key === "Enter") run(all[index]);
         }}
       >
         <input
           ref={input}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Find a workspace or action…"
+          placeholder="Find a workspace, action, or a tab, folder or note you saved…"
           aria-label="Search workspaces and actions"
           role="combobox"
           aria-expanded
           aria-controls="palette-list"
         />
         <div className="palette-list" id="palette-list" role="listbox" ref={list}>
-          {matches.length === 0 && <div className="palette-empty">Nothing matches “{query}”.</div>}
-          {matches.map((c, i) => (
+          {all.length === 0 && <div className="palette-empty">Nothing matches “{query}”.</div>}
+          {all.map((c, i) => (
             <button
               key={c.id}
               role="option"

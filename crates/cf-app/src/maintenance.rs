@@ -23,6 +23,7 @@ pub fn export_workspaces(
     contexts: &[Context],
     out: &Path,
     overwrite: bool,
+    passphrase: Option<&str>,
 ) -> Result<ExportSummary> {
     if out.exists() && !overwrite {
         bail!("{} already exists; use --force to overwrite", out.display());
@@ -38,8 +39,11 @@ pub fn export_workspaces(
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&file)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
+    let mut bytes = serde_json::to_vec_pretty(&file)?;
+    if let Some(p) = passphrase {
+        bytes = crate::seal::seal(&bytes, p)?;
+    }
+    std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, out).with_context(|| format!("writing {}", out.display()))?;
     tracing::info!(workspaces = contexts.len(), snapshots, "export written");
     Ok(ExportSummary {
@@ -48,6 +52,7 @@ pub fn export_workspaces(
     })
 }
 
+#[derive(Debug)]
 pub struct ImportedWorkspace {
     pub name: String,
     pub snapshots: usize,
@@ -59,8 +64,15 @@ pub fn import_file(
     db: &mut Database,
     file: &Path,
     rename: Option<&str>,
+    passphrase: Option<&str>,
 ) -> Result<Vec<ImportedWorkspace>> {
-    let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    let mut bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    if crate::seal::is_sealed(&bytes) {
+        let Some(p) = passphrase else {
+            return Err(crate::seal::PassphraseRequired.into());
+        };
+        bytes = crate::seal::open(&bytes, p)?;
+    }
     let export: ExportFile = serde_json::from_slice(&bytes)
         .with_context(|| format!("{} is not a valid ContextFlow export", file.display()))?;
     export.check_header()?;
@@ -209,13 +221,14 @@ mod tests {
         let file = dir.path().join("w.json");
         let (db, ctx) = db_with("Work", 3);
 
-        let summary = export_workspaces(&db, std::slice::from_ref(&ctx), &file, false).unwrap();
+        let summary =
+            export_workspaces(&db, std::slice::from_ref(&ctx), &file, false, None).unwrap();
         assert_eq!((summary.workspaces, summary.snapshots), (1, 3));
         // A second export to the same file needs an explicit overwrite.
-        assert!(export_workspaces(&db, std::slice::from_ref(&ctx), &file, false).is_err());
+        assert!(export_workspaces(&db, std::slice::from_ref(&ctx), &file, false, None).is_err());
 
         let mut other = Database::open_in_memory().unwrap();
-        let imported = import_file(&mut other, &file, Some("Copy")).unwrap();
+        let imported = import_file(&mut other, &file, Some("Copy"), None).unwrap();
         assert_eq!(imported[0].name, "Copy");
         assert_eq!(imported[0].snapshots, 3);
         let copy = other.find_context("Copy").unwrap();
@@ -225,12 +238,40 @@ mod tests {
     }
 
     #[test]
+    fn a_protected_export_needs_its_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("w.json");
+        let (db, ctx) = db_with("Work", 2);
+        export_workspaces(
+            &db,
+            std::slice::from_ref(&ctx),
+            &file,
+            false,
+            Some("long passphrase"),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(crate::seal::is_sealed(&bytes));
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("note 1"),
+            "notes aren't readable in the file"
+        );
+
+        let mut other = Database::open_in_memory().unwrap();
+        let err = import_file(&mut other, &file, None, None).unwrap_err();
+        assert!(err.is::<crate::seal::PassphraseRequired>());
+        assert!(import_file(&mut other, &file, None, Some("wrong passphrase")).is_err());
+        let imported = import_file(&mut other, &file, None, Some("long passphrase")).unwrap();
+        assert_eq!(imported[0].snapshots, 2);
+    }
+
+    #[test]
     fn a_file_that_is_not_an_export_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("x.json");
         std::fs::write(&file, b"{\"hello\": 1}").unwrap();
         let mut db = Database::open_in_memory().unwrap();
-        assert!(import_file(&mut db, &file, None).is_err());
+        assert!(import_file(&mut db, &file, None, None).is_err());
     }
 
     #[test]

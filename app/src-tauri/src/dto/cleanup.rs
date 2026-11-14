@@ -299,4 +299,6 @@ pub struct LeaveReport {
     pub saved_version: Option<u32>,
     /// Why nothing was saved, when it wasn't.
     pub save_note: Option<String>,
+    /// Its stop commands that ran.
+    pub commands: Vec<super::CommandRun>,
 }

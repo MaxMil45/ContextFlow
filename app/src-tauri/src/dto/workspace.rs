@@ -249,6 +249,116 @@ pub struct RestoreReport {
     pub auto_save_note: Option<String>,
     /// Set when the layout saved for the current screens was used instead of the newest.
     pub layout_note: Option<String>,
+    /// Start and stop commands that ran.
+    pub commands: Vec<CommandRun>,
+}
+
+/// One start or stop command that ran.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct CommandRun {
+    /// `start` or `stop`.
+    pub phase: String,
+    pub workspace: String,
+    pub command: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+impl From<cf_app::commands::CommandResult> for CommandRun {
+    fn from(r: cf_app::commands::CommandResult) -> Self {
+        Self {
+            phase: r.phase.into(),
+            workspace: r.workspace,
+            command: r.command,
+            ok: r.ok,
+            message: r.message,
+        }
+    }
+}
+
+/// A workspace's start and stop commands, as the UI edits them.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct CommandSpecDto {
+    pub program: String,
+    pub args: Vec<String>,
+    pub folder: Option<String>,
+    pub wait: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct WorkspaceCommandsDto {
+    pub on_enter: Vec<CommandSpecDto>,
+    pub on_leave: Vec<CommandSpecDto>,
+}
+
+impl From<cf_core::WorkspaceCommands> for WorkspaceCommandsDto {
+    fn from(c: cf_core::WorkspaceCommands) -> Self {
+        let map = |v: Vec<cf_core::CommandSpec>| {
+            v.into_iter()
+                .map(|s| CommandSpecDto {
+                    program: s.program,
+                    args: s.args,
+                    folder: s.folder,
+                    wait: s.wait,
+                })
+                .collect()
+        };
+        Self {
+            on_enter: map(c.on_enter),
+            on_leave: map(c.on_leave),
+        }
+    }
+}
+
+impl From<WorkspaceCommandsDto> for cf_core::WorkspaceCommands {
+    fn from(c: WorkspaceCommandsDto) -> Self {
+        let map = |v: Vec<CommandSpecDto>| {
+            v.into_iter()
+                .map(|s| cf_core::CommandSpec {
+                    program: s.program,
+                    args: s.args,
+                    folder: s.folder,
+                    wait: s.wait,
+                })
+                .collect()
+        };
+        Self {
+            on_enter: map(c.on_enter),
+            on_leave: map(c.on_leave),
+        }
+    }
+}
+
+/// One timeline entry.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct TimelineEntry {
+    /// RFC 3339.
+    pub at: String,
+    /// `switch`, `restore`, `leave`, `park` or `resume`.
+    pub kind: String,
+    pub workspace_id: Option<String>,
+    pub workspace: Option<String>,
+    pub from_id: Option<String>,
+    pub from: Option<String>,
+    pub version: Option<u32>,
+    pub note: Option<String>,
+}
+
+/// A workspace you parked and can come back to.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct ParkedWorkspace {
+    pub id: String,
+    pub name: String,
 }
 
 /// Payload of the `restore://progress` event.
@@ -359,4 +469,18 @@ pub struct WorkspaceUpdate {
     pub workspace: WorkspaceSummary,
     /// Set when its desktop icon could not be renamed to match.
     pub icon_error: Option<String>,
+}
+
+/// Something found in a workspace's newest snapshot.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct SearchHit {
+    pub workspace_id: String,
+    pub workspace: String,
+    pub version: u32,
+    /// `tab`, `folder`, `note`, `repository`, `window` or `app`.
+    pub kind: String,
+    pub text: String,
+    pub detail: Option<String>,
 }

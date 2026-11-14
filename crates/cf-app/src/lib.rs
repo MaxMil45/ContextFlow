@@ -4,10 +4,14 @@
 
 pub mod autosave;
 pub mod capture;
+pub mod commands;
 pub mod display;
 pub mod health;
 pub mod icons;
 pub mod logging;
 pub mod maintenance;
+pub mod park;
+pub mod seal;
+pub mod search;
 pub mod session;
 pub mod shortcut;

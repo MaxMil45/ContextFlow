@@ -201,6 +201,9 @@ pub(crate) enum Command {
         /// Overwrite an existing file.
         #[arg(long)]
         force: bool,
+        /// Protect the file with a passphrase, read from CONTEXTFLOW_PASSPHRASE.
+        #[arg(long)]
+        encrypt: bool,
     },
 
     /// Import workspaces from an export file. Hashes are verified first.
@@ -478,7 +481,8 @@ fn run(
             all,
             out,
             force,
-        } => commands::maintenance::export(db, workspaces, all, &out, force),
+            encrypt,
+        } => commands::maintenance::export(db, workspaces, all, &out, force, encrypt),
         Command::Import { file, rename } => {
             commands::maintenance::import(db, &file, rename.as_deref())
         }

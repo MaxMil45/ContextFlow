@@ -4,7 +4,7 @@ import { CleanupResults, PlanItemStatus, PlanSummary } from "../components/Clean
 import { Badge, ErrorBanner, Notice, Spinner } from "../components/ui";
 import { Clock, GitBranch } from "lucide-react";
 import { formatDuration, friendlyAppName, relativeTime, restoreStatusLabel, restoreStatusTone } from "../format";
-import { api, toCommandError, type CleanupPlan, type CommandError, type RestoreReport } from "../ipc/client";
+import { api, toCommandError, type CleanupPlan, type CommandError, type CommandRun, type RestoreReport } from "../ipc/client";
 
 type Props = {
   workspace: string;
@@ -16,6 +16,8 @@ type Props = {
   mode?: "restore" | "switch";
   /** A report that already exists (a switch from the switcher): show it, run nothing. */
   initialReport?: RestoreReport;
+  /** A note for the workspace being left (a park, or the switcher). */
+  leaveNote?: string;
   /** Restore only these programs (a retry). */
   only?: string[];
   /** From a preview: go ahead and restore for real. */
@@ -30,7 +32,7 @@ type Props = {
  * Runs one restore: live progress lines from `restore://progress`, a Cancel
  * button while it runs, then the per-application report.
  */
-export function RestorePanel({ workspace, label, version, dryRun, mode = "restore", initialReport, only, onStart, onRetry, onClose, onFinished }: Props) {
+export function RestorePanel({ workspace, label, version, dryRun, mode = "restore", initialReport, leaveNote, only, onStart, onRetry, onClose, onFinished }: Props) {
   const [lines, setLines] = useState<string[]>([]);
   const [report, setReport] = useState<RestoreReport | undefined>(initialReport);
   const [error, setError] = useState<CommandError>();
@@ -49,7 +51,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
         if (p.workspace === workspace) setLines((l) => [...l, p.message]);
       });
       try {
-        const request = { workspace, version, dryRun, only };
+        const request = { workspace, version, dryRun, only, leaveNote };
         setReport(await (mode === "switch" && !dryRun && !only ? api.switchWorkspace(request) : api.restore(request)));
       } catch (e) {
         setError(toCommandError(e));
@@ -139,6 +141,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
       )}
 
       {report?.cleanups.map((c) => <CleanupResults key={c.phase} report={c} />)}
+      {report && report.commands.length > 0 && <CommandResults runs={report.commands} />}
 
       {report && (
         <>
@@ -226,5 +229,22 @@ function WelcomeBack({ report }: { report: RestoreReport }) {
         </Notice>
       )}
     </>
+  );
+}
+
+/** Start and stop commands that ran during a switch. */
+export function CommandResults({ runs }: { runs: CommandRun[] }) {
+  return (
+    <div className="cleanup-results">
+      <div className="muted small">Commands</div>
+      <ul className="cleanup-confirm">
+        {runs.map((r, i) => (
+          <li key={i}>
+            <Badge tone={r.ok ? "ok" : "bad"}>{r.phase === "start" ? "Started" : "Stopped"}</Badge>{" "}
+            <code>{r.command}</code> <span className="muted">· {r.workspace} · {r.message}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

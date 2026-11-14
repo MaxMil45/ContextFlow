@@ -54,6 +54,13 @@
     "allow-refresh-tray-menu",
     "allow-take-ui-action",
     "allow-health-check",
-    "allow-save-diagnostics"
+    "allow-save-diagnostics",
+    "allow-get-workspace-commands",
+    "allow-set-workspace-commands",
+    "allow-park-current",
+    "allow-take-resume",
+    "allow-list-parked",
+    "allow-list-timeline",
+    "allow-search-workspaces"
   ]
 }

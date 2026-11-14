@@ -61,6 +61,24 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect()
     };
     let restore = Submenu::with_items(app, "Switch to", true, &refs)?;
+    // The workspace a Resume would return to, if one is parked.
+    let parked = {
+        let state = app.state::<AppState>();
+        Database::open(&state.paths.db)
+            .ok()
+            .and_then(|db| cf_app::park::parked(&db).into_iter().next())
+    };
+    let resume = MenuItem::with_id(
+        app,
+        "resume",
+        parked
+            .as_ref()
+            .map_or("Resume (nothing parked)".to_string(), |c| {
+                format!("Resume “{}”", c.name)
+            }),
+        parked.is_some(),
+        None::<&str>,
+    )?;
 
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -71,6 +89,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &quick,
             &capture,
             &restore,
+            &resume,
             &sep,
             &quit,
         ],
@@ -105,6 +124,23 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         ),
                         None => crate::show_main_window(app),
                     }
+                }
+                "resume" => {
+                    let state = app.state::<AppState>();
+                    let next = Database::open(&state.paths.db)
+                        .ok()
+                        .and_then(|db| cf_app::park::take_resume(&db).ok().flatten());
+                    if let Some(ctx) = next {
+                        crate::ui::send(
+                            app,
+                            crate::ui::UiAction {
+                                kind: "restore".into(),
+                                workspace_id: ctx.id.to_string(),
+                                report: None,
+                            },
+                        );
+                    }
+                    refresh_tray(app);
                 }
                 "quit" => {
                     // A clean end: no "pick up where you left off" next time.

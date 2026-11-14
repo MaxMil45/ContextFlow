@@ -33,6 +33,7 @@ pub(crate) fn capture_now(
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
         explorer_folders: true,
+        jetbrains_recent: cf_jetbrains::default_recent_files(),
     })
 }
 
@@ -79,6 +80,10 @@ pub async fn discover_capture(
                         })
                         .or_else(|| {
                             cf_explorer::ExplorerState::from_value(&a.adapter_state)
+                                .map(|v| v.path_count() as u32)
+                        })
+                        .or_else(|| {
+                            cf_jetbrains::JetBrainsState::from_value(&a.adapter_state)
                                 .map(|v| v.path_count() as u32)
                         })
                         .unwrap_or(0),

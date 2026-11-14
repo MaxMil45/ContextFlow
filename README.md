@@ -85,6 +85,12 @@ The app (see [app/README.md](app/README.md)) does everything the command line do
 * **A layout per display setup:** capture once docked and once on the laptop screen; restore uses the newest layout saved with the screens connected now. A pinned version always wins.
 * **File Explorer folders** reopen where they were, like VS Code folders and Visual Studio solutions.
 * **Health check:** Settings → Advanced (or `contextflow doctor`) checks the database, backups, the browser extension, shortcuts and more, and can save a diagnostics report for bug reports. The database is copied next to itself before any update changes its schema.
+* **Park and resume:** Park puts the workspace you're in aside (with a note) to deal with something else; Resume (sidebar, tray or Ctrl+K) brings you straight back, even through several interruptions.
+* **Timeline:** every switch, park, resume and leave, with your notes and a way back.
+* **Start and stop commands** per workspace (Focus rules tab): start a dev server or containers when you enter, stop them when you leave. Run exactly as written (never through a shell, never elevated), only for workspaces you created or approved, and never exported.
+* **Search what you saved:** Ctrl+K also finds tabs, folders, notes and branches inside your workspaces.
+* **JetBrains IDEs** (IntelliJ, PyCharm, CLion, WebStorm, Rider...) reopen their projects.
+* **Privacy:** keep chosen window titles private (stored as "(hidden)"), and protect exports with a passphrase (AES-256-GCM, Argon2id). CLI: `export --encrypt` with `CONTEXTFLOW_PASSPHRASE`.
 * **Keyboard first:** **Ctrl+K** finds any workspace or action, **Ctrl+N** creates one, **Ctrl+1…9** jumps between them, **Ctrl+Enter** restores, **F2** renames, **Ctrl+,** opens Settings.
 * **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
 * **Quick capture:** press **Ctrl+Alt+X** (change it in Settings, or turn it off) from anywhere and the workspace you're in is saved in the background, with no window in the way. A small card in the corner of the screen confirms it at once ("Saving…", then "Saved “Focus” v3 · 7 programs") and fades away; it never takes focus or blocks clicks. The tray's **Capture now** does the same. With no active workspace it saves into the one you used last.
@@ -127,6 +133,7 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `cf-vscode` | Works out which folder each VS Code window has open |
 | `cf-vstudio` | Works out which solution or folder each Visual Studio window has open |
 | `cf-explorer` | Works out which folder each File Explorer window shows |
+| `cf-jetbrains` | Works out which project each JetBrains IDE window has open |
 | `cf-git` | Read-only Git inspection (`status --porcelain=v2`, `--no-optional-locks`) |
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |

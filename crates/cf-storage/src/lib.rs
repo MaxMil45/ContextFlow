@@ -13,6 +13,7 @@ mod export;
 mod history;
 mod migrations;
 mod repo;
+mod timeline;
 
 pub use error::{Result, StorageError};
 pub use export::{
@@ -23,3 +24,4 @@ pub use repo::{
     ContextOverview, Database, IntegrityReport, RetentionPolicy, SaveMode, SnapshotOrigin,
     AUTO_SAVES_KEPT,
 };
+pub use timeline::{EventKind, EventRecord};

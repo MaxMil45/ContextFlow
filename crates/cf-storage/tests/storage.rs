@@ -177,11 +177,12 @@ fn an_older_database_is_copied_before_its_schema_changes() {
     {
         let db = Database::open(&path).unwrap();
         db.create_context("Kept", None).unwrap();
-        // Make it look like the previous release's database.
+        // Make it look like the previous release's database: undo the newest
+        // migration (0009: the timeline table and the commands column).
         let latest = Database::latest_schema_version();
         db.raw_connection()
             .execute_batch(&format!(
-                "ALTER TABLE contexts DROP COLUMN save_mode; PRAGMA user_version = {};",
+                "DROP TABLE context_events; ALTER TABLE contexts DROP COLUMN commands_json;                  PRAGMA user_version = {};",
                 latest - 1
             ))
             .unwrap();

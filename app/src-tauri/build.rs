@@ -55,6 +55,13 @@ fn main() {
         "health_check",
         "save_diagnostics",
         "current_toast",
+        "get_workspace_commands",
+        "set_workspace_commands",
+        "park_current",
+        "take_resume",
+        "list_parked",
+        "list_timeline",
+        "search_workspaces",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

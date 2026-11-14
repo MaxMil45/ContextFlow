@@ -5,6 +5,7 @@
 //! depends on nothing ContextFlow-specific.
 
 pub mod cleanup;
+pub mod commands;
 pub mod error;
 pub mod geometry;
 pub mod hash;
@@ -13,5 +14,6 @@ pub mod redact;
 pub mod validate;
 
 pub use cleanup::{CleanupConfig, CleanupTarget, CloseMode};
+pub use commands::{CommandSpec, WorkspaceCommands};
 pub use error::{CoreError, Result};
 pub use model::*;

@@ -2,6 +2,7 @@ import { Database, Globe, KeyRound, RotateCcw, SlidersHorizontal, Wrench, type L
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ConfirmDialog } from "../components/dialogs";
+import { ExportDialog, ImportFlow } from "../components/ExportDialogs";
 import { Badge, ErrorBanner, Notice, SkeletonText, Spinner } from "../components/ui";
 import { plural } from "../format";
 import { useCommand } from "../hooks";
@@ -230,6 +231,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const [verify, setVerify] = useState<VerifyResult>();
   const [busy, setBusy] = useState<string>();
   const [health, setHealth] = useState<HealthCheck[]>();
+  const [dataDialog, setDataDialog] = useState<"export" | "import">();
   const [tab, setTab] = useState<"general" | "capture" | "restore" | "data" | "advanced">("general");
 
   useEffect(() => {
@@ -239,8 +241,8 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
     }
   }, [loaded.data]);
 
-  if (loaded.error) return <main className="content"><ErrorBanner error={loaded.error} /></main>;
-  if (!draft || !saved) return <main className="content"><div className="page"><SkeletonText lines={5} /></div></main>;
+  if (loaded.error) return <main id="main" tabIndex={-1} className="content"><ErrorBanner error={loaded.error} /></main>;
+  if (!draft || !saved) return <main id="main" tabIndex={-1} className="content"><div className="page"><SkeletonText lines={5} /></div></main>;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const set = (patch: (s: Settings) => Settings) => {
@@ -283,7 +285,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const link = (s: BrowserStatus) => s.browsers;
 
   return (
-    <main className="content settings">
+    <main id="main" tabIndex={-1} className="content settings">
       <div className="page">
         <header className="page-head">
           <h1>Settings</h1>
@@ -412,6 +414,13 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
           values={draft.capture.excludedTitlePatterns}
           placeholder="Incognito"
           onChange={(v) => set((s) => ({ ...s, capture: { ...s.capture, excludedTitlePatterns: v } }))}
+        />
+        <ListEditor
+          label="Keep these window titles private"
+          hint="Windows whose title contains one of these are still saved and restored, but their title is stored as “(hidden)”: client names, documents, banking. Not case-sensitive."
+          values={draft.capture.hiddenTitlePatterns}
+          placeholder="Bank"
+          onChange={(v) => set((s) => ({ ...s, capture: { ...s.capture, hiddenTitlePatterns: v } }))}
         />
         <ListEditor
           label="Always-on apps"
@@ -611,20 +620,12 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
             Check data integrity
           </button>
           <button
-            disabled={busy === "export"}
-            onClick={() => action("export", () => api.exportWorkspaces(), (r) => `${r.message} ${r.path}`)}
+            onClick={() => setDataDialog("export")}
           >
             Export all workspaces…
           </button>
           <button
-            disabled={busy === "import"}
-            onClick={() =>
-              action("import", api.importWorkspaces, (r) =>
-                r.length === 0
-                  ? "Nothing imported."
-                  : `Imported ${r.map((w) => `“${w.name}”`).join(", ")}. Imported workspaces must be approved before they can be restored.`,
-              )
-            }
+            onClick={() => setDataDialog("import")}
           >
             Import workspaces…
           </button>
@@ -721,6 +722,25 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         </p>
       </section>
 
+      {dataDialog === "export" && (
+        <ExportDialog
+          title="Export all workspaces"
+          onDone={(r) => setNotice(`${r.message} ${r.path}`)}
+          onClose={() => setDataDialog(undefined)}
+        />
+      )}
+      {dataDialog === "import" && (
+        <ImportFlow
+          onDone={(r) =>
+            setNotice(
+              r.length === 0
+                ? "Nothing imported."
+                : `Imported ${r.map((w) => `“${w.name}”`).join(", ")}. Imported workspaces must be approved before they can be restored.`,
+            )
+          }
+          onClose={() => setDataDialog(undefined)}
+        />
+      )}
       {retention && (
         <ConfirmDialog
           title="Delete old snapshots?"

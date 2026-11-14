@@ -56,6 +56,12 @@ pub(crate) const FOLDERS: Wording = Wording {
     partial_code: "FOLDERS_PARTIAL",
 };
 
+pub(crate) const PROJECTS: Wording = Wording {
+    noun: "project(s)",
+    singular: "project",
+    partial_code: "PROJECTS_PARTIAL",
+};
+
 pub(crate) const SOLUTIONS: Wording = Wording {
     noun: "solution(s) or folder(s)",
     singular: "solution or folder",

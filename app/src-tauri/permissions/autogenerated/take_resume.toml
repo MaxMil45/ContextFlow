@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-take-resume"
+description = "Enables the take_resume command without any pre-configured scope."
+commands.allow = ["take_resume"]
+
+[[permission]]
+identifier = "deny-take-resume"
+description = "Denies the take_resume command without any pre-configured scope."
+commands.deny = ["take_resume"]

@@ -9,6 +9,7 @@ mod commands;
 mod diagnostics;
 mod dto;
 mod error;
+mod flow_commands;
 mod hotkey;
 mod overlay;
 mod recovery;
@@ -126,6 +127,13 @@ pub fn run() {
             settings::apply_retention,
             shell::refresh_tray_menu,
             ui::take_ui_action,
+            flow_commands::get_workspace_commands,
+            flow_commands::set_workspace_commands,
+            flow_commands::park_current,
+            flow_commands::take_resume,
+            flow_commands::list_parked,
+            flow_commands::list_timeline,
+            flow_commands::search_workspaces,
             diagnostics::health_check,
             diagnostics::save_diagnostics,
             overlay::current_toast,

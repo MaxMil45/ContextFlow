@@ -145,6 +145,8 @@ pub struct RestoreOutcome {
     pub left: crate::autosave::AutoSave,
     /// Set when a layout saved for the current screens was chosen over the newest.
     pub layout_note: Option<String>,
+    /// Start and stop commands that ran (stop for the one left, start for this one).
+    pub commands: Vec<crate::commands::CommandResult>,
 }
 
 /// The result of leaving a workspace without entering another.
@@ -153,6 +155,8 @@ pub struct LeaveOutcome {
     pub workspace: Option<String>,
     pub cleanup: Option<CleanupReport>,
     pub saved: crate::autosave::AutoSave,
+    /// Its stop commands that ran.
+    pub commands: Vec<crate::commands::CommandResult>,
 }
 
 /// Application ids a snapshot uses: cleanup never closes these.
@@ -317,6 +321,7 @@ pub fn leave_active_workspace(
             workspace: None,
             cleanup: None,
             saved: Default::default(),
+            commands: Vec::new(),
         });
     };
     // Save where you are before anything closes.
@@ -325,6 +330,13 @@ pub fn leave_active_workspace(
         None => Default::default(),
     };
     let ctx = db.find_context(&active.to_string())?;
+    // Its stop commands run before anything is closed (they may need the programs).
+    let commands = if db.is_trusted(ctx.id).unwrap_or(false) {
+        let specs = db.workspace_commands(ctx.id).unwrap_or_default().on_leave;
+        crate::commands::run_all(&specs, &ctx.name, "stop", log)
+    } else {
+        Vec::new()
+    };
     let config = db.cleanup_config(active)?;
     let report = run_cleanup(
         CleanupPhase::Leaving,
@@ -336,10 +348,18 @@ pub fn leave_active_workspace(
         log,
     );
     db.set_active_context(None)?;
+    let _ = db.record_event(
+        cf_storage::EventKind::Leave,
+        Some(ctx.id),
+        None,
+        saved.saved_version,
+        note,
+    );
     Ok(LeaveOutcome {
         workspace: Some(ctx.name),
         cleanup: report,
         saved,
+        commands,
     })
 }
 
@@ -414,6 +434,10 @@ pub fn restore_workspace(
         }
     };
 
+    let was_in = db.active_context()?.filter(|p| *p != ctx.id);
+    let switching = !args.dry_run && args.only.is_empty();
+    let mut commands = Vec::new();
+
     // Save the workspace we're leaving before its leave rules close anything. A
     // dry run or a retry of a few programs isn't a switch.
     let left = match &args.save_before_leaving {
@@ -422,6 +446,16 @@ pub fn restore_workspace(
         }
         _ => Default::default(),
     };
+
+    // The stop commands of the workspace we're leaving, before anything closes.
+    if switching {
+        if let Some(prev) = was_in.and_then(|p| db.find_context(&p.to_string()).ok()) {
+            if db.is_trusted(prev.id).unwrap_or(false) {
+                let specs = db.workspace_commands(prev.id).unwrap_or_default().on_leave;
+                commands.extend(crate::commands::run_all(&specs, &prev.name, "stop", log));
+            }
+        }
+    }
 
     // Cleanup comes first: leave the workspace we were in, then close what
     // this one doesn't want. Programs this snapshot restores are never closed,
@@ -501,12 +535,27 @@ pub fn restore_workspace(
     }
     // Remember where we are, so the next restore knows what to leave. A restore
     // that achieved nothing doesn't enter the workspace.
-    if !args.dry_run && args.only.is_empty() {
+    if switching {
         if run.overall != cf_core::RestoreStatus::Failed {
             db.set_active_context(Some(ctx.id))?;
+            // Its start commands, once its programs are back (trusted is checked above).
+            let specs = db.workspace_commands(ctx.id).unwrap_or_default().on_enter;
+            commands.extend(crate::commands::run_all(&specs, &ctx.name, "start", log));
         } else if left_previous {
             db.set_active_context(None)?;
         }
+        let kind = if was_in.is_some() {
+            cf_storage::EventKind::Switch
+        } else {
+            cf_storage::EventKind::Restore
+        };
+        let _ = db.record_event(
+            kind,
+            Some(ctx.id),
+            was_in,
+            Some(snapshot.version),
+            args.leave_note.as_deref(),
+        );
     }
     Ok(RestoreOutcome {
         context: ctx,
@@ -515,5 +564,6 @@ pub fn restore_workspace(
         cleanups,
         left,
         layout_note,
+        commands,
     })
 }

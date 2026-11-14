@@ -13,6 +13,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0006_drop_unused_projections.sql"),
     include_str!("../migrations/0007_snapshot_origin.sql"),
     include_str!("../migrations/0008_save_mode.sql"),
+    include_str!("../migrations/0009_timeline_and_commands.sql"),
 ];
 
 pub fn run(conn: &mut Connection) -> Result<()> {

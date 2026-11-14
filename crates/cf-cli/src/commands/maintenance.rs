@@ -81,6 +81,7 @@ pub(crate) fn export(
     all: bool,
     out: &Path,
     force: bool,
+    encrypt: bool,
 ) -> Result<()> {
     let contexts: Vec<Context> = if all {
         db.list_contexts(true)?
@@ -92,7 +93,8 @@ pub(crate) fn export(
             .map(|n| db.find_context(n))
             .collect::<Result<_, _>>()?
     };
-    let summary = maintenance::export_workspaces(db, &contexts, out, force)?;
+    let passphrase = passphrase_from_env(encrypt)?;
+    let summary = maintenance::export_workspaces(db, &contexts, out, force, passphrase.as_deref())?;
     println!(
         "Exported {} workspace(s), {} snapshot(s) to {}",
         summary.workspaces,
@@ -104,7 +106,16 @@ pub(crate) fn export(
 }
 
 pub(crate) fn import(db: &mut Database, file: &Path, rename: Option<&str>) -> Result<()> {
-    for ws in maintenance::import_file(db, file, rename)? {
+    let passphrase = std::env::var("CONTEXTFLOW_PASSPHRASE").ok();
+    let imported =
+        maintenance::import_file(db, file, rename, passphrase.as_deref()).map_err(|e| {
+            if e.is::<cf_app::seal::PassphraseRequired>() {
+                anyhow::anyhow!("{e}: set CONTEXTFLOW_PASSPHRASE and run the import again")
+            } else {
+                e
+            }
+        })?;
+    for ws in imported {
         println!(
             "Imported '{}' with {} snapshot(s), all hashes verified",
             ws.name, ws.snapshots
@@ -203,4 +214,18 @@ pub(crate) fn info(db: &Database, paths: &Paths) -> Result<()> {
         contexts.len()
     );
     Ok(())
+}
+
+/// With `--encrypt`, the passphrase comes from `CONTEXTFLOW_PASSPHRASE` (never a
+/// command-line argument, which other programs and the shell history can see).
+fn passphrase_from_env(encrypt: bool) -> anyhow::Result<Option<String>> {
+    if !encrypt {
+        return Ok(None);
+    }
+    match std::env::var("CONTEXTFLOW_PASSPHRASE") {
+        Ok(p) if !p.is_empty() => Ok(Some(p)),
+        _ => anyhow::bail!(
+            "--encrypt needs the passphrase in the CONTEXTFLOW_PASSPHRASE environment variable"
+        ),
+    }
 }

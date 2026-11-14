@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 use cf_config::{BrowserConfig, CaptureConfig};
 use cf_core::{ApplicationState, CaptureStatus, DisplayState, SnapshotPayload, WindowState};
 
+/// What a private window title is stored as.
+pub const HIDDEN_TITLE: &str = "(hidden)";
+
 /// Shell / system processes whose windows are never part of a workspace.
 const BUILTIN_EXCLUDED_PROCESSES: &[&str] = &[
     "textinputhost",
@@ -46,6 +49,8 @@ pub struct CaptureOptions<'a> {
     pub visual_studio_settings: Vec<PathBuf>,
     /// Save which folder each File Explorer window shows.
     pub explorer_folders: bool,
+    /// JetBrains IDEs' recent-project lists (empty = don't save their projects).
+    pub jetbrains_recent: Vec<PathBuf>,
 }
 
 pub struct CaptureResult {
@@ -188,6 +193,9 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         if opts.explorer_folders {
             attach_explorer_folders(&mut payload, &mut warnings);
         }
+        if !opts.jetbrains_recent.is_empty() {
+            attach_jetbrains(&mut payload, &opts.jetbrains_recent, &mut warnings);
+        }
     }
 
     for repo in opts.repos {
@@ -196,6 +204,35 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
             Err(e) => {
                 component_failed = true;
                 warnings.push(format!("git {}: {e}", repo.display()));
+            }
+        }
+    }
+
+    // Private titles: the window is kept (so it comes back), its title isn't.
+    // Done last, because the adapters above match windows by their titles.
+    let mut hidden = 0;
+    for w in &mut payload.windows {
+        if opts.rules.title_is_hidden(&w.title) {
+            w.title = HIDDEN_TITLE.into();
+            hidden += 1;
+        }
+    }
+    if hidden > 0 {
+        for a in &mut payload.applications {
+            if let Some(windows) = a
+                .adapter_state
+                .get_mut("windows")
+                .and_then(|v| v.as_array_mut())
+            {
+                for w in windows {
+                    let private = w
+                        .get("window_title")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|t| opts.rules.title_is_hidden(t));
+                    if private {
+                        w["window_title"] = HIDDEN_TITLE.into();
+                    }
+                }
             }
         }
     }
@@ -342,6 +379,43 @@ fn attach_explorer_folders(payload: &mut SnapshotPayload, warnings: &mut Vec<Str
         let app = &mut payload.applications[i];
         app.adapter_id = Some(cf_explorer::ADAPTER_ID.to_string());
         app.adapter_state = state.to_value();
+    }
+}
+
+/// Work out which project each JetBrains IDE window has open (each IDE is its
+/// own application: PyCharm and CLion are saved separately).
+fn attach_jetbrains(payload: &mut SnapshotPayload, files: &[PathBuf], warnings: &mut Vec<String>) {
+    let ides: Vec<usize> = payload
+        .applications
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| cf_jetbrains::is_jetbrains(&a.application_id))
+        .map(|(i, _)| i)
+        .collect();
+    if ides.is_empty() {
+        return;
+    }
+    let recent = cf_jetbrains::read_recent(files);
+    for i in ides {
+        let id = payload.applications[i].application_id.clone();
+        let titles: Vec<String> = payload
+            .windows
+            .iter()
+            .filter(|w| w.application_id == id)
+            .map(|w| w.title.clone())
+            .collect();
+        let state = cf_jetbrains::build_state(&titles, &recent, &cf_jetbrains::folder_exists);
+        let unresolved = state.windows.len() - state.path_count();
+        if unresolved > 0 && state.path_count() > 0 {
+            warnings.push(format!(
+                "{id}: the project for {unresolved} window(s) could not be worked out; they will reopen without one"
+            ));
+        }
+        if state.path_count() > 0 {
+            let app = &mut payload.applications[i];
+            app.adapter_id = Some(cf_jetbrains::ADAPTER_ID.to_string());
+            app.adapter_state = state.to_value();
+        }
     }
 }
 
@@ -502,6 +576,7 @@ mod tests {
             vscode_storage: None,
             visual_studio_settings: Vec::new(),
             explorer_folders: false,
+            jetbrains_recent: Vec::new(),
         });
         assert!(r.payload.windows.is_empty());
         assert!(r.payload.applications.is_empty());

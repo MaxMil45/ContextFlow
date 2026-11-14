@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Keyboard, Lock, Plus, Search, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, History, Keyboard, Lock, Plus, Search, Settings, Undo2 } from "lucide-react";
 
 import { Kbd, SkeletonList, WorkspaceDot } from "../components/ui";
 import { relativeTime } from "../format";
@@ -16,6 +16,11 @@ type Props = {
   settingsOpen: boolean;
   onSettings: () => void;
   onHelp: () => void;
+  timelineOpen: boolean;
+  onTimeline: () => void;
+  /** Parked workspaces, the one Resume returns to first. */
+  parked: Array<{ id: string; name: string }>;
+  onResume: () => void;
 };
 
 export function Sidebar({
@@ -30,6 +35,10 @@ export function Sidebar({
   settingsOpen,
   onSettings,
   onHelp,
+  timelineOpen,
+  onTimeline,
+  parked,
+  onResume,
 }: Props) {
   const live = workspaces?.filter((w) => !w.isArchived) ?? [];
   const archived = workspaces?.filter((w) => w.isArchived) ?? [];
@@ -69,6 +78,12 @@ export function Sidebar({
       <button className="search-hint" onClick={onPalette}>
         <Search size={14} aria-hidden /> Search <Kbd>Ctrl K</Kbd>
       </button>
+      {parked.length > 0 && (
+        <button className="resume-pill" onClick={onResume} data-tip="Come back to what you parked">
+          <Undo2 size={14} aria-hidden /> Resume {parked[0]!.name}
+          {parked.length > 1 && <span className="tab-count">+{parked.length - 1}</span>}
+        </button>
+      )}
       <nav className="ws-list" aria-label="Workspaces">
         {loading && !workspaces && <SkeletonList rows={3} />}
         {workspaces && live.length === 0 && archived.length === 0 && (
@@ -87,6 +102,13 @@ export function Sidebar({
         {showArchived && archived.length === 0 && <p className="muted small pad">Nothing archived.</p>}
       </nav>
       <div className="sidebar-footer">
+        <button
+          className={`nav-item${timelineOpen ? " active" : ""}`}
+          aria-current={timelineOpen ? "page" : undefined}
+          onClick={onTimeline}
+        >
+          <History size={15} aria-hidden /> Timeline
+        </button>
         <button
           className={`nav-item${settingsOpen ? " active" : ""}`}
           aria-current={settingsOpen ? "page" : undefined}

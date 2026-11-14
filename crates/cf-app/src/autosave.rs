@@ -195,6 +195,7 @@ pub fn save_active(
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
         explorer_folders: true,
+        jetbrains_recent: cf_jetbrains::default_recent_files(),
     });
 
     let decision = match decide(previous.as_ref().map(|s| &s.payload), &result.payload) {

@@ -133,6 +133,32 @@ pub(crate) fn editor_work(app: &ApplicationState) -> Option<EditorWork> {
                 label: "File Explorer",
             }
         }
+        Some(cf_jetbrains::ADAPTER_ID) => {
+            let state = cf_jetbrains::JetBrainsState::from_value(&app.adapter_state)?;
+            let mut items = Vec::new();
+            for w in &state.windows {
+                let Some(path) = w.path.as_deref() else {
+                    continue;
+                };
+                if !cf_jetbrains::is_safe_path(path) {
+                    notes.push("a saved project path was not safe to open and was skipped".into());
+                    continue;
+                }
+                items.push(OpenItem {
+                    // `<ide>64.exe <project folder>` opens it (in the running IDE if there is one).
+                    args: vec![path.to_string()],
+                    name: w.name.clone(),
+                    window_title: w.window_title.clone(),
+                });
+            }
+            EditorWork {
+                items,
+                notes,
+                title_name: cf_jetbrains::name_from_title,
+                wording: &crate::browser::PROJECTS,
+                label: "the IDE",
+            }
+        }
         _ => return None,
     };
     (!work.items.is_empty() || !work.notes.is_empty()).then_some(work)

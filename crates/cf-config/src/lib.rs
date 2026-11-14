@@ -103,6 +103,9 @@ pub struct CaptureConfig {
     /// Programs that belong to every workspace (music, chat): never saved into
     /// one, so a restore never moves them, and never closed by Focus rules.
     pub always_on: Vec<String>,
+    /// Windows whose title contains one of these are saved and restored, but
+    /// their title is stored as "(hidden)": for private documents and pages.
+    pub hidden_title_patterns: Vec<String>,
 }
 
 impl Default for CaptureConfig {
@@ -112,6 +115,7 @@ impl Default for CaptureConfig {
             excluded_processes: Vec::new(),
             excluded_title_patterns: Vec::new(),
             always_on: Vec::new(),
+            hidden_title_patterns: Vec::new(),
         }
     }
 }
@@ -133,6 +137,15 @@ impl CaptureConfig {
             .iter()
             .map(|p| normalize_process(p))
             .collect()
+    }
+
+    /// Whether a window's title must not be stored.
+    pub fn title_is_hidden(&self, title: &str) -> bool {
+        let title = title.to_lowercase();
+        self.hidden_title_patterns
+            .iter()
+            .filter(|p| !p.trim().is_empty())
+            .any(|p| title.contains(&p.trim().to_lowercase()))
     }
 
     pub fn title_is_excluded(&self, title: &str) -> bool {
@@ -478,6 +491,17 @@ capture_hotkey = \"\"
         assert!(cfg.app.offer_resume && cfg.app.match_display_setup);
         cfg.app.checkpoint_minutes = 241;
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn private_titles_match_without_case_and_ignore_blank_patterns() {
+        let mut cfg = Config::default();
+        cfg.capture.hidden_title_patterns = vec!["  bank ".into(), "".into()];
+        assert!(cfg.capture.title_is_hidden("My BANK statement - Edge"));
+        assert!(
+            !cfg.capture.title_is_hidden("Chess.com - Chrome"),
+            "a blank pattern matches nothing"
+        );
     }
 
     #[test]

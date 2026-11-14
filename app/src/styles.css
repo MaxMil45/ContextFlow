@@ -13,7 +13,7 @@
   --border-strong: rgb(20 20 40 / 0.18);
   --text: #1c1c22;
   --muted: #5b5b68;
-  --faint: #8a8a97;
+  --faint: #6b6b78;
   --accent: #6048c9;
   --accent-hover: #5238b8;
   --accent-soft: rgb(96 72 201 / 0.12);
@@ -54,7 +54,7 @@
     --border-strong: rgb(255 255 255 / 0.18);
     --text: #ececf1;
     --muted: #a3a3b1;
-    --faint: #7b7b89;
+    --faint: #9191a0;
     --accent: #8b77e8;
     --accent-hover: #9d8bef;
     --accent-soft: rgb(139 119 232 / 0.16);
@@ -462,3 +462,33 @@ button.primary kbd { background: transparent; color: inherit; border-color: rgb(
 .choice > span { display: flex; flex-direction: column; gap: 2px; }
 .choice-title { font-weight: 600; }
 .choice-hint { color: var(--muted); font-size: 12px; }
+
+/* Park and resume, timeline, commands */
+.resume-pill { width: 100%; justify-content: flex-start; margin: 0 0 var(--s2); background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.resume-pill:hover:not(:disabled) { background: var(--accent-soft); filter: brightness(1.05); border-color: transparent; }
+.timeline-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.timeline-event { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--border); }
+.timeline-event:first-child { border-top: none; }
+.timeline-event-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.command-row { display: flex; align-items: center; gap: var(--s2); }
+.command-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.command-text code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-form { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
+
+/* ---------- accessibility ---------- */
+.skip-link { position: absolute; left: var(--s3); top: -48px; z-index: 100; background: var(--accent); color: var(--accent-text); padding: var(--s2) var(--s3); border-radius: var(--radius-sm); font-weight: 600; text-decoration: none; }
+.skip-link:focus { top: var(--s3); }
+/* Stronger edges when Windows asks for more contrast. */
+@media (prefers-contrast: more) {
+  :root { --border: rgb(20 20 40 / 0.35); --border-strong: rgb(20 20 40 / 0.6); --muted: #3f3f4a; --faint: #4f4f5a; }
+  .card, .modal, .menu, .palette { border-width: 2px; }
+}
+/* Windows High Contrast: let system colours through, keep every edge and focus ring visible. */
+@media (forced-colors: active) {
+  button, input, select, .card, .modal, .menu, .palette, .ws-item.active, .tab[aria-selected="true"], .choice.selected { border: 1px solid CanvasText; }
+  .ws-item.active::before, .tab[aria-selected="true"]::after { background: Highlight; forced-color-adjust: none; }
+  .status-dot, .health-dot, .live-dot { border: 1px solid CanvasText; forced-color-adjust: none; }
+  .badge { border: 1px solid CanvasText; }
+  :focus-visible { outline: 2px solid Highlight !important; }
+  [data-tip]::after { border: 1px solid CanvasText; }
+}

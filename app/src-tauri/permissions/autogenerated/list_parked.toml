@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-parked"
+description = "Enables the list_parked command without any pre-configured scope."
+commands.allow = ["list_parked"]
+
+[[permission]]
+identifier = "deny-list-parked"
+description = "Denies the list_parked command without any pre-configured scope."
+commands.deny = ["list_parked"]

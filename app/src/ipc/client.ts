@@ -31,6 +31,13 @@ import type { LeaveReport } from "../bindings/LeaveReport";
 import type { SaveMode } from "../bindings/SaveMode";
 import type { UiAction } from "../bindings/UiAction";
 import type { HealthCheck } from "../bindings/HealthCheck";
+import type { CommandSpecDto } from "../bindings/CommandSpecDto";
+import type { WorkspaceCommandsDto } from "../bindings/WorkspaceCommandsDto";
+import type { TimelineEntry } from "../bindings/TimelineEntry";
+import type { ParkedWorkspace } from "../bindings/ParkedWorkspace";
+import type { CommandRun } from "../bindings/CommandRun";
+import type { SearchHit } from "../bindings/SearchHit";
+import type { ImportOutcome } from "../bindings/ImportOutcome";
 import type { HotkeyStatusDto } from "../bindings/HotkeyStatusDto";
 import type { RestoreRunEntry } from "../bindings/RestoreRunEntry";
 import type { WorkspaceUpdate } from "../bindings/WorkspaceUpdate";
@@ -124,6 +131,18 @@ export const api = {
   /** An action is waiting (the window was already open). */
   onUiPending: (handler: () => void): Promise<UnlistenFn> => listen(UI_PENDING_EVENT, () => handler()),
 
+  getWorkspaceCommands: (workspace: string) => call<WorkspaceCommandsDto>("get_workspace_commands", { workspace }),
+  setWorkspaceCommands: (workspace: string, commands: WorkspaceCommandsDto) =>
+    call<WorkspaceCommandsDto>("set_workspace_commands", { workspace, commands }),
+  /** Park the workspace you're in, to come back to with Resume. */
+  parkCurrent: (note?: string) => call<string>("park_current", { note: note?.trim() || null }),
+  /** The workspace to come back to (taken off the stack); `null` when nothing is parked. */
+  takeResume: () => call<ParkedWorkspace | null>("take_resume"),
+  listParked: () => call<ParkedWorkspace[]>("list_parked"),
+  /** Search what every workspace saved (tabs, folders, notes...). */
+  searchWorkspaces: (query: string) => call<SearchHit[]>("search_workspaces", { query }),
+  listTimeline: (limit?: number) => call<TimelineEntry[]>("list_timeline", { limit: limit ?? null }),
+
   /** The workspace's recent restores, newest first. */
   listRestoreRuns: (workspace: string) => call<RestoreRunEntry[]>("list_restore_runs", { workspace }),
 
@@ -186,9 +205,12 @@ export const api = {
   openFolder: (which: "extension" | "data" | "logs" | "backups") => call<void>("open_folder", { which }),
   /** Each of these opens a Windows file dialog; `null` = the user cancelled it. */
   backupNow: () => call<FileResult | null>("backup_now"),
-  exportWorkspaces: (workspaces?: string[]) =>
-    call<FileResult | null>("export_workspaces", { workspaces: workspaces ?? null }),
-  importWorkspaces: () => call<ImportedWorkspace[] | null>("import_workspaces"),
+  /** Optionally protected with a passphrase; `null` = cancelled. */
+  exportWorkspaces: (workspaces?: string[], passphrase?: string) =>
+    call<FileResult | null>("export_workspaces", { workspaces: workspaces ?? null, passphrase: passphrase ?? null }),
+  /** Pick a file (or retry `path` with its passphrase); `null` = cancelled. */
+  importWorkspaces: (path?: string, passphrase?: string) =>
+    call<ImportOutcome | null>("import_workspaces", { path: path ?? null, passphrase: passphrase ?? null }),
   verifyData: () => call<VerifyResult>("verify_data"),
   /** What commonly stops ContextFlow from working, and how to fix it. */
   healthCheck: () => call<HealthCheck[]>("health_check"),
@@ -209,6 +231,11 @@ export const api = {
 };
 
 export type {
+  CommandRun,
+  CommandSpecDto,
+  ParkedWorkspace,
+  TimelineEntry,
+  WorkspaceCommandsDto,
   LeaveReport,
   SaveMode,
   UiAction,

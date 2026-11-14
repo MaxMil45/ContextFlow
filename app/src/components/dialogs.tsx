@@ -104,6 +104,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   danger = false,
+  disabled = false,
   action,
   onClose,
 }: {
@@ -111,6 +112,8 @@ export function ConfirmDialog({
   children: ReactNode;
   confirmLabel: string;
   danger?: boolean;
+  /** The confirm button can't be pressed yet (the form isn't complete). */
+  disabled?: boolean;
   action: () => Promise<unknown>;
   onClose: () => void;
 }) {
@@ -125,7 +128,7 @@ export function ConfirmDialog({
         </button>
         <button
           className={danger ? "danger-fill" : "primary"}
-          disabled={busy}
+          disabled={busy || disabled}
           onClick={() => run(action)}
         >
           {busy ? "Working…" : confirmLabel}

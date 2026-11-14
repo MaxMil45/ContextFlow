@@ -16,4 +16,8 @@ excludedTitlePatterns: Array<string>,
 /**
  * Programs that belong to every workspace: never saved in one, never closed by Focus rules.
  */
-alwaysOn: Array<string>, };
+alwaysOn: Array<string>, 
+/**
+ * Windows whose title contains one of these keep "(hidden)" as their title.
+ */
+hiddenTitlePatterns: Array<string>, };

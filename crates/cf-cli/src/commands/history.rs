@@ -186,6 +186,7 @@ pub(crate) fn diff(
             vscode_storage: None,
             visual_studio_settings: Vec::new(),
             explorer_folders: false,
+            jetbrains_recent: Vec::new(),
         });
         ("live environment".to_string(), r.payload)
     } else {

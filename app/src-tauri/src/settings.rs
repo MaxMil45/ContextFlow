@@ -34,6 +34,7 @@ fn settings_from(cfg: &Config, start_with_windows: bool) -> Settings {
             excluded_processes: cfg.capture.excluded_processes.clone(),
             excluded_title_patterns: cfg.capture.excluded_title_patterns.clone(),
             always_on: cfg.capture.always_on.clone(),
+            hidden_title_patterns: cfg.capture.hidden_title_patterns.clone(),
         },
         browser: BrowserSettings {
             capture_tabs: cfg.browser.capture_tabs,
@@ -78,6 +79,7 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
     cfg.capture.excluded_processes = clean(&s.capture.excluded_processes);
     cfg.capture.excluded_title_patterns = clean(&s.capture.excluded_title_patterns);
     cfg.capture.always_on = clean(&s.capture.always_on);
+    cfg.capture.hidden_title_patterns = clean(&s.capture.hidden_title_patterns);
     cfg.browser.capture_tabs = s.browser.capture_tabs;
     cfg.browser.excluded_url_patterns = clean(&s.browser.excluded_url_patterns);
     cfg.browser.max_tabs_per_window = s.browser.max_tabs_per_window as usize;
@@ -320,6 +322,7 @@ pub async fn export_workspaces(
     app: AppHandle,
     state: State<'_, AppState>,
     workspaces: Option<Vec<String>>,
+    passphrase: Option<String>,
 ) -> CmdResult<Option<FileResult>> {
     let db_path = state.paths.db.clone();
     blocking(move || {
@@ -350,12 +353,26 @@ pub async fn export_workspaces(
         };
         let dest = picked(dest)?;
         // The dialog already asked about replacing an existing file.
-        let summary = maintenance::export_workspaces(&db, &contexts, &dest, true)?;
+        let protected = passphrase.as_deref().is_some_and(|p| !p.is_empty());
+        let summary = maintenance::export_workspaces(
+            &db,
+            &contexts,
+            &dest,
+            true,
+            passphrase.as_deref().filter(|p| !p.is_empty()),
+        )?;
         Ok(Some(FileResult {
-            message: format!(
-                "Exported {} workspace(s) and {} snapshot(s). The file contains window titles and repository paths, so store it with care.",
-                summary.workspaces, summary.snapshots
-            ),
+            message: if protected {
+                format!(
+                    "Exported {} workspace(s) and {} snapshot(s), protected with your passphrase. Without it the file can't be opened.",
+                    summary.workspaces, summary.snapshots
+                )
+            } else {
+                format!(
+                    "Exported {} workspace(s) and {} snapshot(s). The file contains window titles and repository paths, so store it with care.",
+                    summary.workspaces, summary.snapshots
+                )
+            },
             path: dest.display().to_string(),
         }))
     })
@@ -367,30 +384,45 @@ pub async fn export_workspaces(
 pub async fn import_workspaces(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CmdResult<Option<Vec<ImportedWorkspace>>> {
+    path: Option<String>,
+    passphrase: Option<String>,
+) -> CmdResult<Option<ImportOutcome>> {
     let db_path = state.paths.db.clone();
     blocking(move || {
-        let Some(file) = app
-            .dialog()
-            .file()
-            .set_title("Import workspaces")
-            .add_filter("ContextFlow export", &["json"])
-            .blocking_pick_file()
-        else {
-            return Ok(None);
+        // A second try (with the passphrase) names the file it already picked.
+        let file = match path {
+            Some(p) => PathBuf::from(p),
+            None => {
+                let Some(file) = app
+                    .dialog()
+                    .file()
+                    .set_title("Import workspaces")
+                    .add_filter("ContextFlow export", &["json"])
+                    .blocking_pick_file()
+                else {
+                    return Ok(None);
+                };
+                picked(file)?
+            }
         };
-        let file = picked(file)?;
         let mut db = open(&db_path)?;
-        let imported = maintenance::import_file(&mut db, &file, None)?;
-        Ok(Some(
-            imported
-                .into_iter()
-                .map(|w| ImportedWorkspace {
-                    name: w.name,
-                    snapshots: w.snapshots as u32,
-                })
-                .collect(),
-        ))
+        match maintenance::import_file(&mut db, &file, None, passphrase.as_deref()) {
+            Err(e) if e.is::<cf_app::seal::PassphraseRequired>() => Ok(Some(ImportOutcome {
+                imported: Vec::new(),
+                needs_passphrase: Some(file.display().to_string()),
+            })),
+            Err(e) => Err(e.into()),
+            Ok(imported) => Ok(Some(ImportOutcome {
+                imported: imported
+                    .into_iter()
+                    .map(|w| ImportedWorkspace {
+                        name: w.name,
+                        snapshots: w.snapshots as u32,
+                    })
+                    .collect(),
+                needs_passphrase: None,
+            })),
+        }
     })
     .await
 }

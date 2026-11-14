@@ -282,6 +282,8 @@ pub enum ErrorCode {
     BadRequest,
     /// The client failed the access check. Nothing happened.
     Denied,
+    /// The agent is stopping and takes no new work. Nothing happened.
+    ShuttingDown,
     /// The operation ran and failed.
     Failed,
     /// Any code a newer agent may add.
@@ -295,7 +297,10 @@ impl ErrorCode {
     pub fn safe_to_fall_back(self) -> bool {
         matches!(
             self,
-            ErrorCode::UnsupportedVersion | ErrorCode::UnknownOperation | ErrorCode::Denied
+            ErrorCode::UnsupportedVersion
+                | ErrorCode::UnknownOperation
+                | ErrorCode::Denied
+                | ErrorCode::ShuttingDown
         )
     }
 }
@@ -556,6 +561,7 @@ mod tests {
         );
         assert!(!ErrorCode::Failed.safe_to_fall_back());
         assert!(ErrorCode::Denied.safe_to_fall_back());
+        assert!(ErrorCode::ShuttingDown.safe_to_fall_back());
     }
 
     #[test]

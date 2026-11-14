@@ -13,7 +13,7 @@ mod pipe;
 pub mod protocol;
 pub mod server;
 
-pub use access::{check_peer, AccessDenied, Identity};
+pub use access::{check_client, check_peer, is_elevated, AccessDenied, Identity};
 pub use client::{request, CallError, Client};
 pub use protocol::*;
 pub use server::{Handler, Server, StopHandle};

@@ -181,3 +181,69 @@ fn default_pipe_name_is_ours() {
     assert!(me.sid.starts_with("S-1-"));
     assert_eq!(default_pipe_name().unwrap(), pipe_name_for(&me));
 }
+
+/// Stopping while a request is being answered: that request finishes and gets
+/// its reply, the agent still says hello, new work is turned away in a way
+/// that lets the client do it itself, and only then does the server exit.
+#[test]
+fn stop_waits_for_the_request_in_flight() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let (name, stop, t) = start(move |req| {
+        if matches!(req, RequestBody::Restore(_)) {
+            started_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+        }
+        echo(req)
+    });
+    let slow = {
+        let name = name.clone();
+        thread::spawn(move || {
+            request(
+                &name,
+                RequestBody::Restore(RestoreRequest::switch_to("slow")),
+                WAIT,
+            )
+        })
+    };
+    started_rx.recv().unwrap();
+    stop.stop();
+    assert!(!t.is_finished(), "must not exit with a request in flight");
+
+    // Still there, and says so.
+    let hello = request(&name, RequestBody::Hello { client: "t".into() }, WAIT).unwrap();
+    assert!(matches!(hello, ResponseBody::Hello { .. }));
+    // New work is refused before anything happens: safe to do in-process.
+    let refused = request(
+        &name,
+        RequestBody::Restore(RestoreRequest::switch_to("late")),
+        WAIT,
+    );
+    assert!(
+        matches!(refused, Err(CallError::Unavailable(_))),
+        "{refused:?}"
+    );
+
+    release_tx.send(()).unwrap();
+    let reply = slow.join().unwrap().unwrap();
+    assert!(matches!(reply, ResponseBody::Restored(ref s) if s.workspace == "slow"));
+    t.join().unwrap().unwrap();
+    assert!(matches!(
+        request(&name, RequestBody::Hello { client: "t".into() }, WAIT),
+        Err(CallError::Unavailable(_))
+    ));
+}
+
+/// A client that keeps its connection open and says nothing must not keep a
+/// stopping agent alive.
+#[test]
+fn idle_connection_does_not_block_shutdown() {
+    let (name, stop, t) = start(echo);
+    let mut idle = Client::connect(&name, WAIT).unwrap();
+    idle.call(RequestBody::Hello { client: "t".into() })
+        .unwrap();
+    stop.stop();
+    t.join().unwrap().unwrap();
+    drop(idle);
+}

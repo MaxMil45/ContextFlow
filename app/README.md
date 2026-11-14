@@ -89,9 +89,10 @@ powershell -File scripts\build-installer.ps1
 
 Produces `target\release\bundle\nsis\ContextFlow_<version>_x64-setup.exe`: a
 per-user installer (no admin prompt, installs under `%LOCALAPPDATA%\ContextFlow`).
-It puts four programs side by side: `contextflow-app.exe` (the app),
-`contextflow.exe` (the CLI), `contextflow-launch.exe` (what desktop icons run)
-and `contextflow-browser-host.exe`. After installing it runs
+It puts five programs side by side: `contextflow-app.exe` (the app),
+`contextflow.exe` (the CLI), `contextflow-launch.exe` (what desktop icons run),
+`contextflow-agent.exe` (the optional background agent, see
+[docs/AGENT.md](../docs/AGENT.md)) and `contextflow-browser-host.exe`. After installing it runs
 `contextflow browser install`, and the uninstaller runs `browser uninstall`, so
 the Chrome/Edge host is registered under HKCU. Loading the extension in the
 browser ("Load unpacked") is still the user's one manual step.

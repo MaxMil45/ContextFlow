@@ -17,8 +17,8 @@ use windows_sys::Win32::Security::Authorization::{
     SDDL_REVISION_1, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, RevertToSelf, TokenUser, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    GetTokenInformation, RevertToSelf, TokenElevation, TokenUser, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
@@ -104,6 +104,38 @@ fn token_user_sid(token: HANDLE) -> io::Result<String> {
     // SAFETY: the API filled `buf` with a TOKEN_USER whose SID points into `buf`.
     let user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
     sid_to_string(user.User.Sid)
+}
+
+/// Whether `token` runs with administrator rights ("Run as administrator",
+/// or an account with UAC off).
+fn token_elevated(token: HANDLE) -> io::Result<bool> {
+    let mut info = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut len = 0u32;
+    // SAFETY: `info` is exactly the size we pass.
+    if unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut info as *mut TOKEN_ELEVATION).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(info.TokenIsElevated != 0)
+}
+
+/// Whether this process runs with administrator rights.
+pub fn current_elevated() -> io::Result<bool> {
+    let mut token = null_mut();
+    // SAFETY: the pseudo-handle of the current process; `token` is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let token = OwnedHandle(token);
+    token_elevated(token.0)
 }
 
 pub fn current_identity() -> io::Result<Identity> {
@@ -233,10 +265,11 @@ impl Listener {
     }
 }
 
-/// The connected client's identity. Call after reading at least one byte from
+/// The connected client's identity and whether it runs with administrator
+/// rights. Call after reading at least one byte from
 /// it (impersonation needs that). The client opened the pipe at identification
 /// level, so this can query its token but never act as it.
-pub fn client_identity(pipe: &File) -> io::Result<Identity> {
+pub fn client_identity(pipe: &File) -> io::Result<(Identity, bool)> {
     let handle = pipe.as_raw_handle() as HANDLE;
     // SAFETY: a connected server pipe handle.
     if unsafe { ImpersonateNamedPipeClient(handle) } == 0 {
@@ -256,12 +289,13 @@ pub fn client_identity(pipe: &File) -> io::Result<Identity> {
     }
     let token = OwnedHandle(token);
     let sid = token_user_sid(token.0)?;
+    let elevated = token_elevated(token.0)?;
     let mut session = 0;
     // SAFETY: plain out-parameter.
     if unsafe { GetNamedPipeClientSessionId(handle, &mut session) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(Identity { sid, session })
+    Ok((Identity { sid, session }, elevated))
 }
 
 /// The identity of the pipe's server end: the owner of the pipe object and the
@@ -338,13 +372,22 @@ pub fn open(name: &str, wait: Duration) -> Result<File, OpenError> {
     }
 }
 
+/// The pipe's access list, read back from the kernel: whether it is protected
+/// from inheritance, and each entry as (allow?, SID). Reading the entries
+/// themselves, not their SDDL text, matters: SDDL abbreviates some accounts
+/// (the built-in Administrator prints as `LA`), so text cannot be compared.
 #[cfg(test)]
-pub(crate) fn dacl_sddl(pipe: &File) -> io::Result<String> {
-    use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
-    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+pub(crate) fn dacl_entries(pipe: &File) -> io::Result<(bool, Vec<(bool, String)>)> {
+    use windows_sys::Win32::Security::{
+        AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl,
+        ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED,
+    };
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-    // SAFETY: as in `server_identity`.
+    let mut dacl: *mut ACL = null_mut();
+    // SAFETY: `dacl` points into `sd`, which is freed when we are done.
     let err = unsafe {
         GetSecurityInfo(
             pipe.as_raw_handle() as HANDLE,
@@ -352,7 +395,7 @@ pub(crate) fn dacl_sddl(pipe: &File) -> io::Result<String> {
             DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            null_mut(),
+            &mut dacl,
             null_mut(),
             &mut sd,
         )
@@ -361,25 +404,41 @@ pub(crate) fn dacl_sddl(pipe: &File) -> io::Result<String> {
         return Err(io::Error::from_raw_os_error(err as i32));
     }
     let _sd = LocalBox(sd);
-    let mut out = null_mut();
-    // SAFETY: `sd` is valid; `out` is LocalAlloced by the API.
+    if dacl.is_null() {
+        return Err(io::Error::other("the pipe has no DACL (everyone allowed)"));
+    }
+    let (mut control, mut revision) = (0u16, 0u32);
+    // SAFETY: `sd` is a valid security descriptor.
+    if unsafe { GetSecurityDescriptorControl(sd, &mut control, &mut revision) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: plain out-struct of the size we pass.
+    let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
     if unsafe {
-        ConvertSecurityDescriptorToStringSecurityDescriptorW(
-            sd,
-            SDDL_REVISION_1,
-            DACL_SECURITY_INFORMATION,
-            &mut out,
-            null_mut(),
+        GetAclInformation(
+            dacl,
+            (&mut info as *mut ACL_SIZE_INFORMATION).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
         )
     } == 0
     {
         return Err(io::Error::last_os_error());
     }
-    let _out = LocalBox(out.cast());
-    let len = (0..).take_while(|&i| unsafe { *out.add(i) } != 0).count();
-    Ok(String::from_utf16_lossy(unsafe {
-        std::slice::from_raw_parts(out, len)
-    }))
+    let mut entries = Vec::new();
+    for index in 0..info.AceCount {
+        let mut ace: *mut c_void = null_mut();
+        // SAFETY: `index` is below the ACL's entry count.
+        if unsafe { GetAce(dacl, index, &mut ace) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: allow and deny entries share this layout: header, mask, SID.
+        let ace = ace as *mut ACCESS_ALLOWED_ACE;
+        let allow = unsafe { (*ace).Header.AceType } == ACCESS_ALLOWED_ACE_TYPE;
+        let sid = unsafe { std::ptr::addr_of_mut!((*ace).SidStart) } as PSID;
+        entries.push((allow, sid_to_string(sid)?));
+    }
+    Ok((control & SE_DACL_PROTECTED != 0, entries))
 }
 
 #[cfg(test)]
@@ -400,15 +459,21 @@ mod tests {
     fn dacl_grants_only_the_user() {
         let me = current_identity().unwrap();
         let listener = Listener::bind(&unique_name(), &me).unwrap();
-        let sddl = dacl_sddl(listener.pending.as_ref().unwrap()).unwrap();
-        // Protected (nothing inherited), exactly one allow entry, for us.
-        assert!(sddl.starts_with("D:P"), "{sddl}");
-        assert_eq!(sddl.matches("(A;").count(), 1, "{sddl}");
-        assert!(sddl.contains(&me.sid), "{sddl}");
-        assert!(!sddl.contains("(D;"), "{sddl}");
-        for group in [";WD)", ";AU)", ";BU)", ";AN)", ";BA)", ";SY)", ";AC)"] {
-            assert!(!sddl.contains(group), "{group} in {sddl}");
-        }
+        let (protected, entries) = dacl_entries(listener.pending.as_ref().unwrap()).unwrap();
+        // Protected (nothing inherited), and exactly one entry: allow, for us.
+        assert!(protected, "the DACL must not inherit entries");
+        assert_eq!(entries, [(true, me.sid.clone())]);
+    }
+
+    /// Later instances get the same access list as the first.
+    #[test]
+    fn every_instance_is_locked_down() {
+        let me = current_identity().unwrap();
+        let listener = Listener::bind(&unique_name(), &me).unwrap();
+        let second = listener.instance(false).unwrap();
+        let (protected, entries) = dacl_entries(&second).unwrap();
+        assert!(protected);
+        assert_eq!(entries, [(true, me.sid.clone())]);
     }
 
     #[test]

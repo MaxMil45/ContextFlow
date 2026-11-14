@@ -21,6 +21,18 @@ fn run() -> Result<()> {
     let paths = session::resolve_paths(None, config_path, &cfg)?;
     let _guard = logging::init(&cfg.logging, &paths.logs);
 
+    // Programs the agent starts inherit its folder; a neutral one, so the
+    // agent never keeps the folder it was started from locked.
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let _ = std::env::set_current_dir(home);
+    }
+    if cf_ipc::is_elevated().unwrap_or(false) {
+        tracing::warn!(
+            "the agent is running as administrator: programs it restores will be too, \
+             and it only answers front ends that also run as administrator"
+        );
+    }
+
     cf_windows::init_dpi_awareness();
     let pipe = cf_ipc::default_pipe_name()?;
     let server = cf_ipc::Server::bind(&pipe).context("could not start the agent")?;

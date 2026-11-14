@@ -36,6 +36,8 @@ pub enum AccessDenied {
     OtherUser(String),
     #[error("the other end is in login session {theirs}, not {ours}")]
     OtherSession { ours: u32, theirs: u32 },
+    #[error("the agent runs as administrator and the client does not")]
+    LessPrivileged,
 }
 
 /// Allow a peer only if it is the same user in the same login session.
@@ -51,6 +53,36 @@ pub fn check_peer(own: &Identity, peer: &Identity) -> Result<(), AccessDenied> {
         });
     }
     Ok(())
+}
+
+/// The agent's check of a client: the same user and session, and never a
+/// client with fewer rights than the agent. An agent started "as
+/// administrator" starts every program it restores as administrator too, so
+/// answering an ordinary client would hand it those rights. Such a client is
+/// turned away and does the work itself, with its own rights.
+pub fn check_client(
+    agent: &Identity,
+    agent_elevated: bool,
+    client: &Identity,
+    client_elevated: bool,
+) -> Result<(), AccessDenied> {
+    check_peer(agent, client)?;
+    if agent_elevated && !client_elevated {
+        return Err(AccessDenied::LessPrivileged);
+    }
+    Ok(())
+}
+
+/// Whether this process runs with administrator rights.
+pub fn is_elevated() -> std::io::Result<bool> {
+    #[cfg(windows)]
+    {
+        crate::pipe::current_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
@@ -95,6 +127,31 @@ mod tests {
             check_peer(&me, &id("S-1-5-21-1-2-3-1001", 2)),
             Err(AccessDenied::OtherSession { ours: 1, theirs: 2 })
         );
+    }
+
+    #[test]
+    fn elevated_agent_serves_only_elevated_clients() {
+        let me = id("S-1-5-21-1-2-3-1001", 1);
+        // (agent elevated, client elevated) -> allowed?
+        for (agent, client, allowed) in [
+            (false, false, true),
+            // An elevated client may ask an ordinary agent: nothing is gained.
+            (false, true, true),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let verdict = check_client(&me, agent, &me, client);
+            assert_eq!(verdict.is_ok(), allowed, "agent {agent}, client {client}");
+        }
+        assert_eq!(
+            check_client(&me, true, &me, false),
+            Err(AccessDenied::LessPrivileged)
+        );
+        // The user and session rules still come first.
+        assert!(matches!(
+            check_client(&me, false, &id("S-1-5-18", 1), true),
+            Err(AccessDenied::OtherUser(_))
+        ));
     }
 
     #[test]

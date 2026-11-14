@@ -45,6 +45,11 @@ impl Service {
     /// Answer one request. Progress lines go to the log file and come back in
     /// the summary, since the client cannot watch them live yet.
     pub fn handle(&self, request: RequestBody) -> ResponseBody {
+        // These must answer at once even while a restore holds the database,
+        // or `agent status` and `agent stop` would hang behind it.
+        if matches!(request, RequestBody::Hello { .. } | RequestBody::Shutdown) {
+            return answer_without_db(request);
+        }
         // A poisoned lock only means an earlier request panicked; the
         // connection itself is still usable.
         let mut db = self.db.lock().unwrap_or_else(|p| p.into_inner());
@@ -78,6 +83,18 @@ pub fn handle(
     log: &mut dyn FnMut(&str),
 ) -> ResponseBody {
     match request {
+        RequestBody::Hello { .. } | RequestBody::Shutdown => answer_without_db(request),
+        RequestBody::Restore(req) => {
+            answer(restore(db, config_path, &req, log).map(ResponseBody::Restored))
+        }
+        RequestBody::Leave(req) => {
+            answer(leave(db, config_path, &req, log).map(ResponseBody::Left))
+        }
+    }
+}
+
+fn answer_without_db(request: RequestBody) -> ResponseBody {
+    match request {
         RequestBody::Hello { client } => {
             tracing::debug!("hello from {client}");
             ResponseBody::Hello {
@@ -86,13 +103,8 @@ pub fn handle(
                 min_protocol: MIN_SUPPORTED,
             }
         }
-        RequestBody::Restore(req) => {
-            answer(restore(db, config_path, &req, log).map(ResponseBody::Restored))
-        }
-        RequestBody::Leave(req) => {
-            answer(leave(db, config_path, &req, log).map(ResponseBody::Left))
-        }
         RequestBody::Shutdown => ResponseBody::ShuttingDown,
+        _ => ResponseBody::error(ErrorCode::BadRequest, "this request needs the database"),
     }
 }
 

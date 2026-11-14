@@ -67,7 +67,10 @@ The name is not a secret, so it is not the security boundary. These are:
    user SID, reverts, and also reads the client's session id
    (`GetNamedPipeClientSessionId`). Both must match the agent's own, or the
    connection is answered `denied` and closed. This holds even if the DACL
-   were ever loosened.
+   were ever loosened. An agent running as administrator also refuses a
+   client that is not: it starts every program it restores with its own
+   rights, so answering would hand those rights to an ordinary process. The
+   refused client does the work itself, with its own rights.
 5. **Client checks the server.** Clients open the pipe with
    `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`, so the agent can only
    *identify* them, never act as them. The client then reads the pipe's owner
@@ -167,16 +170,30 @@ so both paths produce the same result and summary.
   pipe; clients find no pipe and work in-process. A request in flight when it
   dies returns an error to that client only. The agent logs to the same daily
   log files as the other programs. A watchdog/restart policy is a later slice.
-* **Shutdown.** `shutdown` replies `shutting_down`, stops accepting
-  connections and exits once in-flight requests finish.
+* **Shutdown.** `shutdown` replies `shutting_down`. The agent then finishes
+  the requests it is answering, and until they are done it keeps the pipe,
+  still answers `hello` and turns other requests away with `shutting_down`
+  (which clients treat as "do it yourself"). Then it removes the pipe and
+  exits. Idle connections never keep it alive. `hello` and `shutdown` never
+  wait for the database, so `agent status` and `agent stop` answer at once
+  even in the middle of a restore.
+* **Installer.** The agent ships next to the other programs. Before
+  installing or uninstalling, the installer runs `contextflow agent stop` and
+  then ends any agent still running from the install folder, so files are
+  never locked and an old agent never outlives an upgrade. It is not started
+  automatically yet.
+* **Working folder and rights.** The agent switches to the user's profile
+  folder at start (programs it restores inherit it, and the folder it was
+  started from is not kept locked). Run it as the ordinary user, not as
+  administrator.
 
 ## Next slices
 
 1. ~~`contextflow restore`/`leave` through the agent with the same fallback;
    `contextflow agent start|status|stop`.~~ Done.
-2. Start the agent at sign-in, and from a client that found none; bundle it
-   in the installer and have the installer stop it; stale-agent restart from
-   the tray app.
+2. Start the agent at sign-in, and from a client that found none;
+   stale-agent restart from the tray app. (Bundling it and stopping it from
+   the installer is done.)
 3. `park`, `resume` and `checkpoint` through the agent; streamed progress
    events instead of lines returned at the end.
 4. Move checkpoints/autosave and global shortcuts from the tray app into the agent.

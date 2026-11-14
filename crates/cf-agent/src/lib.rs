@@ -3,25 +3,32 @@
 //!
 //! See `docs/AGENT.md`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
 
-use cf_app::session::{self, RestoreArgs, RestoreBusy, RestoreOutcome};
+use cf_app::session::{
+    self, CleanupReport, LeaveOutcome, RestoreArgs, RestoreBusy, RestoreOutcome,
+};
 use cf_config::Config;
 use cf_ipc::{
-    CallError, ErrorCode, Problem, RequestBody, ResponseBody, RestoreRequest, RestoreSummary,
+    CallError, Cleanup, CleanupOutcome, CleanupPhase, CleanupResult, ErrorCode, LeaveRequest,
+    LeaveSummary, Problem, RequestBody, ResponseBody, RestoreRequest, RestoreSummary, Saved, Step,
     MIN_SUPPORTED, PROTOCOL_VERSION,
 };
 use cf_storage::Database;
 
+pub mod lifecycle;
+
 /// How long a client waits for a free pipe instance before working in-process.
 pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
 
-/// Answers requests. The agent serves it over the pipe; a front end with no
-/// agent calls [`Service::handle`] directly, so both paths behave the same.
+/// Seconds to wait for each application's window unless the request says.
+const DEFAULT_APP_TIMEOUT: u64 = 30;
+
+/// Answers requests over the pipe, with the agent's own database connection.
 pub struct Service {
     config_path: PathBuf,
     db: Mutex<Database>,
@@ -35,39 +42,23 @@ impl Service {
         }
     }
 
+    /// Answer one request. Progress lines go to the log file and come back in
+    /// the summary, since the client cannot watch them live yet.
     pub fn handle(&self, request: RequestBody) -> ResponseBody {
-        match request {
-            RequestBody::Hello { client } => {
-                tracing::debug!("hello from {client}");
-                ResponseBody::Hello {
-                    agent_version: env!("CARGO_PKG_VERSION").into(),
-                    protocol: PROTOCOL_VERSION,
-                    min_protocol: MIN_SUPPORTED,
-                }
-            }
-            RequestBody::Restore(req) => self.restore(&req),
-            RequestBody::Shutdown => ResponseBody::ShuttingDown,
-        }
-    }
-
-    fn restore(&self, req: &RestoreRequest) -> ResponseBody {
-        // Read the config each time: the desktop app may have changed it.
-        let cfg = match Config::load(&self.config_path) {
-            Ok(cfg) => cfg,
-            Err(e) => return ResponseBody::error(ErrorCode::Failed, format!("{e:#}")),
-        };
-        let mut args = restore_args(&cfg);
-        args.version = req.version;
-        // A poisoned lock only means an earlier restore panicked; the
+        // A poisoned lock only means an earlier request panicked; the
         // connection itself is still usable.
         let mut db = self.db.lock().unwrap_or_else(|p| p.into_inner());
-        match session::restore_workspace(&mut db, &req.workspace, &args, &mut |m| {
-            tracing::info!("{m}")
-        }) {
-            Ok(outcome) => ResponseBody::Restored(summarize(&outcome)),
-            Err(e) if e.downcast_ref::<RestoreBusy>().is_some() => ResponseBody::Busy,
-            Err(e) => ResponseBody::error(ErrorCode::Failed, format!("{e:#}")),
+        let mut lines = Vec::new();
+        let mut reply = handle(&mut db, &self.config_path, request, &mut |m| {
+            tracing::info!("{m}");
+            lines.push(m.to_owned());
+        });
+        match &mut reply {
+            ResponseBody::Restored(s) => s.log = lines,
+            ResponseBody::Left(s) => s.log = lines,
+            _ => {}
         }
+        reply
     }
 }
 
@@ -77,22 +68,110 @@ impl cf_ipc::Handler for Service {
     }
 }
 
-/// How a desktop icon (or the agent on its behalf) switches workspace.
-pub fn restore_args(cfg: &Config) -> RestoreArgs {
+/// Answer one request against `db`. The agent and a front end working
+/// in-process both end up here, so the two paths behave the same. `log`
+/// receives progress lines as they happen.
+pub fn handle(
+    db: &mut Database,
+    config_path: &Path,
+    request: RequestBody,
+    log: &mut dyn FnMut(&str),
+) -> ResponseBody {
+    match request {
+        RequestBody::Hello { client } => {
+            tracing::debug!("hello from {client}");
+            ResponseBody::Hello {
+                agent_version: env!("CARGO_PKG_VERSION").into(),
+                protocol: PROTOCOL_VERSION,
+                min_protocol: MIN_SUPPORTED,
+            }
+        }
+        RequestBody::Restore(req) => {
+            answer(restore(db, config_path, &req, log).map(ResponseBody::Restored))
+        }
+        RequestBody::Leave(req) => {
+            answer(leave(db, config_path, &req, log).map(ResponseBody::Left))
+        }
+        RequestBody::Shutdown => ResponseBody::ShuttingDown,
+    }
+}
+
+fn answer(result: Result<ResponseBody>) -> ResponseBody {
+    match result {
+        Ok(reply) => reply,
+        Err(e) if e.downcast_ref::<RestoreBusy>().is_some() => ResponseBody::Busy,
+        Err(e) => ResponseBody::error(ErrorCode::Failed, format!("{e:#}")),
+    }
+}
+
+fn restore(
+    db: &mut Database,
+    config_path: &Path,
+    req: &RestoreRequest,
+    log: &mut dyn FnMut(&str),
+) -> Result<RestoreSummary> {
+    // Read the config each time: the desktop app may have changed it.
+    let cfg = Config::load(config_path)?;
+    let outcome = session::restore_workspace(db, &req.workspace, &restore_args(&cfg, req), log)?;
+    Ok(summarize(&outcome))
+}
+
+fn leave(
+    db: &mut Database,
+    config_path: &Path,
+    req: &LeaveRequest,
+    log: &mut dyn FnMut(&str),
+) -> Result<LeaveSummary> {
+    let cfg = Config::load(config_path)?;
+    let outcome = session::leave_active_workspace(db, Some(&cfg), req.note.as_deref(), log)?;
+    Ok(summarize_leave(outcome))
+}
+
+/// The restore a request asks for, with everything else from the config.
+pub fn restore_args(cfg: &Config, req: &RestoreRequest) -> RestoreArgs {
     RestoreArgs {
-        version: None,
-        only: Vec::new(),
+        version: req.version,
+        only: req.only.clone(),
         dry_run: false,
-        timeout: Duration::from_secs(30),
+        timeout: Duration::from_secs(
+            req.timeout_secs
+                .unwrap_or(DEFAULT_APP_TIMEOUT)
+                .clamp(1, 600),
+        ),
         max_tabs_per_window: cfg.browser.max_tabs_per_window,
         overall_timeout: cfg.timeouts.restore_overall(),
         cancel: None,
-        skip_cleanup: false,
+        skip_cleanup: req.no_cleanup,
         always_on: cfg.capture.normalized_always_on(),
         leave_note: None,
         match_display: cfg.app.match_display_setup,
         // A switch saves where you are first, like every other way of switching.
-        save_before_leaving: Some(cfg.clone()),
+        save_before_leaving: (!req.no_save).then(|| cfg.clone()),
+    }
+}
+
+fn cleanup_summary(report: &CleanupReport) -> Cleanup {
+    use cf_cleanup::Outcome as O;
+    Cleanup {
+        phase: match report.phase {
+            session::CleanupPhase::Leaving => CleanupPhase::Leaving,
+            session::CleanupPhase::Entering => CleanupPhase::Entering,
+        },
+        workspace: report.workspace.clone(),
+        results: report
+            .results
+            .iter()
+            .map(|r| CleanupResult {
+                process: r.process.clone(),
+                outcome: match r.outcome {
+                    O::Closed | O::Terminated => CleanupOutcome::Closed,
+                    O::NotRunning | O::KeptByWorkspace => CleanupOutcome::Skipped,
+                    O::Protected => CleanupOutcome::Refused,
+                    O::StillRunning | O::Failed => CleanupOutcome::NeedsAttention,
+                },
+                message: r.message.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -117,6 +196,50 @@ pub fn summarize(outcome: &RestoreOutcome) -> RestoreSummary {
         workspace: outcome.context.name.clone(),
         problems,
         layout_note: outcome.layout_note.clone(),
+        version: outcome.snapshot.version,
+        overall: outcome.run.overall.as_str().to_owned(),
+        steps: outcome
+            .run
+            .steps
+            .iter()
+            .map(|s| Step {
+                application: s.application_id.clone(),
+                status: s.status.as_str().to_owned(),
+                message: s.message.clone(),
+            })
+            .collect(),
+        left: outcome.left.from.as_ref().map(|from| Saved {
+            workspace: from.clone(),
+            version: outcome.left.saved_version,
+            not_saved: outcome.left.note.clone(),
+        }),
+        cleanups: outcome.cleanups.iter().map(cleanup_summary).collect(),
+        note: outcome.snapshot.payload.notes.last().cloned(),
+        log: Vec::new(),
+    }
+}
+
+fn summarize_leave(outcome: LeaveOutcome) -> LeaveSummary {
+    LeaveSummary {
+        saved: Saved {
+            workspace: outcome.workspace.clone().unwrap_or_default(),
+            version: outcome.saved.saved_version,
+            not_saved: outcome.saved.note,
+        },
+        workspace: outcome.workspace,
+        cleanup: outcome.cleanup.as_ref().map(cleanup_summary),
+        log: Vec::new(),
+    }
+}
+
+/// The agent's pipe for a front end, or `None` when the front end was given
+/// its own database or config: the agent only knows the per-user ones, so
+/// that work stays in-process.
+pub fn pipe_for(custom_paths: bool) -> Option<String> {
+    if custom_paths {
+        None
+    } else {
+        cf_ipc::default_pipe_name().ok()
     }
 }
 
@@ -129,8 +252,7 @@ pub enum Via {
 }
 
 /// Send `request` to the agent on `pipe`; if no agent can take it, run
-/// `local` instead. `pipe: None` skips the agent (e.g. the caller was given a
-/// `--db` or `--config` the agent does not use).
+/// `local` instead. `pipe: None` skips the agent (see [`pipe_for`]).
 ///
 /// Once a side-effecting request may have reached the agent, a lost reply is
 /// an error, never a reason to run it again here.

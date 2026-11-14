@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 cf-app.workspace = true
+cf-cleanup.workspace = true
 cf-config.workspace = true
 cf-ipc.workspace = true
 cf-storage.workspace = true

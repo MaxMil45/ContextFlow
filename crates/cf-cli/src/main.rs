@@ -236,6 +236,10 @@ pub(crate) enum Command {
     #[command(subcommand)]
     Browser(BrowserCmd),
 
+    /// The background agent that keeps ContextFlow ready between commands.
+    #[command(subcommand)]
+    Agent(AgentCmd),
+
     /// Show where ContextFlow keeps its database, config and logs.
     Info,
 
@@ -323,6 +327,16 @@ pub(crate) enum WorkspaceCmd {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum AgentCmd {
+    /// Start the agent in the background (does nothing if it is running).
+    Start,
+    /// Show whether the agent is running and which version it is.
+    Status,
+    /// Ask the agent to stop once it has finished what it is doing.
+    Stop,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum BrowserCmd {
     /// Register ContextFlow with Chrome and Edge and unpack the extension.
     Install,
@@ -373,11 +387,17 @@ fn main() -> Result<()> {
     if let Command::Browser(cmd) = &cli.command {
         return commands::browser::browser_cmd(cmd);
     }
+    if let Command::Agent(cmd) = &cli.command {
+        return commands::agent::agent_cmd(cmd);
+    }
+    // The agent only knows the per-user database and config; with --db or
+    // --config (or their environment variables) the work stays in this process.
+    let pipe = cf_agent::pipe_for(cli.db.is_some() || cli.config.is_some());
 
     let mut db = Database::open(&paths.db)
         .with_context(|| format!("opening database {}", paths.db.display()))?;
 
-    let result = run(cli.command, &mut db, &cfg, &paths, &cli.db);
+    let result = run(cli.command, &mut db, &cfg, &paths, &cli.db, pipe.as_deref());
     if let Err(e) = &result {
         tracing::error!(target: logging::EXIT_TARGET, "{e:#}");
     }
@@ -390,6 +410,7 @@ fn run(
     cfg: &Config,
     paths: &Paths,
     db_flag: &Option<PathBuf>,
+    pipe: Option<&str>,
 ) -> Result<()> {
     match command {
         Command::Workspace(cmd) => commands::workspace::workspace(db, paths, cmd),
@@ -407,7 +428,7 @@ fn run(
         Command::Cleanup(cmd) => {
             commands::cleanup::cleanup_cmd(db, cmd, &cfg.capture.normalized_always_on())
         }
-        Command::Leave { note } => commands::cleanup::leave(db, cfg, note.as_deref()),
+        Command::Leave { note } => commands::cleanup::leave(db, paths, pipe, note.as_deref()),
         Command::Pin { workspace, version } => commands::history::pin(db, &workspace, version),
         Command::Unpin { workspace } => commands::history::unpin(db, &workspace),
         Command::Restore {
@@ -420,16 +441,18 @@ fn run(
             no_save,
         } => commands::restore::restore_cmd(
             db,
+            paths,
+            pipe,
             &workspace,
-            version,
-            only,
-            dry_run,
-            timeout,
-            no_cleanup,
-            no_save,
+            commands::restore::RestoreOpts {
+                version,
+                only,
+                dry_run,
+                timeout,
+                no_cleanup,
+                no_save,
+            },
             cfg,
-            cfg.browser.max_tabs_per_window,
-            cfg.timeouts.restore_overall(),
         ),
         Command::Shortcut {
             workspace,
@@ -509,7 +532,7 @@ fn run(
             }
             Ok(())
         }
-        Command::Config(_) | Command::Windows { .. } | Command::Browser(_) => {
+        Command::Config(_) | Command::Windows { .. } | Command::Browser(_) | Command::Agent(_) => {
             unreachable!("handled in main")
         }
     }

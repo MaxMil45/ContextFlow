@@ -2,8 +2,8 @@
 
 use anyhow::{bail, Result};
 
-use cf_cleanup::{Outcome, PlannedAction, WindowsProcesses};
-use cf_cli::session::{self, CleanupPhase, CleanupReport};
+use cf_cleanup::{PlannedAction, WindowsProcesses};
+use cf_cli::session::{self, CleanupPhase};
 use cf_core::{cleanup::normalize_process_name, CleanupTarget, CloseMode, Context};
 use cf_storage::Database;
 
@@ -70,36 +70,58 @@ pub(crate) fn print_restore_previews(db: &Database, ctx: &Context, always_on: &[
     }
 }
 
-pub(crate) fn print_report(report: &CleanupReport) {
+pub(crate) fn print_cleanup(report: &cf_ipc::Cleanup) {
+    use cf_ipc::{CleanupOutcome as O, CleanupPhase as P};
     let when = match report.phase {
-        CleanupPhase::Leaving => "leaving",
-        CleanupPhase::Entering => "entering",
+        P::Leaving => "leaving",
+        P::Entering => "entering",
     };
     println!("Cleanup on {when} '{}':", report.workspace);
     for r in &report.results {
         let mark = match r.outcome {
-            Outcome::Closed | Outcome::Terminated => "closed ",
-            Outcome::NotRunning | Outcome::KeptByWorkspace => "skipped",
-            Outcome::Protected => "refused",
-            Outcome::StillRunning | Outcome::Failed => "ACTION ",
+            O::Closed => "closed ",
+            O::Skipped => "skipped",
+            O::Refused => "refused",
+            O::NeedsAttention | O::Other => "ACTION ",
         };
         println!("  {mark} {:<22} {}", r.process, r.message);
     }
 }
 
-pub(crate) fn leave(db: &mut Database, cfg: &cf_config::Config, note: Option<&str>) -> Result<()> {
-    let out = session::leave_active_workspace(db, Some(cfg), note, &mut |m| println!("  {m}..."))?;
+/// Leave the active workspace: through the running agent when there is one
+/// (`pipe`), otherwise here.
+pub(crate) fn leave(
+    db: &mut Database,
+    paths: &session::Paths,
+    pipe: Option<&str>,
+    note: Option<&str>,
+) -> Result<()> {
+    use cf_ipc::{LeaveRequest, RequestBody, ResponseBody};
+    let request = RequestBody::Leave(LeaveRequest {
+        note: note.map(str::to_owned),
+    });
+    let (reply, _via) = cf_agent::call_or_fallback(pipe, request, |request| {
+        Ok(cf_agent::handle(db, &paths.config, request, &mut |m| {
+            println!("  {m}...")
+        }))
+    })?;
+    let out = match reply {
+        ResponseBody::Left(out) => out,
+        ResponseBody::Error(e) => anyhow::bail!("{}", e.message),
+        other => anyhow::bail!("unexpected reply from the agent: {other:?}"),
+    };
+    super::util::print_log(&out.log);
     let Some(name) = out.workspace else {
         println!("No workspace is active.");
         return Ok(());
     };
-    match (out.saved.saved_version, &out.saved.note) {
+    match (out.saved.version, &out.saved.not_saved) {
         (Some(v), _) => println!("Saved '{name}' as v{v}."),
         (None, Some(why)) => println!("'{name}' was not saved: {why}"),
         (None, None) => {}
     }
-    match out.cleanup {
-        Some(report) => print_report(&report),
+    match &out.cleanup {
+        Some(report) => print_cleanup(report),
         None => println!("Left '{name}'. It has no 'when leaving' rules."),
     }
     Ok(())

@@ -63,6 +63,13 @@ impl Client {
     /// Send one request and wait for its reply. Error replies that prove the
     /// agent did nothing come back as [`CallError::Unavailable`].
     pub fn call(&mut self, body: RequestBody) -> Result<ResponseBody, CallError> {
+        self.call_as(crate::PROTOCOL_VERSION, body)
+    }
+
+    /// [`Client::call`], declaring an older protocol `version`. For requests
+    /// that have not changed since then (`hello`, `shutdown`), so an agent of
+    /// any age answers them.
+    pub fn call_as(&mut self, version: u32, body: RequestBody) -> Result<ResponseBody, CallError> {
         let id = self.next_id;
         self.next_id += 1;
         let side_effects = body.has_side_effects();
@@ -75,7 +82,13 @@ impl Client {
                 CallError::Unavailable(what)
             }
         };
-        let response = self.exchange(&Request::new(id, body)).map_err(lost)?;
+        let response = self
+            .exchange(&Request {
+                v: version,
+                id,
+                body,
+            })
+            .map_err(lost)?;
         if response.id != id {
             return Err(CallError::Failed(format!(
                 "reply {} does not match request {id}",

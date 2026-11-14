@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use cf_agent::{Service, Via};
+use cf_agent::Via;
 use cf_cli::logging;
 use cf_cli::session::{self, RestoreBusy};
 use cf_config::Config;
@@ -81,19 +81,17 @@ fn run() -> Result<Option<String>> {
 
     // Ask the running agent first; with none, restore here exactly as before.
     // The agent only knows the per-user database, so custom paths stay local.
-    let pipe = if custom_paths {
-        None
-    } else {
-        cf_ipc::default_pipe_name().ok()
-    };
-    let request = RequestBody::Restore(RestoreRequest {
-        workspace: args.workspace.clone(),
-        version: None,
-    });
+    let pipe = cf_agent::pipe_for(custom_paths);
+    let request = RequestBody::Restore(RestoreRequest::switch_to(&args.workspace));
     let (reply, via) = cf_agent::call_or_fallback(pipe.as_deref(), request, |request| {
         cf_windows::init_dpi_awareness();
-        let db = Database::open(&paths.db)?;
-        Ok(Service::new(paths.config.clone(), db).handle(request))
+        let mut db = Database::open(&paths.db)?;
+        Ok(cf_agent::handle(
+            &mut db,
+            &paths.config,
+            request,
+            &mut |m| tracing::info!("{m}"),
+        ))
     })?;
     tracing::info!(
         "restore handled {}",

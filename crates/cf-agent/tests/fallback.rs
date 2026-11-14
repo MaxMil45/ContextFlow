@@ -7,10 +7,7 @@ use cf_agent::{call_or_fallback, Service, Via};
 use cf_ipc::{ErrorCode, RequestBody, ResponseBody, RestoreRequest, RestoreSummary};
 
 fn restore(ws: &str) -> RequestBody {
-    RequestBody::Restore(RestoreRequest {
-        workspace: ws.into(),
-        version: None,
-    })
+    RequestBody::Restore(RestoreRequest::switch_to(ws))
 }
 
 fn local_summary(ws: &str) -> ResponseBody {

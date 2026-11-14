@@ -1,9 +1,14 @@
 # The ContextFlow agent
 
-**Status:** design note for Phase 2's headless agent. The first slice is built:
-`cf-ipc` (protocol and pipe transport), `cf-agent` (the `contextflow-agent`
-program and its request handler) and `contextflow-launch` sending its restore
-to a running agent. Everything else here is the plan for the next slices.
+**Status:** design note for Phase 2's headless agent. Built so far:
+
+* Slice 1: `cf-ipc` (protocol and pipe transport), `cf-agent` (the
+  `contextflow-agent` program and its request handler) and
+  `contextflow-launch` sending its restore to a running agent.
+* Slice 2: `contextflow restore` and `contextflow leave` go through the agent
+  (protocol v2), and `contextflow agent start|status|stop` manages it.
+
+Everything else here is the plan for the next slices.
 
 ## Why
 
@@ -84,22 +89,35 @@ Frames over 1 MiB are refused. A connection carries any number of
 request/response pairs in order; either side may close it.
 
 ```json
-→ {"v":1,"id":7,"op":"restore","workspace":"Client A"}
-← {"v":1,"id":7,"status":"restored","workspace":"Client A","problems":[],"layout_note":null}
+→ {"v":2,"id":7,"op":"restore","workspace":"Client A","only":["code"]}
+← {"v":2,"id":7,"status":"restored","workspace":"Client A","version":12,"overall":"success","steps":[…],…}
 ```
 
 * `v` is the protocol version of the sender. The agent answers any version in
   `MIN_SUPPORTED..=PROTOCOL_VERSION`; anything else gets an
   `unsupported_version` error carrying both bounds, before anything happens.
 * `id` is echoed so a client can match replies.
-* `op` names the request: `hello`, `restore`, `shutdown` in v1. An op the agent
-  does not know gets `unknown_operation`, again before anything happens.
+* `op` names the request: `hello`, `restore`, `leave`, `shutdown`. An op the
+  agent does not know gets `unknown_operation`, again before anything happens.
 * `status` names the reply: `hello` (agent version and protocol range),
-  `restored` (workspace name, problems, layout note), `busy` (another restore
+  `restored` (workspace, version, per-application steps, what was saved and
+  closed first, problems, progress lines), `left`, `busy` (another restore
   holds the lock), `shutting_down`, `error` (`code` + `message`).
 
 New fields are added with serde defaults so older peers ignore them; a change
 that older peers cannot ignore bumps `PROTOCOL_VERSION`.
+
+| Version | Adds |
+| --- | --- |
+| v1 | `hello`, `restore` (workspace, version), `shutdown` |
+| v2 | `restore` options `only`, `timeout_secs`, `no_cleanup`, `no_save` (an agent that ignored them would do the wrong restore, hence the bump); `leave`; fuller summaries |
+
+The agent answers v1 and v2. `hello` and `shutdown` are sent as v1 by
+`contextflow agent status|stop`, so an agent of any age can be found and
+stopped.
+
+Progress lines are not streamed yet: the agent returns them in the summary and
+the client prints them afterwards. In-process they are still shown live.
 
 ## Clients and fallback
 
@@ -118,9 +136,11 @@ so both paths produce the same result and summary.
 * **`contextflow-launch`** (slice 1, done): sends `restore` for the icon's
   workspace, shows the returned problems in its message box, does nothing on
   `busy`, and falls back in-process when there is no agent.
-* **`contextflow`** (next): `restore`, `switch`, `leave`, `park`, `checkpoint`
-  go through the same helper. Read-only commands (`list`, `show`, `history`)
-  can keep reading SQLite directly until the agent owns the only connection.
+* **`contextflow`** (slice 2, done for `restore` and `leave`): both go through
+  the same helper and print the same output whichever side did the work.
+  `restore --dry-run` only reads, so it always runs in-process. `park` and
+  `checkpoint` follow. Read-only commands (`list`, `show`, `history`) keep
+  reading SQLite directly until the agent owns the only connection.
 * **Tauri app** (after that): the tray process becomes a client. Commands that
   write call the agent; the app subscribes to agent events (restore progress,
   workspace changed) over a second, long-lived connection instead of polling.
@@ -128,14 +148,18 @@ so both paths produce the same result and summary.
 
 ## Lifecycle
 
-* **Start.** `contextflow-agent.exe` is a windowless program. Slice 1 starts it
-  by hand. Next, the installer registers it to run at sign-in (the Run key, the
-  same place the tray app uses), and any client that finds no agent may start
-  it in the background *after* finishing its own request in-process, so the
-  next one is fast. Only one agent per user and session can bind the pipe.
-* **Upgrade.** The installer sends `shutdown` (only the user's own processes
-  can), waits for the process to exit, replaces the binaries and starts the
-  new agent. Clients newer than a still-running old agent get
+* **Start.** `contextflow-agent.exe` is a windowless program.
+  `contextflow agent start` starts it detached (found next to `contextflow.exe`
+  or on `PATH`) and waits until it answers. Next, the installer registers it
+  to run at sign-in (the Run key, the same place the tray app uses), and any
+  client that finds no agent may start it in the background *after* finishing
+  its own request in-process, so the next one is fast. Only one agent per
+  user and session can bind the pipe.
+* **Upgrade.** `contextflow agent stop` (and later the installer) sends
+  `shutdown` (only the user's own processes can), waits until the pipe is
+  gone, then the binaries can be replaced and the new agent started.
+  `contextflow agent status` says when a running agent is too old for this
+  build's requests. Clients newer than a still-running old agent get
   `unsupported_version` / `unknown_operation` and fall back, so a half-finished
   upgrade degrades to today's behaviour, never to failure. `hello` reports the
   agent's build version so the tray app can restart a stale agent.
@@ -148,10 +172,14 @@ so both paths produce the same result and summary.
 
 ## Next slices
 
-1. `contextflow restore`/`switch`/`leave` through the agent with the same fallback.
-2. Start the agent at sign-in, and from a client that found none; `shutdown`
-   from the installer; `hello`-based stale-agent restart from the tray app.
-3. Move checkpoints/autosave and global shortcuts from the tray app into the agent.
-4. Tauri app as a client, with an event subscription for restore progress.
-5. The agent owns the only database connection; front ends stop opening SQLite.
-6. Then the live, event-driven desktop model and staged restore build on it.
+1. ~~`contextflow restore`/`leave` through the agent with the same fallback;
+   `contextflow agent start|status|stop`.~~ Done.
+2. Start the agent at sign-in, and from a client that found none; bundle it
+   in the installer and have the installer stop it; stale-agent restart from
+   the tray app.
+3. `park`, `resume` and `checkpoint` through the agent; streamed progress
+   events instead of lines returned at the end.
+4. Move checkpoints/autosave and global shortcuts from the tray app into the agent.
+5. Tauri app as a client, with an event subscription for restore progress.
+6. The agent owns the only database connection; front ends stop opening SQLite.
+7. Then the live, event-driven desktop model and staged restore build on it.

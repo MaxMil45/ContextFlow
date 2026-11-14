@@ -154,7 +154,7 @@ fn serve_connection(
         }
         let response = match decode_request(&frame) {
             Ok(req) => Response::new(req.id, handler.handle(req.body)),
-            Err(reply) => reply,
+            Err(reply) => *reply,
         };
         let stopping = matches!(response.body, ResponseBody::ShuttingDown);
         write_message(&mut pipe, &response)?;

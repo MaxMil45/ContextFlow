@@ -5,81 +5,119 @@ use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 
-use cf_cli::session::{self, Paths, RestoreArgs};
+use cf_cli::session::{self, Paths, RestoreArgs, RestoreBusy};
 use cf_cli::{icons, shortcut};
+use cf_ipc::{RequestBody, ResponseBody, RestoreRequest, RestoreSummary};
 use cf_storage::Database;
 
 use super::util::{latest, normalize_app_names};
 
-#[allow(clippy::too_many_arguments)]
+/// What `contextflow restore` was asked to do.
+pub(crate) struct RestoreOpts {
+    pub version: Option<u32>,
+    pub only: Vec<String>,
+    pub dry_run: bool,
+    pub timeout: u64,
+    pub no_cleanup: bool,
+    pub no_save: bool,
+}
+
+/// Restore a workspace. A real restore goes to the running agent when there
+/// is one (`pipe`), and otherwise runs here; a dry run only reads, so it
+/// always runs here.
 pub(crate) fn restore_cmd(
     db: &mut Database,
+    paths: &Paths,
+    pipe: Option<&str>,
     workspace: &str,
-    version: Option<u32>,
-    only: Vec<String>,
-    dry_run: bool,
-    timeout: u64,
-    no_cleanup: bool,
-    no_save: bool,
+    opts: RestoreOpts,
     cfg: &cf_config::Config,
-    max_tabs_per_window: usize,
-    overall_timeout: Duration,
 ) -> Result<()> {
-    use cf_core::RestoreStatus as S;
-    let args = RestoreArgs {
-        version,
-        only: normalize_app_names(only),
-        dry_run,
-        timeout: Duration::from_secs(timeout.clamp(1, 600)),
-        max_tabs_per_window,
-        overall_timeout,
-        cancel: None,
-        skip_cleanup: no_cleanup,
-        always_on: cfg.capture.normalized_always_on(),
-        leave_note: None,
-        match_display: cfg.app.match_display_setup,
-        save_before_leaving: (!no_save).then(|| cfg.clone()),
-    };
-    let outcome = session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
-    let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
-
-    println!(
-        "{}'{}' v{}",
-        if dry_run { "Dry run for " } else { "Restored " },
-        ctx.name,
-        snap.version
-    );
-    if dry_run && !no_cleanup {
-        super::cleanup::print_restore_previews(db, &ctx, &cfg.capture.normalized_always_on());
+    let only = normalize_app_names(opts.only);
+    if opts.dry_run {
+        let args = RestoreArgs {
+            version: opts.version,
+            only,
+            dry_run: true,
+            timeout: Duration::from_secs(opts.timeout.clamp(1, 600)),
+            max_tabs_per_window: cfg.browser.max_tabs_per_window,
+            overall_timeout: cfg.timeouts.restore_overall(),
+            cancel: None,
+            skip_cleanup: opts.no_cleanup,
+            always_on: cfg.capture.normalized_always_on(),
+            leave_note: None,
+            match_display: cfg.app.match_display_setup,
+            save_before_leaving: None,
+        };
+        let outcome =
+            session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
+        let summary = cf_agent::summarize(&outcome);
+        println!("Dry run for '{}' v{}", summary.workspace, summary.version);
+        if !opts.no_cleanup {
+            super::cleanup::print_restore_previews(
+                db,
+                &outcome.context,
+                &cfg.capture.normalized_always_on(),
+            );
+        }
+        return print_summary(&summary);
     }
-    if let Some(from) = &outcome.left.from {
-        match (outcome.left.saved_version, &outcome.left.note) {
-            (Some(v), _) => println!("Saved '{from}' as v{v} before switching."),
-            (None, Some(why)) => println!("Left '{from}': {why}"),
+
+    let request = RequestBody::Restore(RestoreRequest {
+        workspace: workspace.to_owned(),
+        version: opts.version,
+        only,
+        timeout_secs: Some(opts.timeout),
+        no_cleanup: opts.no_cleanup,
+        no_save: opts.no_save,
+    });
+    let (reply, _via) = cf_agent::call_or_fallback(pipe, request, |request| {
+        Ok(cf_agent::handle(db, &paths.config, request, &mut |m| {
+            println!("  {m}...")
+        }))
+    })?;
+    match reply {
+        ResponseBody::Restored(summary) => {
+            super::util::print_log(&summary.log);
+            println!("Restored '{}' v{}", summary.workspace, summary.version);
+            print_summary(&summary)
+        }
+        ResponseBody::Busy => Err(RestoreBusy.into()),
+        ResponseBody::Error(e) => bail!("{}", e.message),
+        other => bail!("unexpected reply from the agent: {other:?}"),
+    }
+}
+
+/// Everything after the headline, the same wherever the restore ran.
+fn print_summary(summary: &RestoreSummary) -> Result<()> {
+    if let Some(left) = &summary.left {
+        match (left.version, &left.not_saved) {
+            (Some(v), _) => println!("Saved '{}' as v{v} before switching.", left.workspace),
+            (None, Some(why)) => println!("Left '{}': {why}", left.workspace),
             (None, None) => {}
         }
     }
-    for report in &outcome.cleanups {
-        super::cleanup::print_report(report);
+    for cleanup in &summary.cleanups {
+        super::cleanup::print_cleanup(cleanup);
     }
-    if let Some(note) = snap.payload.notes.last() {
+    if let Some(note) = &summary.note {
         println!("Your note: {note}");
     }
-    for s in &run.steps {
-        let mark = match s.status {
-            S::Success => "ok     ",
-            S::PartialSuccess => "partial",
-            S::Failed => "FAILED ",
-            S::Skipped => "skipped",
-            S::RequiresUserIntervention => "ACTION ",
+    for s in &summary.steps {
+        let mark = match s.status.as_str() {
+            "success" => "ok     ",
+            "partial_success" => "partial",
+            "failed" => "FAILED ",
+            "skipped" => "skipped",
+            _ => "ACTION ",
         };
-        println!("  {mark} {:<22} {}", s.application_id, s.message);
+        println!("  {mark} {:<22} {}", s.application, s.message);
     }
-    if run.steps.is_empty() {
+    if summary.steps.is_empty() {
         println!("  nothing to restore (no applications in this snapshot match)");
     }
-    println!("Result: {}", run.overall.as_str().replace('_', " "));
-    if run.overall == S::Failed {
+    println!("Result: {}", summary.overall.replace('_', " "));
+    if summary.overall == "failed" {
         bail!("nothing could be restored");
     }
     Ok(())

@@ -28,6 +28,7 @@ fn echo(req: RequestBody) -> ResponseBody {
             workspace: r.workspace,
             ..Default::default()
         }),
+        RequestBody::Leave(_) => ResponseBody::Left(LeaveSummary::default()),
         RequestBody::Shutdown => ResponseBody::ShuttingDown,
     }
 }
@@ -49,10 +50,7 @@ fn same_user_client_is_served_in_order() {
     let mut client = Client::connect(&name, WAIT).unwrap();
     for ws in ["A", "B", "C"] {
         let reply = client
-            .call(RequestBody::Restore(RestoreRequest {
-                workspace: ws.into(),
-                version: None,
-            }))
+            .call(RequestBody::Restore(RestoreRequest::switch_to(ws)))
             .unwrap();
         assert!(matches!(reply, ResponseBody::Restored(ref s) if s.workspace == ws));
     }
@@ -85,10 +83,7 @@ fn several_clients_at_once() {
             thread::spawn(move || {
                 request(
                     &name,
-                    RequestBody::Restore(RestoreRequest {
-                        workspace: format!("W{i}"),
-                        version: None,
-                    }),
+                    RequestBody::Restore(RestoreRequest::switch_to(format!("W{i}"))),
                     WAIT,
                 )
                 .unwrap()

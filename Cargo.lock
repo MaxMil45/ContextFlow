@@ -598,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cf-app",
+ "cf-cleanup",
  "cf-config",
  "cf-ipc",
  "cf-storage",

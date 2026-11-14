@@ -8,18 +8,39 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AppInfo } from "../bindings/AppInfo";
 import type { CaptureReport } from "../bindings/CaptureReport";
 import type { CaptureRequest } from "../bindings/CaptureRequest";
+import type { BrowserStatus } from "../bindings/BrowserStatus";
+import type { CaptureDiscovery } from "../bindings/CaptureDiscovery";
+import type { CleanupConfig } from "../bindings/CleanupConfig";
+import type { CleanupPhase } from "../bindings/CleanupPhase";
+import type { CleanupPlan } from "../bindings/CleanupPlan";
+import type { CleanupReport } from "../bindings/CleanupReport";
+import type { CleanupTarget } from "../bindings/CleanupTarget";
+import type { CloseMode } from "../bindings/CloseMode";
 import type { CommandError } from "../bindings/CommandError";
+import type { CompareResult } from "../bindings/CompareResult";
+import type { DiffStatus } from "../bindings/DiffStatus";
+import type { FileResult } from "../bindings/FileResult";
+import type { ImportedWorkspace } from "../bindings/ImportedWorkspace";
+import type { PlanItem } from "../bindings/PlanItem";
+import type { RetentionResult } from "../bindings/RetentionResult";
+import type { RunningApp } from "../bindings/RunningApp";
+import type { Settings } from "../bindings/Settings";
+import type { VerifyResult } from "../bindings/VerifyResult";
+import type { DeleteOutcome } from "../bindings/DeleteOutcome";
 import type { IconUpdate } from "../bindings/IconUpdate";
 import type { RestoreProgress } from "../bindings/RestoreProgress";
 import type { RestoreReport } from "../bindings/RestoreReport";
 import type { RestoreRequest } from "../bindings/RestoreRequest";
 import type { ShortcutCreated } from "../bindings/ShortcutCreated";
+import type { TrustReview } from "../bindings/TrustReview";
 import type { SnapshotDetail } from "../bindings/SnapshotDetail";
 import type { SnapshotEntry } from "../bindings/SnapshotEntry";
 import type { WorkspaceIcon } from "../bindings/WorkspaceIcon";
 import type { WorkspaceSummary } from "../bindings/WorkspaceSummary";
 
 export const RESTORE_PROGRESS_EVENT = "restore://progress";
+export const TRAY_CAPTURE_EVENT = "tray://capture";
+export const TRAY_RESTORE_EVENT = "tray://restore";
 
 /** Every rejected command is normalised to a `CommandError`. */
 export function toCommandError(e: unknown): CommandError {
@@ -78,18 +99,109 @@ export const api = {
 
   resetWorkspaceIcon: (workspace: string) => call<IconUpdate>("reset_workspace_icon", { workspace }),
 
+  renameWorkspace: (workspace: string, newName: string) =>
+    call<WorkspaceSummary>("rename_workspace", { workspace, newName }),
+
+  setWorkspaceArchived: (workspace: string, archived: boolean) =>
+    call<WorkspaceSummary>("set_workspace_archived", { workspace, archived }),
+
+  /** Desktop icons (full paths) that restore this workspace. */
+  getWorkspaceShortcuts: (workspace: string) =>
+    call<string[]>("get_workspace_shortcuts", { workspace }),
+
+  /** Permanently deletes the workspace and all its snapshots; icons go to the Recycle Bin if asked. */
+  deleteWorkspace: (workspace: string, deleteShortcuts: boolean) =>
+    call<DeleteOutcome>("delete_workspace", { workspace, deleteShortcuts }),
+
+  /** `null` = restore the latest snapshot again. */
+  setPinnedVersion: (workspace: string, version: number | null) =>
+    call<WorkspaceSummary>("set_pinned_version", { workspace, version }),
+
+  deleteSnapshot: (workspace: string, version: number) =>
+    call<void>("delete_snapshot", { workspace, version }),
+
+  getTrustReview: (workspace: string) => call<TrustReview>("get_trust_review", { workspace }),
+
+  approveWorkspace: (workspace: string) => call<WorkspaceSummary>("approve_workspace", { workspace }),
+
+  /** Programs running now with memory and CPU (takes about a second). */
+  listRunningApps: () => call<RunningApp[]>("list_running_apps"),
+
+  getCleanupConfig: (workspace: string) => call<CleanupConfig>("get_cleanup_config", { workspace }),
+
+  setCleanupConfig: (workspace: string, config: CleanupConfig) =>
+    call<CleanupConfig>("set_cleanup_config", { workspace, config }),
+
+  /** What one side of the cleanup would close right now, and what that frees. */
+  previewCleanup: (workspace: string, phase: CleanupPhase) =>
+    call<CleanupPlan>("preview_cleanup", { workspace, phase }),
+
+  /** Closes the programs now (the UI confirms first). */
+  runCleanupNow: (workspace: string, phase: CleanupPhase) =>
+    call<CleanupReport>("run_cleanup_now", { workspace, phase }),
+
+  /** Leave the active workspace, running its "when leaving" cleanup. */
+  leaveWorkspace: () => call<CleanupReport | null>("leave_workspace"),
+
+  // --- capture review and compare
+  discoverCapture: (workspace: string) => call<CaptureDiscovery>("discover_capture", { workspace }),
+
+  /** `to` omitted = compare with the screen right now. */
+  compareSnapshots: (workspace: string, from: number, to?: number) =>
+    call<CompareResult>("compare_snapshots", { workspace, from, to: to ?? null }),
+
+  // --- settings and data
+  getSettings: () => call<Settings>("get_settings"),
+  saveSettings: (settings: Settings) => call<Settings>("save_settings", { settings }),
+  getBrowserStatus: () => call<BrowserStatus>("get_browser_status"),
+  installBrowserIntegration: () => call<BrowserStatus>("install_browser_integration"),
+  removeBrowserIntegration: () => call<BrowserStatus>("remove_browser_integration"),
+  openFolder: (which: "extension" | "data" | "logs" | "backups") => call<void>("open_folder", { which }),
+  /** Each of these opens a Windows file dialog; `null` = the user cancelled it. */
+  backupNow: () => call<FileResult | null>("backup_now"),
+  exportWorkspaces: (workspaces?: string[]) =>
+    call<FileResult | null>("export_workspaces", { workspaces: workspaces ?? null }),
+  importWorkspaces: () => call<ImportedWorkspace[] | null>("import_workspaces"),
+  verifyData: () => call<VerifyResult>("verify_data"),
+  previewRetention: () => call<RetentionResult>("preview_retention"),
+  applyRetention: () => call<RetentionResult>("apply_retention"),
+  refreshTrayMenu: () => call<void>("refresh_tray_menu"),
+
+  onTrayCapture: (handler: () => void): Promise<UnlistenFn> => listen(TRAY_CAPTURE_EVENT, () => handler()),
+  onTrayRestore: (handler: (workspace: string) => void): Promise<UnlistenFn> =>
+    listen<string>(TRAY_RESTORE_EVENT, (e) => handler(e.payload)),
+
   onRestoreProgress: (handler: (p: RestoreProgress) => void): Promise<UnlistenFn> =>
     listen<RestoreProgress>(RESTORE_PROGRESS_EVENT, (e) => handler(e.payload)),
 };
 
 export type {
+  BrowserStatus,
+  CaptureDiscovery,
+  DiffStatus,
+  FileResult,
+  ImportedWorkspace,
+  RetentionResult,
+  Settings,
+  VerifyResult,
   AppInfo,
   CaptureReport,
+  CleanupConfig,
+  CleanupPhase,
+  CleanupPlan,
+  CleanupReport,
+  CleanupTarget,
+  CloseMode,
   CommandError,
+  CompareResult,
+  PlanItem,
+  RunningApp,
+  DeleteOutcome,
   IconUpdate,
   WorkspaceIcon,
   RestoreProgress,
   RestoreReport,
+  TrustReview,
   SnapshotDetail,
   SnapshotEntry,
   WorkspaceSummary,

@@ -146,45 +146,129 @@ $s.Save()
     Ok(PathBuf::from(stdout.trim()))
 }
 
-/// Change the icon of the shortcut [`create`] made for `display_name` in
-/// `folder` (default: the Desktop), if it is there. `icon = None` goes back to
-/// the launcher's own icon. Returns the shortcut's path, or `None` if there is
-/// no such shortcut (nothing is created).
-pub fn update_icon(
-    display_name: &str,
-    folder: Option<&Path>,
-    icon: Option<&Path>,
-) -> Result<Option<PathBuf>> {
+/// Shortcuts that restore workspace `workspace_id`: `.lnk` files in `folder`
+/// (default: the Desktop) that run the ContextFlow launcher with that id.
+///
+/// They are found by id, not by file name, so a shortcut is still found after
+/// the workspace or the file has been renamed. Only the top level of the folder
+/// is searched.
+pub fn find_for_workspace(workspace_id: &str, folder: Option<&Path>) -> Result<Vec<PathBuf>> {
     const SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $dir = if ($env:CF_FOLDER) { $env:CF_FOLDER } else { [Environment]::GetFolderPath('Desktop') }
-$path = Join-Path $dir ($env:CF_NAME + '.lnk')
-if (-not (Test-Path -LiteralPath $path)) { [Console]::Out.Write('MISSING'); exit 0 }
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
-$s.IconLocation = $(if ($env:CF_ICON) { $env:CF_ICON } else { $s.TargetPath }) + ',0'
-$s.Save()
-[Console]::Out.Write($path)
+if (-not (Test-Path -LiteralPath $dir)) { exit 0 }
+$sh = New-Object -ComObject WScript.Shell
+Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -File | ForEach-Object {
+  try {
+    $s = $sh.CreateShortcut($_.FullName)
+    if ((Split-Path -Leaf $s.TargetPath) -ieq 'contextflow-launch.exe' -and $s.Arguments.Contains($env:CF_ID)) {
+      [Console]::Out.WriteLine($_.FullName)
+    }
+  } catch { }
+}
 "#;
     let out = powershell(SCRIPT)
-        .env("CF_NAME", file_safe_name(display_name))
-        .env("CF_ICON", icon.map(|p| p.as_os_str()).unwrap_or_default())
+        .env("CF_ID", workspace_id)
         .env(
             "CF_FOLDER",
             folder.map(|f| f.as_os_str()).unwrap_or_default(),
         )
         .output()
         .context("could not run PowerShell")?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !out.status.success() {
+        bail!(
+            "could not look for the workspace's shortcuts: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
+/// Send shortcuts to the Recycle Bin, so deleting one is not final.
+pub fn recycle(paths: &[PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName Microsoft.VisualBasic
+foreach ($p in ($env:CF_PATHS -split "`n")) {
+  $p = $p.Trim()
+  if ($p -and (Test-Path -LiteralPath $p)) {
+    [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin')
+  }
+}
+"#;
+    let joined = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let out = powershell(SCRIPT)
+        .env("CF_PATHS", joined)
+        .output()
+        .context("could not run PowerShell")?;
+    if !out.status.success() {
+        bail!(
+            "could not remove the shortcut: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Change the icon of every shortcut for `workspace_id` in `folder` (default:
+/// the Desktop). `icon = None` goes back to the launcher's own icon. Returns
+/// the shortcuts that were changed; empty if there are none (nothing is created).
+pub fn update_icon(
+    workspace_id: &str,
+    folder: Option<&Path>,
+    icon: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$sh = New-Object -ComObject WScript.Shell
+foreach ($p in ($env:CF_PATHS -split "`n")) {
+  $p = $p.Trim()
+  if (-not $p) { continue }
+  $s = $sh.CreateShortcut($p)
+  $s.IconLocation = $(if ($env:CF_ICON) { $env:CF_ICON } else { $s.TargetPath }) + ',0'
+  $s.Save()
+  [Console]::Out.WriteLine($p)
+}
+"#;
+    let found = find_for_workspace(workspace_id, folder)?;
+    if found.is_empty() {
+        return Ok(found);
+    }
+    let joined = found
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let out = powershell(SCRIPT)
+        .env("CF_PATHS", joined)
+        .env("CF_ICON", icon.map(|p| p.as_os_str()).unwrap_or_default())
+        .output()
+        .context("could not run PowerShell")?;
     if !out.status.success() {
         bail!(
             "could not change the shortcut's icon: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(match stdout.trim() {
-        "MISSING" => None,
-        p => Some(PathBuf::from(p)),
-    })
+    Ok(found)
 }
 
 fn powershell(script: &str) -> Command {

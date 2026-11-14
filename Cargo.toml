@@ -20,6 +20,7 @@ cf-browser = { path = "crates/cf-browser" }
 cf-vscode = { path = "crates/cf-vscode" }
 cf-engine = { path = "crates/cf-engine" }
 cf-cli = { path = "crates/cf-cli" }
+cf-cleanup = { path = "crates/cf-cleanup" }
 
 anyhow = "1"
 toml = "0.8"

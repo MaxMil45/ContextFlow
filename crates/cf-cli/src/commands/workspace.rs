@@ -3,12 +3,14 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
+use cf_cli::session::Paths;
+use cf_cli::{icons, shortcut};
 use cf_storage::Database;
 
 use super::util::{fmt_versions, require_yes};
 use crate::WorkspaceCmd;
 
-pub(crate) fn workspace(db: &Database, cmd: WorkspaceCmd) -> Result<()> {
+pub(crate) fn workspace(db: &Database, paths: &Paths, cmd: WorkspaceCmd) -> Result<()> {
     match cmd {
         WorkspaceCmd::Create { name, description } => {
             let ctx = db.create_context(&name, description.as_deref())?;
@@ -40,6 +42,14 @@ pub(crate) fn workspace(db: &Database, cmd: WorkspaceCmd) -> Result<()> {
                 );
             }
         }
+        WorkspaceCmd::Rename { name, new_name } => {
+            let ctx = db.find_context(&name)?;
+            let renamed = db.rename_context(ctx.id, &new_name)?;
+            println!("Renamed '{}' to '{}'", ctx.name, renamed.name);
+            println!(
+                "An existing desktop icon keeps working; re-create it to give it the new name."
+            );
+        }
         WorkspaceCmd::Archive { name } => {
             let ctx = db.find_context(&name)?;
             db.set_archived(ctx.id, true)?;
@@ -50,15 +60,40 @@ pub(crate) fn workspace(db: &Database, cmd: WorkspaceCmd) -> Result<()> {
             db.set_archived(ctx.id, false)?;
             println!("Unarchived '{}'", ctx.name);
         }
-        WorkspaceCmd::Delete { name, yes } => {
+        WorkspaceCmd::Delete {
+            name,
+            yes,
+            keep_shortcuts,
+        } => {
             let ctx = db.find_context(&name)?;
             let n = db.list_snapshots(ctx.id)?.len();
             require_yes(
                 yes,
                 &format!("workspace '{}' and its {n} snapshot(s)", ctx.name),
             )?;
+            let id = ctx.id.to_string();
+            // Look before deleting; a failed lookup must not block the delete.
+            let shortcuts = if keep_shortcuts {
+                Vec::new()
+            } else {
+                shortcut::find_for_workspace(&id, None).unwrap_or_else(|e| {
+                    eprintln!("warning: could not look for desktop icons: {e:#}");
+                    Vec::new()
+                })
+            };
             db.delete_context(ctx.id)?;
+            icons::clear_custom_icon(&icons::icon_dir(&paths.db), &id);
             println!("Deleted workspace '{}' and {n} snapshot(s)", ctx.name);
+            match shortcut::recycle(&shortcuts) {
+                Ok(()) => {
+                    for s in &shortcuts {
+                        println!("Moved the desktop icon to the Recycle Bin: {}", s.display());
+                    }
+                }
+                Err(e) => eprintln!(
+                    "warning: the workspace is deleted, but its icon was not removed: {e:#}"
+                ),
+            }
         }
         WorkspaceCmd::Trust { name, yes } => trust(db, &name, yes)?,
     }

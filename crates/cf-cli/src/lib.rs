@@ -4,5 +4,6 @@
 pub mod capture;
 pub mod icons;
 pub mod logging;
+pub mod maintenance;
 pub mod session;
 pub mod shortcut;

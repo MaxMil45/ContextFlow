@@ -401,3 +401,80 @@ fn restore_history_is_capped_per_snapshot() {
     let sixth = (base + TimeDelta::seconds(5)).to_rfc3339_opts(SecondsFormat::Millis, true);
     assert_eq!(oldest, sixth);
 }
+
+#[test]
+fn rename_keeps_snapshots_and_refuses_duplicates() {
+    let (db, id) = db_with_versions(2);
+    db.set_pinned_version(id, Some(1)).unwrap();
+    let other = db.create_context("Other", None).unwrap();
+
+    let renamed = db.rename_context(id, "  Renamed  ").unwrap();
+    assert_eq!(renamed.name, "Renamed");
+    assert_eq!(db.list_snapshots(id).unwrap().len(), 2);
+    assert_eq!(db.pinned_version(id).unwrap(), Some(1));
+    assert!(db.find_context("W").is_err(), "the old name is gone");
+
+    // Only the capitalisation of its own name: fine.
+    assert_eq!(db.rename_context(id, "RENAMED").unwrap().name, "RENAMED");
+    // Another workspace's name, in any case: refused.
+    let err = db.rename_context(id, "other").unwrap_err();
+    assert!(matches!(err, StorageError::Conflict(_)), "{err}");
+    assert!(db.rename_context(id, "   ").is_err());
+    assert_eq!(
+        db.find_context(&other.id.to_string()).unwrap().name,
+        "Other"
+    );
+    assert!(matches!(
+        db.rename_context(cf_core::ContextId::new(), "X"),
+        Err(StorageError::NotFound(_))
+    ));
+}
+
+#[test]
+fn cleanup_rules_round_trip_and_the_active_workspace_is_remembered() {
+    use cf_core::{CleanupConfig, CleanupTarget, CloseMode};
+    let (db, id) = db_with_versions(1);
+    assert!(db.cleanup_config(id).unwrap().is_empty());
+
+    let saved = db
+        .set_cleanup_config(
+            id,
+            CleanupConfig {
+                on_enter: vec![CleanupTarget {
+                    process: "Discord.exe".into(),
+                    mode: CloseMode::Force,
+                }],
+                on_exit: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(saved.on_enter[0].process, "discord");
+    assert_eq!(db.cleanup_config(id).unwrap(), saved);
+    // Invalid rules are refused and change nothing.
+    let bad = CleanupConfig {
+        on_enter: vec![CleanupTarget {
+            process: r"C:\x\a.exe".into(),
+            mode: CloseMode::Graceful,
+        }],
+        on_exit: vec![],
+    };
+    assert!(db.set_cleanup_config(id, bad).is_err());
+    assert_eq!(db.cleanup_config(id).unwrap(), saved);
+    // An empty config clears them.
+    db.set_cleanup_config(id, CleanupConfig::default()).unwrap();
+    assert!(db.cleanup_config(id).unwrap().is_empty());
+
+    // Active workspace: remembered, cleared, and forgotten when it is deleted.
+    assert_eq!(db.active_context().unwrap(), None);
+    db.set_active_context(Some(id)).unwrap();
+    assert_eq!(db.active_context().unwrap(), Some(id));
+    db.set_active_context(None).unwrap();
+    assert_eq!(db.active_context().unwrap(), None);
+    db.set_active_context(Some(id)).unwrap();
+    db.delete_context(id).unwrap();
+    assert_eq!(db.active_context().unwrap(), None);
+    assert!(matches!(
+        db.cleanup_config(id),
+        Err(StorageError::NotFound(_))
+    ));
+}

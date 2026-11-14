@@ -4,7 +4,7 @@
 
 ContextFlow is a local-first workspace continuity engine for Windows. It captures windows, monitors, Git state and progress notes into immutable, versioned snapshots. It can compare any snapshot with another one or with the live environment, and (from Phase 2) restore them.
 
-> Status: **Phase 1 complete, Phase 2 and the first Phase 3 integrations working.** Save your open apps, then restore them, their window layout, browser tabs and VS Code folders from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. A first Tauri desktop app is in [app/](app/README.md). See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
+> Status: **Phase 1 complete, Phase 2 and the first Phase 3 integrations working.** Save your open apps, then restore them, their window layout, browser tabs and VS Code folders from a desktop icon. Capture, versioned storage, Context Diff, retention, export/import, backup, config and logging also work. The Tauri desktop app is in [app/](app/README.md). See [docs/PLAN.md](docs/PLAN.md), and [docs/TESTING.md](docs/TESTING.md) to try it out.
 
 ## Quick start
 
@@ -65,10 +65,45 @@ Then in Chrome or Edge open `chrome://extensions` (or `edge://extensions`), turn
 | `backup [--out FILE]` | Consistent, verified copy of the whole database |
 | `verify [<ws>] [--version N]` | Re-hash snapshots and check database health |
 | `config path/show/init` | Configuration file |
+| `cleanup add/remove/show/apps` | Programs a workspace closes when you enter or leave it |
+| `leave` | Leave the active workspace (runs its "when leaving" cleanup) |
 | `info` | Where the database, config, logs and backups live |
 | `windows [--json]` | Debug: windows ContextFlow can see |
 
 The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, and logs and backups sit next to it. Override the location with `--db` or `CONTEXTFLOW_DB`, and the config file with `--config` or `CONTEXTFLOW_CONFIG`.
+
+## The desktop app
+
+The app (see [app/README.md](app/README.md)) does everything the command line does, and more:
+
+* **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
+* **Capture review:** a checklist of everything a capture would save (programs, windows, browser tabs, VS Code folders, Git repositories), so you choose what goes in. From the tray, **Capture current…** is two clicks to a saved snapshot.
+* **History and compare:** tick two versions to compare them, or compare one with your screen right now. Advice about what restoring would do comes first.
+* **Workspace management:** rename, archive, delete (with its desktop icon), pin a version, delete a version, approve imported workspaces, export and import.
+* **Settings:** what is captured and excluded, browser tabs and the extension setup, timeouts, how long history is kept, notifications, close-to-tray and start with Windows. Saved into `config.toml`.
+* **Your data:** back up, check integrity, export and import, from the Settings screen.
+
+## Workspace Cleanup
+
+Each workspace can close the programs that distract from it, and free their memory and CPU:
+
+* **When I enter this workspace** (when you restore it): for example Discord, Steam, the Epic launcher.
+* **When I leave this workspace** (when you restore a different one, or choose *Leave workspace*): for example Docker Desktop.
+
+Each program is either **Close nicely** (ask it to close like its close button; if it stays open, for example because it hides to the tray, it is left running and reported) or **Force close** (ask first, wait a few seconds, then end it if it is still running). Before anything closes, the app shows what is running now, how many processes, how much memory and CPU closing it would free, and asks you to confirm when you close programs by hand. Programs the workspace itself restores are never closed by its own cleanup.
+
+```bash
+contextflow cleanup apps                              # what is running, with memory and CPU
+contextflow cleanup add Focus discord                 # close Discord when entering Focus
+contextflow cleanup add Focus steam --force           # ...and end Steam if it doesn't close
+contextflow cleanup add Focus docker --on-exit        # close Docker when leaving Focus
+contextflow cleanup show Focus                        # rules and what they'd free right now
+contextflow restore Focus --dry-run                   # includes the cleanup preview
+contextflow restore Focus --no-cleanup                # restore without closing anything
+contextflow leave                                     # leave the active workspace
+```
+
+Cleanup also runs when a desktop icon restores the workspace. Matching is by program name, so every running copy of that program (all of Chrome's processes, say) is affected.
 
 ## Workspace layout
 
@@ -83,6 +118,7 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |
 | `cf-engine` | The restore pipeline: launch, wait for windows, place them, report per app |
+| `cf-cleanup` | Workspace cleanup: running programs with memory and CPU, the preview, protected programs, close and force close |
 | `cf-cli` | `contextflow` (CLI) and `contextflow-launch` (windowless, started by desktop icons) |
 | `app/src-tauri` | Tauri desktop app (`contextflow-app`): thin commands over the crates above, React UI in `app/src` |
 
@@ -98,4 +134,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Safety principles
 
-ContextFlow never force-closes applications, never mutates Git repositories, never overwrites newer files and never stores credentials or cookies. Every restore step reports an explicit status.
+ContextFlow never mutates Git repositories, never overwrites newer files and never stores credentials or cookies. Every restore step reports an explicit status.
+
+It closes a program only if you listed it in a workspace's cleanup rules (see below). Closing always asks the program first; ending one that ignores the request ("force close") is a separate choice you make per program, and the preview and confirmation say that unsaved work in it is lost. Critical Windows programs, and any program running ContextFlow itself, are never closed.

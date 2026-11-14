@@ -18,6 +18,8 @@ mod control;
 mod imp;
 #[cfg(windows)]
 mod lock;
+#[cfg(windows)]
+mod processes;
 
 #[cfg(windows)]
 pub use lock::InstanceLock;
@@ -75,6 +77,74 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>> {
     }
     #[cfg(not(windows))]
     {
+        Err(PlatformError::Unsupported)
+    }
+}
+
+/// A running process, as listed by [`list_processes`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub parent_pid: u32,
+    /// Executable file name, e.g. `Discord.exe`.
+    pub name: String,
+    /// Full path; `None` when the process can't be inspected (elevated, protected).
+    pub path: Option<String>,
+    pub session_id: Option<u32>,
+    /// Working set (memory currently in RAM), in bytes.
+    pub ram_bytes: u64,
+    /// Total CPU time used so far (kernel + user), in 100 ns units. Two
+    /// readings a little apart give the CPU use in between.
+    pub cpu_time_100ns: u64,
+}
+
+/// All running processes.
+pub fn list_processes() -> Result<Vec<ProcessInfo>> {
+    #[cfg(windows)]
+    {
+        processes::list_processes().map_err(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        Err(PlatformError::Unsupported)
+    }
+}
+
+/// The login session this program runs in.
+pub fn current_session() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        processes::current_session()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Ask a process to close, like its window's close button. Returns how many
+/// windows were asked (0: it has no window to ask).
+pub fn request_close(pid: u32) -> usize {
+    #[cfg(windows)]
+    {
+        processes::request_close(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        0
+    }
+}
+
+/// End a process immediately; its unsaved work is lost.
+pub fn terminate_process(pid: u32) -> Result<()> {
+    #[cfg(windows)]
+    {
+        processes::terminate_process(pid).map_err(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
         Err(PlatformError::Unsupported)
     }
 }

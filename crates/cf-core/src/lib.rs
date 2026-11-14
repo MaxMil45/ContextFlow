@@ -4,6 +4,7 @@
 //! workspace (storage, adapters, platform integration, UI) depends on it, and it
 //! depends on nothing ContextFlow-specific.
 
+pub mod cleanup;
 pub mod error;
 pub mod geometry;
 pub mod hash;
@@ -11,5 +12,6 @@ pub mod model;
 pub mod redact;
 pub mod validate;
 
+pub use cleanup::{CleanupConfig, CleanupTarget, CloseMode};
 pub use error::{CoreError, Result};
 pub use model::*;

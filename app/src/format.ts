@@ -51,3 +51,15 @@ export type Tone = "ok" | "warn" | "bad" | "muted";
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
+
+/** "412 MB", "1.3 GB". */
+export function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
+}
+
+/** CPU share in percent: "0.4%", "12%". */
+export function formatCpu(percent: number): string {
+  return percent < 10 ? `${percent.toFixed(1)}%` : `${Math.round(percent)}%`;
+}

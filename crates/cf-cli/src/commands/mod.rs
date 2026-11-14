@@ -2,6 +2,7 @@
 
 pub(crate) mod browser;
 pub(crate) mod capture_cmd;
+pub(crate) mod cleanup;
 pub(crate) mod config;
 pub(crate) mod history;
 pub(crate) mod maintenance;

@@ -21,6 +21,7 @@ const BUILTIN_EXCLUDED_PROCESSES: &[&str] = &[
     "applicationframehost",
     "systemsettings",
     "contextflow",
+    "contextflow-app",
 ];
 
 pub struct CaptureOptions<'a> {
@@ -308,7 +309,7 @@ fn attach_browser_tabs(
         let live = cf_browser::read_live_states(dir, &id);
         if live.is_empty() {
             warnings.push(format!(
-                "{name}: tabs were not saved because the ContextFlow extension isn't connected (see `contextflow browser status`)"
+                "{name}: tabs were not saved because the ContextFlow extension isn't connected (check Settings in the app, or run `contextflow browser status`)"
             ));
             continue;
         }

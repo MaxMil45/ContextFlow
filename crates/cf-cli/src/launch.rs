@@ -12,9 +12,8 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 
 use cf_cli::logging;
-use cf_cli::session::{self, RestoreArgs, RestoreBusy};
+use cf_cli::session::{self, RestoreArgs, RestoreBusy, RestoreOutcome};
 use cf_config::Config;
-use cf_engine::RestoreRun;
 use cf_storage::Database;
 
 const TITLE: &str = "ContextFlow";
@@ -48,16 +47,26 @@ fn parse_args() -> Result<Args> {
     }
 }
 
-fn report(run: &RestoreRun, workspace: &str) -> Option<String> {
-    let problems: Vec<String> = run
+fn report(outcome: &RestoreOutcome) -> Option<String> {
+    let mut problems: Vec<String> = outcome
+        .run
         .problems()
         .map(|s| format!("• {}: {}", s.application_id, s.message))
         .collect();
+    // Programs the workspace asked to close but that stayed open or couldn't be ended.
+    for cleanup in &outcome.cleanups {
+        problems.extend(
+            cleanup
+                .problems()
+                .map(|r| format!("• {} (cleanup): {}", r.process, r.message)),
+        );
+    }
     if problems.is_empty() {
         return None;
     }
     Some(format!(
-        "'{workspace}' was restored, but some things need your attention:\n\n{}",
+        "'{}' was restored, but some things need your attention:\n\n{}",
+        outcome.context.name,
         problems.join("\n")
     ))
 }
@@ -82,12 +91,12 @@ fn run() -> Result<Option<String>> {
         max_tabs_per_window: cfg.browser.max_tabs_per_window,
         overall_timeout: cfg.timeouts.restore_overall(),
         cancel: None,
+        skip_cleanup: false,
     };
-    let (ctx, _snap, run) =
-        session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {
-            tracing::info!("{m}")
-        })?;
-    Ok(report(&run, &ctx.name))
+    let outcome = session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {
+        tracing::info!("{m}")
+    })?;
+    Ok(report(&outcome))
 }
 
 fn main() {

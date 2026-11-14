@@ -33,6 +33,26 @@ pub struct Config {
     pub timeouts: TimeoutConfig,
     pub logging: LoggingConfig,
     pub browser: BrowserConfig,
+    pub app: AppConfig,
+}
+
+/// Desktop app behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AppConfig {
+    /// Show a Windows notification when a restore finishes.
+    pub notifications: bool,
+    /// Closing the window keeps ContextFlow running in the tray.
+    pub close_to_tray: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            notifications: true,
+            close_to_tray: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +318,12 @@ capture_tabs = true
 excluded_url_patterns = []
 # Most tabs reopened per browser window.
 max_tabs_per_window = 50
+
+[app]
+# Show a Windows notification when a restore finishes.
+notifications = true
+# Closing the window keeps ContextFlow running in the tray.
+close_to_tray = false
 
 [logging]
 level = "info"

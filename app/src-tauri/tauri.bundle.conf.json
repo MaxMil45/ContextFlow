@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "mainBinaryName": "contextflow-app",
+  "bundle": {
+    "targets": ["nsis"],
+    "externalBin": [
+      "binaries/contextflow",
+      "binaries/contextflow-launch",
+      "binaries/contextflow-browser-host"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
+  }
+}

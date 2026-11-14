@@ -2,13 +2,14 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Result};
 use chrono::Utc;
 
+use cf_cli::maintenance;
 use cf_cli::session::Paths;
 use cf_config::Config;
 use cf_core::Context;
-use cf_storage::{Database, ExportFile};
+use cf_storage::Database;
 
 use super::util::{fmt_versions, policy_from, require_yes};
 
@@ -91,28 +92,11 @@ pub(crate) fn export(
             .map(|n| db.find_context(n))
             .collect::<Result<_, _>>()?
     };
-    if out.exists() && !force {
-        bail!("{} already exists; use --force to overwrite", out.display());
-    }
-    let workspaces = contexts
-        .iter()
-        .map(|c| db.export_context(c.id))
-        .collect::<Result<Vec<_>, _>>()?;
-    let snapshots: usize = workspaces.iter().map(|w| w.snapshots.len()).sum();
-    let file = ExportFile::new(workspaces, env!("CARGO_PKG_VERSION"));
-
-    // Write to a temporary file first so a failure never leaves a half-written export.
-    let tmp = out.with_extension("partial");
-    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&file)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, out).with_context(|| format!("writing {}", out.display()))?;
-    tracing::info!(workspaces = contexts.len(), snapshots, "export written");
+    let summary = maintenance::export_workspaces(db, &contexts, out, force)?;
     println!(
-        "Exported {} workspace(s), {snapshots} snapshot(s) to {}",
-        contexts.len(),
+        "Exported {} workspace(s), {} snapshot(s) to {}",
+        summary.workspaces,
+        summary.snapshots,
         out.display()
     );
     println!("Note: the file contains window titles and repository paths. Store it accordingly.");
@@ -120,24 +104,10 @@ pub(crate) fn export(
 }
 
 pub(crate) fn import(db: &mut Database, file: &Path, rename: Option<&str>) -> Result<()> {
-    let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-    let export: ExportFile = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not a valid ContextFlow export", file.display()))?;
-    export.check_header()?;
-    if rename.is_some() && export.workspaces.len() != 1 {
-        bail!(
-            "--as only works for files with one workspace (this one has {})",
-            export.workspaces.len()
-        );
-    }
-    for ws in &export.workspaces {
-        let ctx = db
-            .import_workspace(ws, rename)
-            .with_context(|| format!("importing '{}'", ws.name))?;
+    for ws in maintenance::import_file(db, file, rename)? {
         println!(
             "Imported '{}' with {} snapshot(s), all hashes verified",
-            ctx.name,
-            ws.snapshots.len()
+            ws.name, ws.snapshots
         );
     }
     Ok(())
@@ -150,16 +120,7 @@ pub(crate) fn backup(db: &Database, paths: &Paths, out: Option<PathBuf>) -> Resu
             chrono::Local::now().format("%Y%m%d-%H%M%S")
         ))
     });
-    db.backup_to(&dest)?;
-    // Prove the backup is usable before reporting success.
-    let copy = Database::open(&dest).context("the backup could not be reopened")?;
-    let problems = copy.integrity_check()?;
-    if !problems.is_empty() {
-        bail!(
-            "the backup failed its integrity check: {}",
-            problems.join("; ")
-        );
-    }
+    maintenance::backup_verified(db, &dest)?;
     println!("Backup written and verified: {}", dest.display());
     println!(
         "To use it, point ContextFlow at it with --db, or copy it over {}",

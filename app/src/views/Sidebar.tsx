@@ -10,9 +10,23 @@ type Props = {
   selected: string | undefined;
   onSelect: (name: string) => void;
   onCreated: (ws: WorkspaceSummary) => void;
+  showArchived: boolean;
+  onShowArchived: (show: boolean) => void;
+  settingsOpen: boolean;
+  onSettings: () => void;
 };
 
-export function Sidebar({ workspaces, loading, selected, onSelect, onCreated }: Props) {
+export function Sidebar({
+  workspaces,
+  loading,
+  selected,
+  onSelect,
+  onCreated,
+  showArchived,
+  onShowArchived,
+  settingsOpen,
+  onSettings,
+}: Props) {
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -25,10 +39,14 @@ export function Sidebar({ workspaces, loading, selected, onSelect, onCreated }: 
         {workspaces?.map((ws) => (
           <button
             key={ws.id}
-            className={`ws-item${ws.name === selected ? " active" : ""}`}
+            className={`ws-item${ws.name === selected ? " active" : ""}${ws.isArchived ? " archived" : ""}`}
             onClick={() => onSelect(ws.name)}
           >
-            <span className="ws-name">{ws.name}</span>
+            <span className="ws-name">
+              {ws.name}
+              {ws.isActive && <Badge tone="ok">active</Badge>}
+              {ws.isArchived && <Badge tone="muted">archived</Badge>}
+            </span>
             <span className="ws-meta">
               {ws.latest ? (
                 <>
@@ -42,6 +60,15 @@ export function Sidebar({ workspaces, loading, selected, onSelect, onCreated }: 
           </button>
         ))}
       </nav>
+      <div className="sidebar-footer">
+        <label className="check">
+          <input type="checkbox" checked={showArchived} onChange={(e) => onShowArchived(e.target.checked)} />
+          Show archived
+        </label>
+        <button className={`settings-link${settingsOpen ? " active" : ""}`} onClick={onSettings}>
+          Settings
+        </button>
+      </div>
     </aside>
   );
 }

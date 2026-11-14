@@ -157,30 +157,33 @@ New crate **`cf-engine`**: the restoration pipeline and a DB actor.
 
 **Exit gate:** spec Phase 4 acceptance: compare two versions, new/removed files, branch changes, missing apps, deterministic report.
 
-### Phase 5: Desktop application (≈ 6–8 weeks)
+### Phase 5: Desktop application ✅ (done, apart from certificate signing)
 
-`app/` is Tauri 2 with React, TypeScript and Vite. The Rust side depends on `cf-engine`. Tauri commands are thin wrappers around it.
+`app/` is Tauri 2 with React, TypeScript and Vite. The Rust side depends on the `cf-*` crates; Tauri commands are thin wrappers. TypeScript types are generated from the Rust data types with `ts-rs` (not `specta`, whose Tauri 2 support is still a release candidate), and CI fails if they are stale.
 
-| WP | Task | Done when |
-|----|------|-----------|
-| 5.1 | **Tauri shell.** Single-instance plugin, tray icon (Capture current / Restore recent / Open), per-monitor-v2 DPI manifest, autostart opt-in. | App starts hidden to tray when autostart is on. |
-| 5.2 | **Typed IPC.** Generate TS types from Rust (`specta` / `tauri-specta`). Long operations stream progress events (`restore://progress`), and every operation can be cancelled from the UI. | UI never freezes during a 30 s restore (verified with an artificial delay). |
-| 5.3 | **Dashboard.** Recent workspaces, last snapshot, status, quick restore. | Matches spec §7.1. |
-| 5.4 | **Capture review.** Discovered apps, windows, repos and tabs as a checklist, so the user chooses what enters the snapshot (spec §4.1 "baseline discovery"). Add a note, then save. | ≤ 3 interactions from tray to saved snapshot. |
-| 5.5 | **Workspace detail and history.** A version timeline, notes per version, and select-two-to-compare. | Uses `cf-diff` output directly. |
-| 5.6 | **Restore view.** Preflight report, then a per-component live status list, then the final report with retry for failed components. | Spec §7.1 restoration interface. |
-| 5.7 | **Diff view.** Grouped by category, with recommendations at the top. | Spec §7.1 diff interface. |
-| 5.8 | **Settings.** Exclusions, retention, timeouts, adapters on/off, extension install helpers. | Settings round-trip into `config.toml`. |
-| 5.9 | **Notifications.** Restore finished, partial, or failed. | Uses the Windows toast via the Tauri plugin. |
-| 5.10 | **Packaging.** MSI/NSIS installer via Tauri bundler. Per-user install (no admin). Code signing. Registers the browser native-messaging host under HKCU. | Clean install and uninstall on a fresh Windows 11 VM, with no admin prompt. |
+| WP | Task | Status |
+|----|------|--------|
+| 5.1 | **Tauri shell.** Single-instance plugin, tray icon (Open / Capture current / Restore recent), autostart opt-in. | ✅ Tray menu with a live "Restore recent" list. Start with Windows (opt-in in Settings) starts hidden in the tray. Closing to the tray is a setting. The process is made per-monitor-DPI aware at start-up. |
+| 5.2 | **Typed IPC.** Generated TS types, progress events, cancel. | ✅ `ts-rs` types; `restore://progress` events; Cancel stops a restore before the next app starts. Long work runs on the blocking pool, never the UI thread. |
+| 5.3 | **Dashboard.** Recent workspaces, last snapshot, status, quick restore. | ✅ Sidebar of workspaces with last version, age and an "active" badge; workspace page with Restore. |
+| 5.4 | **Capture review.** Checklist of apps, windows, repos, tabs, a note, then save. | ✅ Tray "Capture current…" opens the review for the active workspace: two interactions to a saved snapshot. |
+| 5.5 | **Workspace detail and history.** Timeline, notes, select-two-to-compare. | ✅ Tick two versions to compare, or "Compare with now". Pin, delete, export. |
+| 5.6 | **Restore view.** Preflight, live status, final report with retry. | ✅ Preview restore is the preflight and has a Start restore button; live log while running; Retry restores only what failed. |
+| 5.7 | **Diff view.** Grouped by category, recommendations on top. | ✅ Applications, windows, monitors, repositories and notes; advice from `cf-diff` first. |
+| 5.8 | **Settings.** Exclusions, retention, timeouts, adapters, extension helpers. | ✅ Round-trips into `config.toml` (tested). Also: backup, integrity check, export/import and retention review, so nothing needs the CLI. |
+| 5.9 | **Notifications.** Restore finished, partial or failed. | ✅ Windows notification (a setting). |
+| 5.10 | **Packaging.** Per-user installer, signing, native-messaging host under HKCU. | ✅ NSIS installer, no admin, registers the browser host. `scripts/build-installer.ps1` signs when `CONTEXTFLOW_SIGN_THUMBPRINT` is set; CI builds and uploads the installer. ⏳ A certificate is needed to sign it. ⏳ A clean-VM install/uninstall run is still to do. |
 
-**Exit gate:** spec Phase 5 acceptance: everything is possible without the CLI, failures are clear, the UI stays responsive, and no admin is needed.
+**Also delivered in Phase 5:** workspace management (rename, archive, delete with its desktop icon, pin, approve imports), custom desktop icons, and Workspace Cleanup (README).
+
+**Exit gate:** everything is possible without the CLI, failures are clear, the UI stays responsive, and no admin is needed. Met, except that signing needs a certificate and the clean-VM run has not been done.
 
 ### Phase 6: Optimisation and advanced capabilities (ongoing)
 
 Start only after the v1.0 definition of success (§8) is met. Candidates, in suggested order:
 
 1. Lifecycle modes from spec §5: **Hide** (minimise all workspace windows), **Preserve** (capture and keep running), **Close safely** (`WM_CLOSE` only, then wait. If the adapter reports unsaved work or the window stays open, report it and never kill).
+   *Partly delivered early as Workspace Cleanup (README): per-workspace close-on-enter and close-on-leave lists, preview with memory and CPU, graceful close and an opt-in force close per program. Still open from this item: Hide and Preserve, and closing a workspace's own windows when leaving it.*
 2. Automated background capture (on workspace switch, on idle, before shutdown via `WM_QUERYENDSESSION`).
 3. Workspace import/export sharing format.
 4. Adapter SDK: an out-of-process adapter protocol so third parties can ship adapters without recompiling.

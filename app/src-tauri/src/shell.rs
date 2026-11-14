@@ -1,0 +1,169 @@
+//! The desktop shell: the tray (Open, Capture current, Restore recent),
+//! restore notifications, and window behaviour.
+
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri_plugin_notification::NotificationExt as _;
+
+use cf_storage::Database;
+
+use crate::dto::{RestoreReport, RestoreStatus};
+use crate::state::AppState;
+
+const TRAY_ID: &str = "main";
+const MAX_RECENT: usize = 5;
+const RESTORE_PREFIX: &str = "restore:";
+
+/// Events the tray sends to the window.
+pub const EVENT_CAPTURE: &str = "tray://capture";
+pub const EVENT_RESTORE: &str = "tray://restore";
+
+/// The workspaces the tray offers to restore: the most recently used ones that
+/// have a snapshot and can be restored.
+fn recent_workspaces(app: &AppHandle) -> Vec<String> {
+    let state = app.state::<AppState>();
+    let Ok(db) = Database::open(&state.paths.db) else {
+        return Vec::new();
+    };
+    let Ok(all) = db.list_contexts(false) else {
+        return Vec::new();
+    };
+    all.into_iter()
+        .filter(|c| {
+            db.is_trusted(c.id).unwrap_or(false)
+                && db.list_snapshots(c.id).is_ok_and(|s| !s.is_empty())
+        })
+        .take(MAX_RECENT)
+        .map(|c| c.name)
+        .collect()
+}
+
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let open = MenuItem::with_id(app, "open", "Open ContextFlow", true, None::<&str>)?;
+    let capture = MenuItem::with_id(app, "capture", "Capture current…", true, None::<&str>)?;
+
+    let recent = recent_workspaces(app);
+    let items = recent
+        .iter()
+        .map(|name| {
+            MenuItem::with_id(
+                app,
+                format!("{RESTORE_PREFIX}{name}"),
+                name,
+                true,
+                None::<&str>,
+            )
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let none = MenuItem::with_id(app, "none", "No workspaces yet", false, None::<&str>)?;
+    let refs: Vec<&dyn IsMenuItem<Wry>> = if items.is_empty() {
+        vec![&none]
+    } else {
+        items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect()
+    };
+    let restore = Submenu::with_items(app, "Restore recent", true, &refs)?;
+
+    let sep = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    Menu::with_items(
+        app,
+        &[
+            &open as &dyn IsMenuItem<Wry>,
+            &capture,
+            &restore,
+            &sep,
+            &quit,
+        ],
+    )
+}
+
+pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let mut tray = TrayIconBuilder::with_id(TRAY_ID)
+        .tooltip("ContextFlow")
+        .menu(&build_menu(app)?)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            match id {
+                "open" => crate::show_main_window(app),
+                "capture" => {
+                    crate::show_main_window(app);
+                    let _ = app.emit(EVENT_CAPTURE, ());
+                }
+                "quit" => app.exit(0),
+                _ => {
+                    if let Some(name) = id.strip_prefix(RESTORE_PREFIX) {
+                        crate::show_main_window(app);
+                        let _ = app.emit(EVENT_RESTORE, name.to_string());
+                    }
+                }
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                crate::show_main_window(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+/// Rebuild the "Restore recent" list (after workspaces change).
+pub fn refresh_tray(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Ok(menu) = build_menu(app) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn refresh_tray_menu(app: AppHandle) {
+    refresh_tray(&app);
+}
+
+/// A Windows notification when a restore finishes (if the setting is on).
+pub fn notify_restore(app: &AppHandle, report: &RestoreReport) {
+    if report.dry_run || !app.state::<AppState>().config().app.notifications {
+        return;
+    }
+    let problems: Vec<&str> = report
+        .steps
+        .iter()
+        .filter(|s| !matches!(s.status, RestoreStatus::Success | RestoreStatus::Skipped))
+        .map(|s| s.application_id.as_str())
+        .collect();
+    let (title, body) = if report.cancelled {
+        (
+            format!("{} restore cancelled", report.workspace),
+            "Programs that hadn't started yet were skipped.".to_string(),
+        )
+    } else {
+        match report.overall {
+            RestoreStatus::Success => (
+                format!("{} restored", report.workspace),
+                format!("Version {} is back on your screen.", report.version),
+            ),
+            RestoreStatus::Failed => (
+                format!("{} could not be restored", report.workspace),
+                "Open ContextFlow to see why.".to_string(),
+            ),
+            _ => (
+                format!("{} partly restored", report.workspace),
+                format!("Needs your attention: {}.", problems.join(", ")),
+            ),
+        }
+    };
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        tracing::warn!("could not show a notification: {e}");
+    }
+}

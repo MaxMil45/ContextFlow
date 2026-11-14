@@ -6,8 +6,8 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use uuid::Uuid;
 
 use cf_core::{
-    hash, validate, CaptureStatus, Context, ContextId, Snapshot, SnapshotId, SnapshotPayload,
-    SnapshotSummary,
+    hash, validate, CaptureStatus, CleanupConfig, Context, ContextId, CoreError, Snapshot,
+    SnapshotId, SnapshotPayload, SnapshotSummary,
 };
 
 use crate::{migrations, Result, StorageError};
@@ -265,6 +265,25 @@ impl Database {
         found.ok_or_else(|| StorageError::NotFound(format!("no workspace named '{key}'")))
     }
 
+    /// Rename a workspace. Names are unique ignoring case; changing only the
+    /// capitalisation of a workspace's own name is allowed. Snapshots, the
+    /// pinned version and the approval stay as they are (they follow the id).
+    pub fn rename_context(&self, id: ContextId, new_name: &str) -> Result<Context> {
+        let name = validate::context_name(new_name)?;
+        let res = self.conn.execute(
+            "UPDATE contexts SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, ts(&now()), id.to_string()],
+        );
+        match res {
+            Ok(0) => Err(StorageError::NotFound(format!("no workspace with id {id}"))),
+            Ok(_) => self.find_context(&id.to_string()),
+            Err(e) if is_unique_violation(&e) => Err(StorageError::Conflict(format!(
+                "a workspace named '{name}' already exists"
+            ))),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn set_archived(&self, id: ContextId, archived: bool) -> Result<()> {
         let n = self.conn.execute(
             "UPDATE contexts SET is_archived = ?1, updated_at = ?2 WHERE id = ?3",
@@ -300,6 +319,77 @@ impl Database {
         if n == 0 {
             return Err(StorageError::NotFound(format!("no workspace with id {id}")));
         }
+        Ok(())
+    }
+
+    /// The workspace's cleanup rules (empty when none were set).
+    pub fn cleanup_config(&self, id: ContextId) -> Result<CleanupConfig> {
+        let row: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT cleanup_json FROM contexts WHERE id = ?1",
+                [id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match row {
+            None => Err(StorageError::NotFound(format!("no workspace with id {id}"))),
+            Some(None) => Ok(CleanupConfig::default()),
+            Some(Some(json)) => serde_json::from_str(&json)
+                .map_err(|e| StorageError::Integrity(format!("cleanup rules of {id}: {e}"))),
+        }
+    }
+
+    /// Save the workspace's cleanup rules (validated and normalised) and
+    /// return what was saved.
+    pub fn set_cleanup_config(
+        &self,
+        id: ContextId,
+        config: CleanupConfig,
+    ) -> Result<CleanupConfig> {
+        let config = config.normalized()?;
+        let json = if config.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&config).map_err(CoreError::from)?)
+        };
+        let n = self.conn.execute(
+            "UPDATE contexts SET cleanup_json = ?1 WHERE id = ?2",
+            params![json, id.to_string()],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        Ok(config)
+    }
+
+    /// The workspace the user is currently in (the one last restored), if it
+    /// still exists.
+    pub fn active_context(&self) -> Result<Option<ContextId>> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT c.id FROM app_state s JOIN contexts c ON c.id = s.value
+                 WHERE s.key = 'active_context'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(id.and_then(|s| s.parse::<ContextId>().ok()))
+    }
+
+    /// Record which workspace is active, or none.
+    pub fn set_active_context(&self, id: Option<ContextId>) -> Result<()> {
+        match id {
+            Some(id) => self.conn.execute(
+                "INSERT INTO app_state (key, value) VALUES ('active_context', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [id.to_string()],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM app_state WHERE key = 'active_context'", [])?,
+        };
         Ok(())
     }
 

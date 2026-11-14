@@ -9,4 +9,8 @@ updatedAt: string, isArchived: boolean,
 /**
  * Imported workspaces must be approved (CLI: `workspace trust`) before restore.
  */
-isTrusted: boolean, pinnedVersion: number | null, latest: SnapshotEntry | null, };
+isTrusted: boolean, pinnedVersion: number | null, latest: SnapshotEntry | null, 
+/**
+ * The workspace last restored: the one you are "in".
+ */
+isActive: boolean, };

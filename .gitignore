@@ -10,3 +10,5 @@
 !.vscode/extensions.json
 *.tsbuildinfo
 app/src-tauri/gen/
+app/src-tauri/binaries/*
+!app/src-tauri/binaries/README.md

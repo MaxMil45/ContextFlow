@@ -4,4 +4,8 @@ export type RestoreRequest = { workspace: string,
 /**
  * Default: the pinned version, else the latest.
  */
-version?: number, dryRun?: boolean, };
+version?: number, dryRun?: boolean, 
+/**
+ * Restore only these programs (retry what failed). Cleanup is skipped.
+ */
+only?: Array<string>, };

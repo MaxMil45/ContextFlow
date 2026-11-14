@@ -82,7 +82,17 @@ pub(crate) enum Command {
         /// Seconds to wait for each application's window.
         #[arg(long, default_value_t = 30)]
         timeout: u64,
+        /// Don't close any programs, whatever the workspaces' cleanup rules say.
+        #[arg(long)]
+        no_cleanup: bool,
     },
+
+    /// Programs a workspace closes when you enter or leave it.
+    #[command(subcommand)]
+    Cleanup(CleanupCmd),
+
+    /// Leave the active workspace: run its "when leaving" cleanup.
+    Leave,
 
     /// Make restore (and the desktop icon) always use one snapshot version
     /// (default: the latest).
@@ -224,6 +234,33 @@ pub(crate) enum Command {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum CleanupCmd {
+    /// Show a workspace's cleanup rules and what they would close right now.
+    Show { workspace: String },
+    /// Add a program to a workspace's cleanup list.
+    Add {
+        workspace: String,
+        /// Program name, like `discord` (see `contextflow cleanup apps`).
+        process: String,
+        /// Close it when the workspace is left, instead of when it is entered.
+        #[arg(long)]
+        on_exit: bool,
+        /// End it if it doesn't close when asked (unsaved work in it is lost).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove a program from a workspace's cleanup list.
+    Remove {
+        workspace: String,
+        process: String,
+        #[arg(long)]
+        on_exit: bool,
+    },
+    /// List the programs running now, with their memory and CPU use.
+    Apps,
+}
+
+#[derive(Subcommand)]
 pub(crate) enum WorkspaceCmd {
     Create {
         name: String,
@@ -234,6 +271,11 @@ pub(crate) enum WorkspaceCmd {
         /// Include archived workspaces.
         #[arg(long)]
         all: bool,
+    },
+    /// Change a workspace's name (snapshots, pin and icon are kept).
+    Rename {
+        name: String,
+        new_name: String,
     },
     Archive {
         name: String,
@@ -246,6 +288,10 @@ pub(crate) enum WorkspaceCmd {
         name: String,
         #[arg(long)]
         yes: bool,
+        /// Leave the workspace's desktop icon(s) in place. By default they are
+        /// moved to the Recycle Bin, since they stop working without the workspace.
+        #[arg(long)]
+        keep_shortcuts: bool,
     },
     /// Review and approve an imported workspace so it can be restored.
     Trust {
@@ -325,7 +371,7 @@ fn run(
     db_flag: &Option<PathBuf>,
 ) -> Result<()> {
     match command {
-        Command::Workspace(cmd) => commands::workspace::workspace(db, cmd),
+        Command::Workspace(cmd) => commands::workspace::workspace(db, paths, cmd),
         Command::Capture {
             workspace,
             only,
@@ -337,6 +383,8 @@ fn run(
         } => commands::capture_cmd::capture_cmd(
             db, cfg, &workspace, only, repos, note, no_windows, unminimize, dry_run,
         ),
+        Command::Cleanup(cmd) => commands::cleanup::cleanup_cmd(db, cmd),
+        Command::Leave => commands::cleanup::leave(db),
         Command::Pin { workspace, version } => commands::history::pin(db, &workspace, version),
         Command::Unpin { workspace } => commands::history::unpin(db, &workspace),
         Command::Restore {
@@ -345,6 +393,7 @@ fn run(
             only,
             dry_run,
             timeout,
+            no_cleanup,
         } => commands::restore::restore_cmd(
             db,
             &workspace,
@@ -352,6 +401,7 @@ fn run(
             only,
             dry_run,
             timeout,
+            no_cleanup,
             cfg.browser.max_tabs_per_window,
             cfg.timeouts.restore_overall(),
         ),

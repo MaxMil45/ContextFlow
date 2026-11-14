@@ -1,0 +1,13 @@
+[package]
+name = "cf-cleanup"
+description = "ContextFlow workspace cleanup: preview and close the programs a workspace asks to close"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cf-core.workspace = true
+cf-windows.workspace = true
+serde.workspace = true
+tracing.workspace = true

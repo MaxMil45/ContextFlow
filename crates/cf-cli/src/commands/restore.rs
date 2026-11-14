@@ -19,6 +19,7 @@ pub(crate) fn restore_cmd(
     only: Vec<String>,
     dry_run: bool,
     timeout: u64,
+    no_cleanup: bool,
     max_tabs_per_window: usize,
     overall_timeout: Duration,
 ) -> Result<()> {
@@ -31,9 +32,10 @@ pub(crate) fn restore_cmd(
         max_tabs_per_window,
         overall_timeout,
         cancel: None,
+        skip_cleanup: no_cleanup,
     };
-    let (ctx, snap, run) =
-        session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
+    let outcome = session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
+    let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
 
     println!(
         "{}'{}' v{}",
@@ -41,6 +43,12 @@ pub(crate) fn restore_cmd(
         ctx.name,
         snap.version
     );
+    if dry_run && !no_cleanup {
+        super::cleanup::print_restore_previews(db, &ctx);
+    }
+    for report in &outcome.cleanups {
+        super::cleanup::print_report(report);
+    }
     if let Some(note) = snap.payload.notes.last() {
         println!("Your note: {note}");
     }
@@ -99,6 +107,18 @@ pub(crate) fn shortcut_cmd(
     }
     let icon = icons::custom_icon(&icon_dir, &id);
 
+    // Changing only the icon: update the workspace's existing icon(s), wherever
+    // they are and whatever they are called now, instead of making another one.
+    if icon_changed && !opts.force && opts.name.is_none() {
+        let existing = shortcut::update_icon(&id, opts.folder.as_deref(), icon.as_deref())?;
+        if !existing.is_empty() {
+            for path in existing {
+                println!("Changed the icon of {}", path.display());
+            }
+            return Ok(());
+        }
+    }
+
     // Remember a non-default database/config so the icon opens the same data.
     let db_arg = db_flag.as_deref().map(|_| paths.db.as_path());
     let config_arg = std::env::var_os("CONTEXTFLOW_CONFIG")
@@ -120,12 +140,15 @@ pub(crate) fn shortcut_cmd(
             println!("Double-click it to reopen '{}'.", ctx.name);
             Ok(())
         }
-        // Only the icon was asked for: change it on the shortcut that's there.
+        // Only the icon was asked for: change it on the shortcut(s) that are there.
         Err(e) if icon_changed && e.downcast_ref::<shortcut::ShortcutExists>().is_some() => {
-            let path =
-                shortcut::update_icon(display_name, opts.folder.as_deref(), icon.as_deref())?
-                    .context("the shortcut disappeared while its icon was being changed")?;
-            println!("Changed the icon of {}", path.display());
+            let changed = shortcut::update_icon(&id, opts.folder.as_deref(), icon.as_deref())?;
+            if changed.is_empty() {
+                bail!("no shortcut for '{}' was found to change", ctx.name);
+            }
+            for path in changed {
+                println!("Changed the icon of {}", path.display());
+            }
             Ok(())
         }
         Err(e) => Err(e),

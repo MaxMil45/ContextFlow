@@ -26,7 +26,7 @@ pub const RESTORE_PROGRESS: &str = "restore://progress";
 const APP_WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run blocking work off the async runtime and flatten the join error.
-async fn blocking<T, F>(f: F) -> CmdResult<T>
+pub(crate) async fn blocking<T, F>(f: F) -> CmdResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> CmdResult<T> + Send + 'static,
@@ -36,11 +36,11 @@ where
         .map_err(|e| CommandError::new(ErrorCode::Internal, format!("worker failed: {e}")))?
 }
 
-fn open(path: &Path) -> CmdResult<Database> {
+pub(crate) fn open(path: &Path) -> CmdResult<Database> {
     Database::open(path).map_err(Into::into)
 }
 
-fn latest(db: &Database, ctx: &Context) -> CmdResult<Option<Snapshot>> {
+pub(crate) fn latest(db: &Database, ctx: &Context) -> CmdResult<Option<Snapshot>> {
     match db.get_snapshot(ctx.id, None) {
         Ok(s) => Ok(Some(s)),
         Err(StorageError::NotFound(_)) => Ok(None),
@@ -104,7 +104,8 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
 }
 
 fn summarize(db: &Database, ctx: &Context) -> CmdResult<WorkspaceSummary> {
-    let latest = db.list_snapshots(ctx.id)?.last().map(entry_from_summary);
+    // `list_snapshots` is newest first.
+    let latest = db.list_snapshots(ctx.id)?.first().map(entry_from_summary);
     Ok(WorkspaceSummary {
         id: ctx.id.to_string(),
         name: ctx.name.clone(),
@@ -114,6 +115,7 @@ fn summarize(db: &Database, ctx: &Context) -> CmdResult<WorkspaceSummary> {
         is_trusted: db.is_trusted(ctx.id)?,
         pinned_version: db.pinned_version(ctx.id)?,
         latest,
+        is_active: db.active_context()? == Some(ctx.id),
     })
 }
 
@@ -176,13 +178,12 @@ pub async fn list_snapshots(
     blocking(move || {
         let db = open(&path)?;
         let ctx = db.find_context(&workspace)?;
-        let mut out: Vec<_> = db
+        // Newest first, as storage returns them.
+        Ok(db
             .list_snapshots(ctx.id)?
             .iter()
             .map(entry_from_summary)
-            .collect();
-        out.reverse(); // newest first
-        Ok(out)
+            .collect())
     })
     .await
 }
@@ -210,16 +211,27 @@ pub async fn capture_workspace(
     request: CaptureRequest,
 ) -> CmdResult<CaptureReport> {
     let path = state.paths.db.clone();
-    let cfg = state.config.clone();
+    let cfg = state.config();
     blocking(move || {
         let mut db = open(&path)?;
         let ctx = db.find_context(&request.workspace)?;
         let previous = latest(&db, &ctx)?;
-        let repos: Vec<PathBuf> = previous
-            .iter()
-            .flat_map(|p| p.payload.git.iter())
-            .map(|g| PathBuf::from(&g.repository_path))
-            .collect();
+        // Repositories: the ones chosen in the review, else those of the last snapshot.
+        let repos: Vec<PathBuf> = match &request.repos {
+            Some(chosen) => chosen.iter().map(PathBuf::from).collect(),
+            None => previous
+                .iter()
+                .flat_map(|p| p.payload.git.iter())
+                .map(|g| PathBuf::from(&g.repository_path))
+                .collect(),
+        };
+        let only: Vec<String> = request.only.clone().unwrap_or_default();
+        if request.only.is_some() && only.is_empty() && repos.is_empty() {
+            return Err(CommandError::new(
+                ErrorCode::Conflict,
+                "choose at least one program or repository to save",
+            ));
+        }
         let notes = request
             .note
             .map(|n| n.trim().to_string())
@@ -228,7 +240,7 @@ pub async fn capture_workspace(
             .collect();
 
         let result = capture::capture(capture::CaptureOptions {
-            only: &[],
+            only: &only,
             repos: &repos,
             notes,
             include_windows: cfg.capture.include_windows,
@@ -290,7 +302,8 @@ pub async fn restore_workspace(
     request: RestoreRequest,
 ) -> CmdResult<RestoreReport> {
     let path = state.paths.db.clone();
-    let cfg = state.config.clone();
+    let cfg = state.config();
+    let notify_app = app.clone();
     let dry_run = request.dry_run.unwrap_or(false);
 
     // Register a cancel flag for real restores. The cross-process lock inside
@@ -314,16 +327,17 @@ pub async fn restore_workspace(
         Some(CancelSlotGuard(&state))
     };
 
-    blocking(move || {
+    let result = blocking(move || {
         let mut db = open(&path)?;
         let args = RestoreArgs {
             version: request.version,
-            only: Vec::new(),
+            only: request.only.clone().unwrap_or_default(),
             dry_run,
             timeout: APP_WINDOW_TIMEOUT,
             max_tabs_per_window: cfg.browser.max_tabs_per_window,
             overall_timeout: cfg.timeouts.restore_overall(),
             cancel: Some(cancel.clone()),
+            skip_cleanup: false,
         };
         let workspace = request.workspace.clone();
         let mut log = |m: &str| {
@@ -335,8 +349,9 @@ pub async fn restore_workspace(
                 },
             );
         };
-        let (ctx, snap, run) =
+        let outcome =
             cf_cli::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;
+        let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
         Ok(RestoreReport {
             workspace: ctx.name,
             version: snap.version,
@@ -355,9 +370,14 @@ pub async fn restore_workspace(
                     duration_ms: s.duration_ms,
                 })
                 .collect(),
+            cleanups: outcome.cleanups.into_iter().map(Into::into).collect(),
         })
     })
-    .await
+    .await;
+    if let Ok(report) = &result {
+        crate::shell::notify_restore(&notify_app, report);
+    }
+    result
 }
 
 /// Ask the running restore to stop. Returns `false` if none is running.
@@ -421,6 +441,203 @@ pub async fn create_shortcut(
     .await
 }
 
+#[tauri::command]
+pub async fn rename_workspace(
+    state: State<'_, AppState>,
+    workspace: String,
+    new_name: String,
+) -> CmdResult<WorkspaceSummary> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let renamed = db.rename_context(ctx.id, &new_name)?;
+        tracing::info!("workspace renamed from the app");
+        summarize(&db, &renamed)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_workspace_archived(
+    state: State<'_, AppState>,
+    workspace: String,
+    archived: bool,
+) -> CmdResult<WorkspaceSummary> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        db.set_archived(ctx.id, archived)?;
+        summarize(&db, &db.find_context(&ctx.id.to_string())?)
+    })
+    .await
+}
+
+/// Desktop icons that restore this workspace, for the delete dialog.
+#[tauri::command]
+pub async fn get_workspace_shortcuts(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<Vec<String>> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        Ok(
+            cf_cli::shortcut::find_for_workspace(&ctx.id.to_string(), None)?
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+        )
+    })
+    .await
+}
+
+/// Permanently delete a workspace and all its snapshots, and (if asked) move
+/// its desktop icons to the Recycle Bin. The UI asks first.
+#[tauri::command]
+pub async fn delete_workspace(
+    state: State<'_, AppState>,
+    workspace: String,
+    delete_shortcuts: Option<bool>,
+) -> CmdResult<DeleteOutcome> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let id = ctx.id.to_string();
+        // Look first: after the delete the id is gone, but the icons stay.
+        let mut lookup_error = None;
+        let shortcuts = if delete_shortcuts.unwrap_or(false) {
+            cf_cli::shortcut::find_for_workspace(&id, None).unwrap_or_else(|e| {
+                lookup_error = Some(format!("{e:#}"));
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        db.delete_context(ctx.id)?;
+        // The picture kept for its desktop icon is of no use any more.
+        cf_cli::icons::clear_custom_icon(&cf_cli::icons::icon_dir(&path), &id);
+        tracing::info!(workspace = %ctx.name, "workspace deleted from the app");
+        // The workspace is gone either way; a problem with the icons is reported, not fatal.
+        let shortcut_error = match cf_cli::shortcut::recycle(&shortcuts) {
+            Ok(()) => lookup_error,
+            Err(e) => Some(format!("{e:#}")),
+        };
+        Ok(DeleteOutcome {
+            shortcuts_removed: if shortcut_error.is_some() {
+                Vec::new()
+            } else {
+                shortcuts.iter().map(|p| p.display().to_string()).collect()
+            },
+            shortcut_error,
+        })
+    })
+    .await
+}
+
+/// Make restore (and the desktop icon) always use `version`; `None` goes back
+/// to the latest snapshot.
+#[tauri::command]
+pub async fn set_pinned_version(
+    state: State<'_, AppState>,
+    workspace: String,
+    version: Option<u32>,
+) -> CmdResult<WorkspaceSummary> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        if let Some(v) = version {
+            // Fail with "not found" now rather than at the next restore.
+            db.get_snapshot(ctx.id, Some(v))?;
+        }
+        db.set_pinned_version(ctx.id, version)?;
+        summarize(&db, &ctx)
+    })
+    .await
+}
+
+/// Permanently delete one snapshot. A pinned version is refused by storage.
+#[tauri::command]
+pub async fn delete_snapshot(
+    state: State<'_, AppState>,
+    workspace: String,
+    version: u32,
+) -> CmdResult<()> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        db.delete_snapshot(ctx.id, version)?;
+        Ok(())
+    })
+    .await
+}
+
+/// Every program the workspace could start, for the approval dialog.
+#[tauri::command]
+pub async fn get_trust_review(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<TrustReview> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let mut programs: std::collections::BTreeMap<(String, String, String), Vec<u32>> =
+            Default::default();
+        for s in db.list_snapshots(ctx.id)? {
+            let snapshot = db.get_snapshot(ctx.id, Some(s.version))?;
+            for a in &snapshot.payload.applications {
+                programs
+                    .entry((
+                        a.application_id.clone(),
+                        a.executable_path.clone(),
+                        a.launch_arguments.join(" "),
+                    ))
+                    .or_default()
+                    .push(s.version);
+            }
+        }
+        Ok(TrustReview {
+            workspace: ctx.name,
+            programs: programs
+                .into_iter()
+                .map(
+                    |((application_id, executable_path, arguments), versions)| ProgramEntry {
+                        application_id,
+                        executable_path,
+                        arguments,
+                        versions,
+                    },
+                )
+                .collect(),
+        })
+    })
+    .await
+}
+
+/// Approve an imported workspace for restoring. Only called from the approval
+/// dialog, after the user has seen the list from [`get_trust_review`].
+#[tauri::command]
+pub async fn approve_workspace(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<WorkspaceSummary> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        db.set_trusted(ctx.id, true)?;
+        tracing::info!(workspace = %ctx.name, "workspace approved from the app");
+        summarize(&db, &ctx)
+    })
+    .await
+}
+
 fn icon_info(icon: Option<&Path>) -> CmdResult<WorkspaceIcon> {
     use base64::Engine as _;
     let Some(icon) = icon else {
@@ -457,10 +674,10 @@ fn apply_icon(db_path: &Path, workspace: &str, picture: Option<&[u8]>) -> CmdRes
             None
         }
     };
-    let shortcut = cf_cli::shortcut::update_icon(&ctx.name, None, icon.as_deref())?;
+    let shortcuts = cf_cli::shortcut::update_icon(&id, None, icon.as_deref())?;
     Ok(IconUpdate {
         icon: icon_info(icon.as_deref())?,
-        shortcut_path: shortcut.map(|p| p.display().to_string()),
+        shortcut_path: shortcuts.first().map(|p| p.display().to_string()),
     })
 }
 
@@ -535,6 +752,20 @@ fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn workspace_summary_reports_the_newest_snapshot_as_latest() {
+        let mut db = cf_storage::Database::open_in_memory().unwrap();
+        let ctx = db.create_context("W", None).unwrap();
+        for n in 1..=3 {
+            let mut payload = cf_core::SnapshotPayload::default();
+            payload.notes.push(format!("note {n}"));
+            db.create_snapshot(ctx.id, payload, cf_core::CaptureStatus::Complete)
+                .unwrap();
+        }
+        let summary = super::summarize(&db, &ctx).unwrap();
+        assert_eq!(summary.latest.unwrap().version, 3);
+    }
+
+    #[test]
     fn percent_decoding_undoes_encode_uri_component() {
         use super::percent_decode;
         assert_eq!(percent_decode("Chess"), "Chess");
@@ -545,4 +776,110 @@ mod tests {
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%2"), "%2");
     }
+}
+
+// ----------------------------------------------------------------- cleanup
+
+/// Programs running now with their memory and CPU use, for the program picker.
+/// Takes about a second: CPU use is measured over a short window.
+#[tauri::command]
+pub async fn list_running_apps() -> CmdResult<Vec<RunningApp>> {
+    blocking(|| {
+        Ok(
+            cf_cleanup::running_apps(&cf_cleanup::WindowsProcesses, Duration::from_millis(700))
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_cleanup_config(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<CleanupConfig> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        Ok(db.cleanup_config(ctx.id)?.into())
+    })
+    .await
+}
+
+/// Save a workspace's cleanup rules. Critical system programs are refused.
+#[tauri::command]
+pub async fn set_cleanup_config(
+    state: State<'_, AppState>,
+    workspace: String,
+    config: CleanupConfig,
+) -> CmdResult<CleanupConfig> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let config: cf_core::CleanupConfig = config.into();
+        for t in config.on_enter.iter().chain(&config.on_exit) {
+            let name = cf_core::cleanup::normalize_process_name(&t.process)
+                .map_err(|e| CommandError::new(ErrorCode::Conflict, e.to_string()))?;
+            if let Some(reason) = cf_cleanup::protected_reason(&format!("{name}.exe"), None) {
+                return Err(CommandError::new(
+                    ErrorCode::Conflict,
+                    format!("'{name}' can't be closed by a workspace: {reason}"),
+                ));
+            }
+        }
+        let saved = db.set_cleanup_config(ctx.id, config).map_err(|e| match e {
+            cf_storage::StorageError::Core(c) => {
+                CommandError::new(ErrorCode::Conflict, c.to_string())
+            }
+            other => other.into(),
+        })?;
+        Ok(saved.into())
+    })
+    .await
+}
+
+/// What one side of a workspace's cleanup would do right now.
+#[tauri::command]
+pub async fn preview_cleanup(
+    state: State<'_, AppState>,
+    workspace: String,
+    phase: CleanupPhase,
+) -> CmdResult<CleanupPlan> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        Ok(cf_cli::session::preview_cleanup(&db, &workspace, phase.into())?.into())
+    })
+    .await
+}
+
+/// Run one side of a workspace's cleanup now. The UI shows the preview and asks first.
+#[tauri::command]
+pub async fn run_cleanup_now(
+    state: State<'_, AppState>,
+    workspace: String,
+    phase: CleanupPhase,
+) -> CmdResult<CleanupReport> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let report = cf_cli::session::run_cleanup_now(&db, &workspace, phase.into(), &mut |_| {})?;
+        Ok(report.into())
+    })
+    .await
+}
+
+/// Leave the active workspace: run its "when leaving" cleanup and clear it.
+#[tauri::command]
+pub async fn leave_workspace(state: State<'_, AppState>) -> CmdResult<Option<CleanupReport>> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        Ok(cf_cli::session::leave_active_workspace(&db, &mut |_| {})?.map(Into::into))
+    })
+    .await
 }

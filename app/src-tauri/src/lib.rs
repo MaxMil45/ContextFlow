@@ -8,6 +8,8 @@ mod commands;
 mod dto;
 mod dto_more;
 mod error;
+mod hotkey;
+mod overlay;
 mod review;
 mod settings;
 mod shell;
@@ -45,6 +47,7 @@ pub fn run() {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         // Start with Windows (opt-in in Settings): quietly, in the tray.
         .plugin(tauri_plugin_autostart::init(
@@ -54,6 +57,17 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             shell::build_tray(app.handle())?;
+            // The on-screen confirmation for quick capture, ready (hidden) before it's needed.
+            if let Err(e) = overlay::preload(app.handle()) {
+                tracing::warn!("could not prepare the capture confirmation: {e}");
+            }
+            // The quick-capture shortcut. If another program already owns it, say so
+            // instead of failing silently.
+            let hotkey = app.state::<state::AppState>().config().app.capture_hotkey;
+            if let Err(e) = hotkey::register(app.handle(), &hotkey) {
+                tracing::warn!("capture shortcut not set up: {e}");
+                shell::toast(app.handle(), "Capture shortcut not available", &e);
+            }
             // The window is created hidden; show it unless Windows started us at sign-in.
             if !std::env::args().any(|a| a == "--hidden") {
                 show_main_window(app.handle());

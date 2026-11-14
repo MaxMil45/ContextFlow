@@ -44,6 +44,9 @@ pub struct AppConfig {
     pub notifications: bool,
     /// Closing the window keeps ContextFlow running in the tray.
     pub close_to_tray: bool,
+    /// A key combination that saves the active workspace from anywhere, without
+    /// opening the app, like `Ctrl+Alt+X`. Empty switches it off.
+    pub capture_hotkey: String,
 }
 
 impl Default for AppConfig {
@@ -51,6 +54,7 @@ impl Default for AppConfig {
         Self {
             notifications: true,
             close_to_tray: false,
+            capture_hotkey: "Ctrl+Alt+X".into(),
         }
     }
 }
@@ -264,6 +268,13 @@ impl Config {
         {
             return invalid("browser.excluded_url_patterns entries must not be empty".into());
         }
+        if self.app.capture_hotkey.chars().count() > 64
+            || self.app.capture_hotkey.chars().any(char::is_control)
+        {
+            return invalid(
+                "app.capture_hotkey must be a key combination such as Ctrl+Alt+X".into(),
+            );
+        }
         if !(1..=365).contains(&self.logging.max_files) {
             return invalid("logging.max_files must be between 1 and 365".into());
         }
@@ -324,6 +335,9 @@ max_tabs_per_window = 50
 notifications = true
 # Closing the window keeps ContextFlow running in the tray.
 close_to_tray = false
+# Saves the active workspace from anywhere, without opening the app.
+# Needs at least one of Ctrl, Alt, Shift. Use "" to switch it off.
+capture_hotkey = "Ctrl+Alt+X"
 
 [logging]
 level = "info"
@@ -344,6 +358,22 @@ mod tests {
     #[test]
     fn template_equals_defaults() {
         assert_eq!(Config::parse(TEMPLATE).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn the_capture_hotkey_defaults_on_and_can_be_switched_off() {
+        assert_eq!(Config::default().app.capture_hotkey, "Ctrl+Alt+X");
+        let off = Config::parse(
+            "[app]
+capture_hotkey = \"\"
+",
+        )
+        .unwrap();
+        assert_eq!(off.app.capture_hotkey, "");
+        assert!(off.validate().is_ok());
+        let mut bad = Config::default();
+        bad.app.capture_hotkey = "x".repeat(65);
+        assert!(bad.validate().is_err());
     }
 
     #[test]

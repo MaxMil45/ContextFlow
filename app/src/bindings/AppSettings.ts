@@ -12,4 +12,8 @@ closeToTray: boolean,
 /**
  * Start ContextFlow, hidden in the tray, when you sign in to Windows.
  */
-startWithWindows: boolean, };
+startWithWindows: boolean, 
+/**
+ * Saves the active workspace from anywhere, e.g. `Ctrl+Alt+X`. Empty = off.
+ */
+captureHotkey: string, };

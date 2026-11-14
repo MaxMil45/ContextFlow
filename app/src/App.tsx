@@ -23,8 +23,8 @@ export function App() {
     workspaces.data?.find((w) => w.name === selected) ?? (selected ? undefined : workspaces.data?.[0]);
 
   // The tray's handlers outlive renders; give them the latest list.
-  const latest = useRef({ list: workspaces.data, current: current?.name });
-  latest.current = { list: workspaces.data, current: current?.name };
+  const latest = useRef({ list: workspaces.data, current: current?.name, reload: workspaces.reload });
+  latest.current = { list: workspaces.data, current: current?.name, reload: workspaces.reload };
 
   useEffect(() => {
     let disposed = false;
@@ -50,6 +50,8 @@ export function App() {
         setPending({ kind: "restore", workspace, key: Date.now() });
       })
       .then(keep);
+    // A quick capture (shortcut or tray) saved a snapshot: show the new version.
+    api.onCaptureSaved(() => latest.current.reload()).then(keep);
     return () => {
       disposed = true;
       unlisteners.forEach((u) => u());

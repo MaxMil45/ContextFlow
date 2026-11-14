@@ -212,74 +212,82 @@ pub async fn capture_workspace(
 ) -> CmdResult<CaptureReport> {
     let path = state.paths.db.clone();
     let cfg = state.config();
-    blocking(move || {
-        let mut db = open(&path)?;
-        let ctx = db.find_context(&request.workspace)?;
-        let previous = latest(&db, &ctx)?;
-        // Repositories: the ones chosen in the review, else those of the last snapshot.
-        let repos: Vec<PathBuf> = match &request.repos {
-            Some(chosen) => chosen.iter().map(PathBuf::from).collect(),
-            None => previous
-                .iter()
-                .flat_map(|p| p.payload.git.iter())
-                .map(|g| PathBuf::from(&g.repository_path))
-                .collect(),
+    blocking(move || do_capture(&path, &cfg, request)).await
+}
+
+/// Save a new snapshot of `request.workspace`: reuse the previous snapshot's
+/// repositories (unless some are chosen), capture, save, then apply auto-prune
+/// if configured. Used by the Capture button and by the quick-capture hotkey.
+pub(crate) fn do_capture(
+    path: &Path,
+    cfg: &cf_config::Config,
+    request: CaptureRequest,
+) -> CmdResult<CaptureReport> {
+    let mut db = open(path)?;
+    let ctx = db.find_context(&request.workspace)?;
+    let previous = latest(&db, &ctx)?;
+    // Repositories: the ones chosen in the review, else those of the last snapshot.
+    let repos: Vec<PathBuf> = match &request.repos {
+        Some(chosen) => chosen.iter().map(PathBuf::from).collect(),
+        None => previous
+            .iter()
+            .flat_map(|p| p.payload.git.iter())
+            .map(|g| PathBuf::from(&g.repository_path))
+            .collect(),
+    };
+    let only: Vec<String> = request.only.clone().unwrap_or_default();
+    if request.only.is_some() && only.is_empty() && repos.is_empty() {
+        return Err(CommandError::new(
+            ErrorCode::Conflict,
+            "choose at least one program or repository to save",
+        ));
+    }
+    let notes = request
+        .note
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .into_iter()
+        .collect();
+
+    let result = capture::capture(capture::CaptureOptions {
+        only: &only,
+        repos: &repos,
+        notes,
+        include_windows: cfg.capture.include_windows,
+        unminimize: request.unminimize.unwrap_or(false),
+        rules: &cfg.capture,
+        git_timeout: cfg.timeouts.git(),
+        browser: &cfg.browser,
+        browser_state_dir: cf_browser::default_state_dir(),
+        vscode_storage: cf_vscode::default_storage_json(),
+    });
+
+    let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
+    let identical = previous.as_ref().is_some_and(|p| p.hash == snap.hash);
+    tracing::info!(workspace = %ctx.name, version = snap.version, "snapshot saved from the app");
+
+    let auto_pruned = if cfg.retention.auto_prune {
+        let policy = RetentionPolicy {
+            keep_last: cfg.retention.keep_last,
+            max_age: cfg
+                .retention
+                .max_age_days
+                .map(|d| chrono::TimeDelta::days(d as i64)),
         };
-        let only: Vec<String> = request.only.clone().unwrap_or_default();
-        if request.only.is_some() && only.is_empty() && repos.is_empty() {
-            return Err(CommandError::new(
-                ErrorCode::Conflict,
-                "choose at least one program or repository to save",
-            ));
-        }
-        let notes = request
-            .note
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-            .into_iter()
-            .collect();
+        db.prune(ctx.id, &policy, Utc::now())?
+    } else {
+        Vec::new()
+    };
 
-        let result = capture::capture(capture::CaptureOptions {
-            only: &only,
-            repos: &repos,
-            notes,
-            include_windows: cfg.capture.include_windows,
-            unminimize: request.unminimize.unwrap_or(false),
-            rules: &cfg.capture,
-            git_timeout: cfg.timeouts.git(),
-            browser: &cfg.browser,
-            browser_state_dir: cf_browser::default_state_dir(),
-            vscode_storage: cf_vscode::default_storage_json(),
-        });
-
-        let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
-        let identical = previous.as_ref().is_some_and(|p| p.hash == snap.hash);
-        tracing::info!(workspace = %ctx.name, version = snap.version, "snapshot saved from the app");
-
-        let auto_pruned = if cfg.retention.auto_prune {
-            let policy = RetentionPolicy {
-                keep_last: cfg.retention.keep_last,
-                max_age: cfg
-                    .retention
-                    .max_age_days
-                    .map(|d| chrono::TimeDelta::days(d as i64)),
-            };
-            db.prune(ctx.id, &policy, Utc::now())?
-        } else {
-            Vec::new()
-        };
-
-        Ok(CaptureReport {
-            snapshot: detail(&snap),
-            identical_to_previous: identical,
-            warnings: result.warnings,
-            excluded_windows: result.excluded_windows as u32,
-            minimized_windows: result.minimized_windows as u32,
-            pinned_version: db.pinned_version(ctx.id)?.filter(|v| *v != snap.version),
-            auto_pruned,
-        })
+    Ok(CaptureReport {
+        snapshot: detail(&snap),
+        identical_to_previous: identical,
+        warnings: result.warnings,
+        excluded_windows: result.excluded_windows as u32,
+        minimized_windows: result.minimized_windows as u32,
+        pinned_version: db.pinned_version(ctx.id)?.filter(|v| *v != snap.version),
+        auto_pruned,
     })
-    .await
 }
 
 /// Clears the in-app cancel slot when the restore ends, however it ends.

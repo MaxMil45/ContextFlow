@@ -512,6 +512,7 @@ function CaptureCard({
 }) {
   const [open, setOpen] = useState(false);
   const [report, setReport] = useState<CaptureReport>();
+  const hotkey = useCommand(() => api.getSettings(), []).data?.app.captureHotkey;
 
   useEffect(() => {
     if (openKey !== undefined) setOpen(true);
@@ -520,7 +521,11 @@ function CaptureCard({
   return (
     <section className="card">
       <div className="capture">
-        <span className="muted">Save what's open now as a new snapshot. You choose what goes in.</span>
+        <span className="muted">
+          {hotkey
+            ? `Press ${hotkey} from anywhere to save instantly, or review what goes in:`
+            : "Save what's open now as a new snapshot. You choose what goes in."}
+        </span>
         <button className="primary" disabled={disabled} onClick={() => setOpen(true)}>
           Capture…
         </button>

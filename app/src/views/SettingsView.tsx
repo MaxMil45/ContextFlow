@@ -128,6 +128,80 @@ function NumberField({
   );
 }
 
+/** A key name the shortcut system understands, from a keyboard event's `code`. */
+function keyName(code: string, key: string): string | undefined {
+  // Some input methods give no key code; the key's own name will do then.
+  if (code === "") {
+    if (/^[a-zA-Z0-9]$/.test(key)) return key.toUpperCase();
+    if (/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) return key;
+    return key === " " ? "Space" : undefined;
+  }
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (code === "Space") return "Space";
+  return undefined;
+}
+
+/**
+ * Records a key combination: click it, then press the keys you want. Needs
+ * Ctrl, Alt or Shift as well as a letter, number or F-key, so it can't fire
+ * while you type.
+ */
+function HotkeyField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [hint, setHint] = useState<string>();
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      setRecording(false);
+      setHint(undefined);
+      return;
+    }
+    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return; // wait for the real key
+    const key = keyName(e.code, e.key);
+    const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
+    if (!key) return setHint("Use a letter, a number or an F-key.");
+    if (mods.length === 0) return setHint("Hold Ctrl, Alt or Shift too, or it would trigger while you type.");
+    onChange([...mods, key].join("+"));
+    setRecording(false);
+    setHint(undefined);
+  }
+
+  return (
+    <div className="hotkey">
+      <button
+        className={`hotkey-box${recording ? " recording" : ""}`}
+        onClick={() => setRecording(true)}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          setRecording(false);
+          setHint(undefined);
+        }}
+        aria-label="Quick capture shortcut"
+      >
+        {recording ? "Press the keys…" : value || "Off"}
+      </button>
+      <button onClick={() => onChange("Ctrl+Alt+X")} disabled={value === "Ctrl+Alt+X"}>
+        Reset
+      </button>
+      <button onClick={() => onChange("")} disabled={value === ""}>
+        Turn off
+      </button>
+      {hint && <span className="muted small">{hint}</span>}
+    </div>
+  );
+}
+
 export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const loaded = useCommand(() => api.getSettings(), []);
   const browser = useCommand(() => api.getBrowserStatus(), []);
@@ -230,6 +304,22 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         >
           Start with Windows
         </Toggle>
+      </section>
+
+      <section className="card">
+        <h3>Quick capture</h3>
+        <p className="muted small">
+          Press this from anywhere to save the workspace you're in, without opening ContextFlow. A small
+          card appears in the corner of the screen and confirms what was saved. With no active workspace
+          it saves into the one you used last.
+        </p>
+        <HotkeyField
+          value={draft.app.captureHotkey}
+          onChange={(v) => set((s) => ({ ...s, app: { ...s.app, captureHotkey: v } }))}
+        />
+        <p className="muted small">
+          If another program already uses the combination, saving will say so and keep your old one.
+        </p>
       </section>
 
       <section className="card">

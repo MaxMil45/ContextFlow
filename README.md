@@ -77,6 +77,7 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 The app (see [app/README.md](app/README.md)) does everything the command line does, and more:
 
 * **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
+* **Quick capture:** press **Ctrl+Alt+X** (change it in Settings, or turn it off) from anywhere and the workspace you're in is saved in the background, with no window in the way. A small card in the corner of the screen confirms it at once ("Saving…", then "Saved “Focus” v3 · 7 programs") and fades away; it never takes focus or blocks clicks. The tray's **Capture now** does the same. With no active workspace it saves into the one you used last.
 * **Capture review:** a checklist of everything a capture would save (programs, windows, browser tabs, VS Code folders, Git repositories), so you choose what goes in. From the tray, **Capture current…** is two clicks to a saved snapshot.
 * **History and compare:** tick two versions to compare them, or compare one with your screen right now. Advice about what restoring would do comes first.
 * **Workspace management:** rename, archive, delete (with its desktop icon), pin a version, delete a version, approve imported workspaces, export and import.

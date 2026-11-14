@@ -41,6 +41,7 @@ fn recent_workspaces(app: &AppHandle) -> Vec<String> {
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let open = MenuItem::with_id(app, "open", "Open ContextFlow", true, None::<&str>)?;
+    let quick = MenuItem::with_id(app, "quick_capture", "Capture now", true, None::<&str>)?;
     let capture = MenuItem::with_id(app, "capture", "Capture current…", true, None::<&str>)?;
 
     let recent = recent_workspaces(app);
@@ -70,6 +71,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         app,
         &[
             &open as &dyn IsMenuItem<Wry>,
+            &quick,
             &capture,
             &restore,
             &sep,
@@ -87,6 +89,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             let id = event.id.as_ref();
             match id {
                 "open" => crate::show_main_window(app),
+                "quick_capture" => crate::hotkey::quick_capture(app.clone()),
                 "capture" => {
                     crate::show_main_window(app);
                     let _ = app.emit(EVENT_CAPTURE, ());
@@ -129,6 +132,14 @@ pub fn refresh_tray(app: &AppHandle) {
 #[tauri::command]
 pub async fn refresh_tray_menu(app: AppHandle) {
     refresh_tray(&app);
+}
+
+/// A Windows notification, whatever the notification setting says: used for
+/// answers to something you just asked for, like a quick capture.
+pub fn toast(app: &AppHandle, title: &str, body: &str) {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        tracing::warn!("could not show a notification: {e}");
+    }
 }
 
 /// A Windows notification when a restore finishes (if the setting is on).

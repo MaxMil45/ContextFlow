@@ -52,6 +52,7 @@ fn settings_from(cfg: &Config, start_with_windows: bool) -> Settings {
             notifications: cfg.app.notifications,
             close_to_tray: cfg.app.close_to_tray,
             start_with_windows,
+            capture_hotkey: cfg.app.capture_hotkey.clone(),
         },
         log_level: cfg.logging.level.clone(),
     }
@@ -80,6 +81,7 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
     cfg.timeouts.restore_overall_secs = s.timeouts.restore_overall_secs;
     cfg.app.notifications = s.app.notifications;
     cfg.app.close_to_tray = s.app.close_to_tray;
+    cfg.app.capture_hotkey = s.app.capture_hotkey.trim().to_string();
     cfg.logging.level = s.log_level.clone();
     cfg
 }
@@ -100,9 +102,23 @@ pub async fn save_settings(
 ) -> CmdResult<Settings> {
     let next = apply_settings(&state.config(), &settings);
     next.validate().map_err(conflict)?;
-    state
-        .save_config(next.clone())
-        .map_err(CommandError::from)?;
+
+    // Take the new shortcut first: if another program owns it, nothing is saved.
+    let old_hotkey = state.config().app.capture_hotkey;
+    let hotkey_changed = next.app.capture_hotkey != old_hotkey;
+    if hotkey_changed {
+        crate::hotkey::register(&app, &next.app.capture_hotkey).map_err(|e| {
+            // Put the old shortcut back, so a failed change doesn't leave none.
+            let _ = crate::hotkey::register(&app, &old_hotkey);
+            conflict(e)
+        })?;
+    }
+    state.save_config(next.clone()).map_err(|e| {
+        if hotkey_changed {
+            let _ = crate::hotkey::register(&app, &old_hotkey);
+        }
+        CommandError::from(e)
+    })?;
 
     let manager = app.autolaunch();
     let enabled = manager.is_enabled().unwrap_or(false);

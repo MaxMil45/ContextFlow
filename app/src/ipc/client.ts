@@ -41,6 +41,11 @@ import type { WorkspaceSummary } from "../bindings/WorkspaceSummary";
 export const RESTORE_PROGRESS_EVENT = "restore://progress";
 export const TRAY_CAPTURE_EVENT = "tray://capture";
 export const TRAY_RESTORE_EVENT = "tray://restore";
+export const CAPTURE_SAVED_EVENT = "capture://saved";
+export const TOAST_EVENT = "toast://show";
+
+/** What the on-screen confirmation card shows (sent by the Rust side). */
+export type ToastMessage = { kind: "saving" | "saved" | "error"; title: string; body: string };
 
 /** Every rejected command is normalised to a `CommandError`. */
 export function toCommandError(e: unknown): CommandError {
@@ -166,6 +171,13 @@ export const api = {
   previewRetention: () => call<RetentionResult>("preview_retention"),
   applyRetention: () => call<RetentionResult>("apply_retention"),
   refreshTrayMenu: () => call<void>("refresh_tray_menu"),
+
+  /** A quick capture (the shortcut, or the tray's Capture now) saved a snapshot of this workspace. */
+  onCaptureSaved: (handler: (workspace: string) => void): Promise<UnlistenFn> =>
+    listen<string>(CAPTURE_SAVED_EVENT, (e) => handler(e.payload)),
+
+  onToast: (handler: (m: ToastMessage) => void): Promise<UnlistenFn> =>
+    listen<ToastMessage>(TOAST_EVENT, (e) => handler(e.payload)),
 
   onTrayCapture: (handler: () => void): Promise<UnlistenFn> => listen(TRAY_CAPTURE_EVENT, () => handler()),
   onTrayRestore: (handler: (workspace: string) => void): Promise<UnlistenFn> =>

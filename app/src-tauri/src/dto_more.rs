@@ -63,6 +63,8 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     /// Start ContextFlow, hidden in the tray, when you sign in to Windows.
     pub start_with_windows: bool,
+    /// Saves the active workspace from anywhere, e.g. `Ctrl+Alt+X`. Empty = off.
+    pub capture_hotkey: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

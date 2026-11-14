@@ -48,6 +48,7 @@ pub(crate) fn capture_cmd(
         browser: &cfg.browser,
         browser_state_dir: cf_browser::default_state_dir(),
         vscode_storage: cf_vscode::default_storage_json(),
+        visual_studio_settings: cf_vstudio::default_settings_files(),
     });
 
     let p = &result.payload;

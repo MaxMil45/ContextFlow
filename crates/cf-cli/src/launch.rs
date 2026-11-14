@@ -92,6 +92,8 @@ fn run() -> Result<Option<String>> {
         overall_timeout: cfg.timeouts.restore_overall(),
         cancel: None,
         skip_cleanup: false,
+        // A desktop icon is a switch like any other: save where you are first.
+        save_before_leaving: Some(cfg.clone()),
     };
     let outcome = session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {
         tracing::info!("{m}")

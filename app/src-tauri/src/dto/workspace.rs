@@ -26,6 +26,9 @@ pub struct WorkspaceSummary {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct SnapshotEntry {
+    /// Saved automatically when switching away or leaving.
+    #[serde(default)]
+    pub auto: bool,
     pub version: u32,
     /// RFC 3339.
     pub created_at: String,
@@ -182,6 +185,7 @@ pub struct RestoreStep {
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct RestoreReport {
     pub workspace: String,
+    pub workspace_id: String,
     pub version: u32,
     pub dry_run: bool,
     pub cancelled: bool,
@@ -191,6 +195,19 @@ pub struct RestoreReport {
     pub steps: Vec<RestoreStep>,
     /// Programs closed before the restore (leaving the old workspace, entering this one).
     pub cleanups: Vec<CleanupReport>,
+    /// Seconds-level measure of "keystroke to ready": the whole operation, in ms.
+    #[ts(type = "number")]
+    pub duration_ms: u64,
+    /// When the restored snapshot was saved (RFC 3339), for "where you left off".
+    pub saved_at: String,
+    /// Git state saved in the restored snapshot.
+    pub repositories: Vec<RepositoryEntry>,
+    /// Set by a switch: the workspace that was left.
+    pub switched_from: Option<String>,
+    /// Set by a switch: the version number saved for the workspace that was left.
+    pub auto_saved_version: Option<u32>,
+    /// Why the workspace that was left was not saved, when it wasn't.
+    pub auto_save_note: Option<String>,
 }
 
 /// Payload of the `restore://progress` event.
@@ -269,4 +286,36 @@ pub struct DeleteOutcome {
     pub shortcuts_removed: Vec<String>,
     /// Set when the workspace is deleted but its icons could not be removed.
     pub shortcut_error: Option<String>,
+}
+
+/// One past restore of a workspace.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RestoreRunEntry {
+    /// RFC 3339.
+    pub started_at: String,
+    pub version: u32,
+    pub overall: RestoreStatus,
+    pub steps: u32,
+    pub problems: Vec<RestoreProblem>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct RestoreProblem {
+    pub application_id: String,
+    pub status: RestoreStatus,
+    pub message: Option<String>,
+}
+
+/// Result of editing a workspace's name or description.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct WorkspaceUpdate {
+    pub workspace: WorkspaceSummary,
+    /// Set when its desktop icon could not be renamed to match.
+    pub icon_error: Option<String>,
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { plural } from "../format";
+import { friendlyAppName, plural } from "../format";
 import {
   api,
   toCommandError,
@@ -9,7 +9,7 @@ import {
   type CommandError,
 } from "../ipc/client";
 import { Modal } from "./dialogs";
-import { ErrorBanner, Spinner } from "./ui";
+import { AppIcon, ErrorBanner, Spinner } from "./ui";
 
 /**
  * Capture review: shows everything a capture would save right now (programs,
@@ -95,7 +95,8 @@ export function CaptureReview({
                     onChange={() => toggle(apps, setApps, a.applicationId)}
                     disabled={saving}
                   />
-                  <span className="mono">{a.applicationId}</span>
+                  <AppIcon applicationId={a.applicationId} />
+                  <span title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
                   <span className="muted small">
                     {[
                       plural(a.windowCount, "window"),

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus, Search, Settings } from "lucide-react";
+import { ChevronDown, ChevronRight, Keyboard, Plus, Search, Settings } from "lucide-react";
 
 import { Kbd, SkeletonList, WorkspaceDot } from "../components/ui";
 import { relativeTime } from "../format";
@@ -15,6 +15,7 @@ type Props = {
   onShowArchived: (show: boolean) => void;
   settingsOpen: boolean;
   onSettings: () => void;
+  onHelp: () => void;
 };
 
 export function Sidebar({
@@ -28,6 +29,7 @@ export function Sidebar({
   onShowArchived,
   settingsOpen,
   onSettings,
+  onHelp,
 }: Props) {
   const live = workspaces?.filter((w) => !w.isArchived) ?? [];
   const archived = workspaces?.filter((w) => w.isArchived) ?? [];
@@ -89,6 +91,9 @@ export function Sidebar({
           title="Ctrl+,"
         >
           <Settings size={15} aria-hidden /> Settings
+        </button>
+        <button className="nav-item" onClick={onHelp} title="Ctrl+/">
+          <Keyboard size={15} aria-hidden /> Keyboard shortcuts
         </button>
       </div>
     </aside>

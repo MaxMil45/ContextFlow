@@ -27,6 +27,10 @@ import type { RunningApp } from "../bindings/RunningApp";
 import type { Settings } from "../bindings/Settings";
 import type { VerifyResult } from "../bindings/VerifyResult";
 import type { DeleteOutcome } from "../bindings/DeleteOutcome";
+import type { LeaveReport } from "../bindings/LeaveReport";
+import type { HotkeyStatusDto } from "../bindings/HotkeyStatusDto";
+import type { RestoreRunEntry } from "../bindings/RestoreRunEntry";
+import type { WorkspaceUpdate } from "../bindings/WorkspaceUpdate";
 import type { IconUpdate } from "../bindings/IconUpdate";
 import type { RestoreProgress } from "../bindings/RestoreProgress";
 import type { RestoreReport } from "../bindings/RestoreReport";
@@ -86,6 +90,10 @@ export const api = {
   restore: (request: RestoreRequest) =>
     call<RestoreReport>("restore_workspace", { request }),
 
+  /** Save the workspace you're in, leave it, then restore this one. */
+  switchWorkspace: (request: RestoreRequest) =>
+    call<RestoreReport>("switch_workspace", { request }),
+
   cancelRestore: () => call<boolean>("cancel_restore"),
 
   /** Desktop icon that restores the workspace; rejects with `already_exists` unless `overwrite`. */
@@ -102,8 +110,12 @@ export const api = {
 
   resetWorkspaceIcon: (workspace: string) => call<IconUpdate>("reset_workspace_icon", { workspace }),
 
-  renameWorkspace: (workspace: string, newName: string) =>
-    call<WorkspaceSummary>("rename_workspace", { workspace, newName }),
+  /** Change name and description together; desktop icons follow a rename. */
+  updateWorkspace: (workspace: string, name: string, description: string | null) =>
+    call<WorkspaceUpdate>("update_workspace", { workspace, name, description }),
+
+  /** The workspace's recent restores, newest first. */
+  listRestoreRuns: (workspace: string) => call<RestoreRunEntry[]>("list_restore_runs", { workspace }),
 
   setWorkspaceArchived: (workspace: string, archived: boolean) =>
     call<WorkspaceSummary>("set_workspace_archived", { workspace, archived }),
@@ -136,15 +148,15 @@ export const api = {
     call<CleanupConfig>("set_cleanup_config", { workspace, config }),
 
   /** What one side of the cleanup would close right now, and what that frees. */
-  previewCleanup: (workspace: string, phase: CleanupPhase) =>
-    call<CleanupPlan>("preview_cleanup", { workspace, phase }),
+  previewCleanup: (workspace: string, phase: CleanupPhase, fresh = false) =>
+    call<CleanupPlan>("preview_cleanup", { workspace, phase, fresh }),
 
   /** Closes the programs now (the UI confirms first). */
   runCleanupNow: (workspace: string, phase: CleanupPhase) =>
     call<CleanupReport>("run_cleanup_now", { workspace, phase }),
 
   /** Leave the active workspace, running its "when leaving" cleanup. */
-  leaveWorkspace: () => call<CleanupReport | null>("leave_workspace"),
+  leaveWorkspace: () => call<LeaveReport>("leave_workspace"),
 
   // --- capture review and compare
   discoverCapture: (workspace: string) => call<CaptureDiscovery>("discover_capture", { workspace }),
@@ -155,6 +167,8 @@ export const api = {
 
   // --- settings and data
   getSettings: () => call<Settings>("get_settings"),
+  /** Which global shortcuts work; a message for each one that is taken. */
+  getHotkeyStatus: () => call<HotkeyStatusDto>("get_hotkey_status"),
   saveSettings: (settings: Settings) => call<Settings>("save_settings", { settings }),
   getBrowserStatus: () => call<BrowserStatus>("get_browser_status"),
   installBrowserIntegration: () => call<BrowserStatus>("install_browser_integration"),
@@ -179,11 +193,18 @@ export const api = {
   onTrayRestore: (handler: (workspace: string) => void): Promise<UnlistenFn> =>
     listen<string>(TRAY_RESTORE_EVENT, (e) => handler(e.payload)),
 
+  /** A switch from the switcher needs attention: show its report. */
+  onSwitchReport: (handler: (r: RestoreReport) => void): Promise<UnlistenFn> =>
+    listen<RestoreReport>("switch://report", (e) => handler(e.payload)),
+
   onRestoreProgress: (handler: (p: RestoreProgress) => void): Promise<UnlistenFn> =>
     listen<RestoreProgress>(RESTORE_PROGRESS_EVENT, (e) => handler(e.payload)),
 };
 
 export type {
+  LeaveReport,
+  RestoreRunEntry,
+  WorkspaceUpdate,
   BrowserStatus,
   CaptureDiscovery,
   DiffStatus,

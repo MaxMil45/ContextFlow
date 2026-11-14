@@ -1,4 +1,4 @@
-# Testing ContextFlow (Phase 1)
+# Testing ContextFlow
 
 There are two ways to test: the **automated suite**, which runs in a few seconds and is the same as CI, and a **manual checklist** that runs the real CLI against your own desktop.
 
@@ -209,6 +209,27 @@ Use a throwaway database for the first three (see section 2).
 5. **Expect:** it asks for `--yes`.
 
 ---
+
+### K. Switching and auto-save (desktop app)
+
+1. Create workspaces **A** and **B**, each with a couple of apps, and capture both.
+2. Restore **A** so it is active. Move a window. Press **Ctrl+Alt+W**, pick **B**, press Enter.
+   * The corner card shows progress, then "“B” is ready · N s · saved “A” vN".
+   * **A**'s History shows a new version marked **Auto**, with A's last note.
+3. Switch back to **A** and straight to **B** again without changing anything: no new Auto version (nothing changed).
+4. Close every program of **B**, then switch to **A**: **B** is *not* saved ("None of its programs were open").
+5. Switch many times: only the newest five Auto versions stay, and versions you captured yourself are never removed by them.
+6. Press **Ctrl+Alt+W** again while a switch is running: it cancels before the next app starts.
+7. Make a switch partly fail (rename an app's exe): the window opens on the report with **Retry**.
+8. Double-click B's desktop icon while in A, and run `contextflow restore A` while in B: both save the workspace being left. `--no-save` skips it.
+9. **Leave** asks first, shows what its rules close, and saves the workspace before leaving.
+
+### L. Visual Studio solutions
+
+1. Open a solution (or a folder) in Visual Studio, and another in a second Visual Studio window.
+2. Capture. The snapshot lists Visual Studio with "2 folders".
+3. Close Visual Studio and restore: each solution reopens in its own window, where it was.
+4. Restore again with both open: nothing opens twice.
 
 ## 4. Not built yet
 

@@ -3,7 +3,11 @@ import type { ApplicationEntry } from "./ApplicationEntry";
 import type { CaptureStatus } from "./CaptureStatus";
 import type { RepositoryEntry } from "./RepositoryEntry";
 
-export type SnapshotDetail = { notes: Array<string>, applications: Array<ApplicationEntry>, monitorCount: number, repositories: Array<RepositoryEntry>, version: number, 
+export type SnapshotDetail = { notes: Array<string>, applications: Array<ApplicationEntry>, monitorCount: number, repositories: Array<RepositoryEntry>, 
+/**
+ * Saved automatically when switching away or leaving.
+ */
+auto: boolean, version: number, 
 /**
  * RFC 3339.
  */

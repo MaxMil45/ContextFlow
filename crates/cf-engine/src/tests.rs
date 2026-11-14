@@ -674,6 +674,8 @@ include!("tests_browser.rs");
 
 include!("tests_vscode.rs");
 
+include!("tests_vstudio.rs");
+
 /// The "R" report: Steam was saved by its window's helper process.
 /// Restore must start Steam.exe, then still find and place the helper's window.
 #[test]

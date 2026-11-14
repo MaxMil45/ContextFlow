@@ -41,6 +41,9 @@ pub struct CaptureOptions<'a> {
     pub browser_state_dir: Option<PathBuf>,
     /// VS Code's `storage.json` (`None` = do not save VS Code folders).
     pub vscode_storage: Option<PathBuf>,
+    /// Visual Studio's settings files with its recent solutions (empty = do not
+    /// save Visual Studio solutions).
+    pub visual_studio_settings: Vec<PathBuf>,
 }
 
 pub struct CaptureResult {
@@ -177,6 +180,9 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         if let Some(storage) = &opts.vscode_storage {
             attach_vscode_folders(&mut payload, storage, &mut warnings);
         }
+        if !opts.visual_studio_settings.is_empty() {
+            attach_visual_studio(&mut payload, &opts.visual_studio_settings, &mut warnings);
+        }
     }
 
     for repo in opts.repos {
@@ -256,6 +262,48 @@ fn attach_vscode_folders(
     if state.folder_count() > 0 {
         let app = &mut payload.applications[i];
         app.adapter_id = Some(cf_vscode::ADAPTER_ID.to_string());
+        app.adapter_state = state.to_value();
+    }
+}
+
+/// Work out which solution or folder each captured Visual Studio window has
+/// open, from Visual Studio's own list of recent ones. Windows that can't be
+/// matched with confidence are saved without one (and reported), never guessed.
+fn attach_visual_studio(
+    payload: &mut SnapshotPayload,
+    settings: &[PathBuf],
+    warnings: &mut Vec<String>,
+) {
+    let Some(i) = payload
+        .applications
+        .iter()
+        .position(|a| cf_vstudio::is_visual_studio(&a.application_id))
+    else {
+        return;
+    };
+    let titles: Vec<String> = payload
+        .windows
+        .iter()
+        .filter(|w| cf_vstudio::is_visual_studio(&w.application_id))
+        .map(|w| w.title.clone())
+        .collect();
+    let recent = cf_vstudio::read_recent(settings);
+    let state = cf_vstudio::build_state(&titles, &recent, &cf_vstudio::path_exists);
+
+    // The start window has no solution; only count windows that showed a name.
+    let unresolved = state
+        .windows
+        .iter()
+        .filter(|w| w.name.is_some() && w.path.is_none())
+        .count();
+    if unresolved > 0 {
+        warnings.push(format!(
+            "Visual Studio: the solution or folder for {unresolved} window(s) could not be worked out; they will reopen without one"
+        ));
+    }
+    if state.path_count() > 0 {
+        let app = &mut payload.applications[i];
+        app.adapter_id = Some(cf_vstudio::ADAPTER_ID.to_string());
         app.adapter_state = state.to_value();
     }
 }
@@ -415,6 +463,7 @@ mod tests {
             browser: &BrowserConfig::default(),
             browser_state_dir: None,
             vscode_storage: None,
+            visual_studio_settings: Vec::new(),
         });
         assert!(r.payload.windows.is_empty());
         assert!(r.payload.applications.is_empty());

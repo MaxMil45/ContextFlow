@@ -64,7 +64,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     } else {
         items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect()
     };
-    let restore = Submenu::with_items(app, "Restore recent", true, &refs)?;
+    let restore = Submenu::with_items(app, "Switch to", true, &refs)?;
 
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -146,6 +146,13 @@ pub fn toast(app: &AppHandle, title: &str, body: &str) {
 /// A Windows notification when a restore finishes (if the setting is on).
 pub fn notify_restore(app: &AppHandle, report: &RestoreReport) {
     if report.dry_run || !app.state::<AppState>().config().app.notifications {
+        return;
+    }
+    // The window already shows the result; a notification would repeat it.
+    let in_front = app
+        .get_webview_window("main")
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false));
+    if in_front {
         return;
     }
     let problems: Vec<&str> = report

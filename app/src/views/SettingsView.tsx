@@ -152,9 +152,14 @@ function keyName(code: string, key: string): string | undefined {
 function HotkeyField({
   value,
   onChange,
+  label = "Quick capture shortcut",
+  reset = "Ctrl+Alt+X",
 }: {
   value: string;
   onChange: (v: string) => void;
+  label?: string;
+  /** What "Reset" puts back. */
+  reset?: string;
 }) {
   const [recording, setRecording] = useState(false);
   const [hint, setHint] = useState<string>();
@@ -188,11 +193,11 @@ function HotkeyField({
           setRecording(false);
           setHint(undefined);
         }}
-        aria-label="Quick capture shortcut"
+        aria-label={label}
       >
         {recording ? "Press the keys…" : value || "Off"}
       </button>
-      <button onClick={() => onChange("Ctrl+Alt+X")} disabled={value === "Ctrl+Alt+X"}>
+      <button onClick={() => onChange(reset)} disabled={value === reset}>
         Reset
       </button>
       <button onClick={() => onChange("")} disabled={value === ""}>
@@ -214,6 +219,7 @@ const NAV: Array<["general" | "capture" | "restore" | "data" | "advanced", strin
 export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const loaded = useCommand(() => api.getSettings(), []);
   const browser = useCommand(() => api.getBrowserStatus(), []);
+  const hotkeys = useCommand(() => api.getHotkeyStatus(), []);
   const [draft, setDraft] = useState<Settings>();
   const [saved, setSaved] = useState<Settings>();
   const [saving, setSaving] = useState(false);
@@ -247,6 +253,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
       const next = await api.saveSettings(draft!);
       setDraft(next);
       setSaved(next);
+      hotkeys.reload();
       setNotice("Settings saved.");
     } catch (e) {
       setError(toCommandError(e));
@@ -318,6 +325,28 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
       </section>
 
       <section className="card" hidden={tab !== "general"}>
+        <h3>Workspace switcher</h3>
+        <p className="muted small">
+          Press this from anywhere to open a small picker. Choose a workspace and ContextFlow saves where you
+          are, puts it away, and brings the other one back.
+        </p>
+        <HotkeyField
+          value={draft.app.switcherHotkey}
+          label="Switcher shortcut"
+          reset="Ctrl+Alt+W"
+          onChange={(v) => set((s) => ({ ...s, app: { ...s.app, switcherHotkey: v } }))}
+        />
+        {hotkeys.data?.switcher && <Notice tone="warn">{hotkeys.data.switcher}</Notice>}
+        <Toggle
+          checked={draft.app.autoSaveOnSwitch}
+          onChange={(v) => set((s) => ({ ...s, app: { ...s.app, autoSaveOnSwitch: v } }))}
+          hint="Saves a new version of the workspace you're leaving, so coming back finds it as you left it. It is skipped if none of its programs are open, so an emptied desktop never overwrites it."
+        >
+          Save the workspace I'm leaving
+        </Toggle>
+      </section>
+
+      <section className="card" hidden={tab !== "general"}>
         <h3>Quick capture</h3>
         <p className="muted small">
           Press this from anywhere to save the workspace you're in, without opening ContextFlow. A small
@@ -328,6 +357,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
           value={draft.app.captureHotkey}
           onChange={(v) => set((s) => ({ ...s, app: { ...s.app, captureHotkey: v } }))}
         />
+        {hotkeys.data?.capture && <Notice tone="warn">{hotkeys.data.capture}</Notice>}
         <p className="muted small">
           If another program already uses the combination, saving will say so and keep your old one.
         </p>
@@ -573,6 +603,27 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
             </div>
           </div>
         )}
+      </section>
+
+      <section className="card" hidden={tab !== "advanced"}>
+        <h3>About ContextFlow</h3>
+        <dl className="paths">
+          <dt>Version</dt>
+          <dd>{info?.version ?? "…"}</dd>
+          <dt>Settings file</dt>
+          <dd className="mono">{info?.configPath ?? "…"}</dd>
+          <dt>Database</dt>
+          <dd className="mono">{info?.databasePath ?? "…"}</dd>
+          <dt>Logs</dt>
+          <dd className="mono">{info?.logsPath ?? "…"}</dd>
+        </dl>
+        <p className="muted small">
+          Local-first: your workspaces, snapshots and notes never leave this computer. Licensed MIT OR
+          Apache-2.0.
+        </p>
+        <div className="actions left">
+          <button onClick={() => api.openFolder("logs").catch((e) => setError(toCommandError(e)))}>Open logs</button>
+        </div>
       </section>
 
       <section className="card" hidden={tab !== "advanced"}>

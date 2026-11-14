@@ -42,7 +42,7 @@ Severity: **S1** = can harm the user or their data, **S2** = wrong behaviour use
 | F16 | S3 | `cf-adapters` defines an async `ContextAdapter` trait that nothing implements. The engine special-cases browsers and Store apps directly. The crate is used only for the `RestoreStatus` enum and drags in `async-trait` and `tokio`. | `cf-adapters` | T1 (delete it; move the enum) |
 | F17 | S3 | The CLI has no automated tests. Every CLI behaviour so far was checked by hand. | `cf-cli` | T3 |
 | F18 | S3 | `host.log` and `restore_runs` grow without limit. | `browser_host.rs`, `history.rs` | T11 |
-| F19 | S3 | The `snapshot_*` projection tables are written on every capture and never read. | `cf-storage/src/repo.rs` | Accepted. The crash test asserts on them and Phase 4 diffing will read them. Do not remove. |
+| F19 | S3 | The `snapshot_*` projection tables are written on every capture and never read. | `cf-storage/src/repo.rs` | Reversed (migration `0006`): dropped. Context Diff reads the hashed payload, not these tables, so they were only extra writes. The crash test now checks payload completeness instead. |
 | F20 | S3 | No real-window integration test. Restore is unit-tested against a fake desktop and was checked by hand with Character Map and a throwaway Chrome profile. | `cf-engine` | Deferred (`cf-testwin`, PLAN WP 2.4). |
 
 ---

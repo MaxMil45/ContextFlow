@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { workspaceColor } from "./ui";
+import { invalidateWorkspaceIcon, workspaceColor } from "./ui";
 import { useCommand } from "../hooks";
 import { api, toCommandError, type IconUpdate } from "../ipc/client";
 
@@ -55,6 +55,7 @@ export function IconPicker({ workspace, name }: { workspace: string; name: strin
           : `${done} It will be used when you create the desktop icon.`,
       });
       icon.reload();
+      invalidateWorkspaceIcon(workspace);
     } catch (e) {
       setStatus({ ok: false, text: toCommandError(e).message });
     } finally {

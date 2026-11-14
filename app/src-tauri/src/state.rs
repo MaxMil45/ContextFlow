@@ -16,6 +16,8 @@ pub struct AppState {
     config: RwLock<Config>,
     /// Cancel flag of the restore in progress, if any.
     pub restore_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Which global shortcuts are working (Settings shows the ones that aren't).
+    pub hotkeys: Mutex<crate::hotkey::HotkeyStatus>,
     /// Keeps the log file writer alive for the life of the process.
     _log_guard: Option<cf_app::logging::WorkerGuard>,
 }
@@ -37,6 +39,7 @@ impl AppState {
             paths,
             config: RwLock::new(config),
             restore_cancel: Mutex::new(None),
+            hotkeys: Mutex::new(Default::default()),
             _log_guard: log_guard,
         })
     }

@@ -184,6 +184,7 @@ pub(crate) fn diff(
             browser: &cfg.browser,
             browser_state_dir: cf_browser::default_state_dir(),
             vscode_storage: None,
+            visual_studio_settings: Vec::new(),
         });
         ("live environment".to_string(), r.payload)
     } else {

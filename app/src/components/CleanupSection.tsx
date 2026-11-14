@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { formatBytes, formatCpu } from "../format";
+import { formatBytes, formatCpu, friendlyAppName } from "../format";
 import { useCommand } from "../hooks";
 import {
   api,
@@ -187,8 +187,9 @@ function CleanupSide({
 }) {
   const [refresh, setRefresh] = useState(0);
   const key = JSON.stringify(targets);
+  // Refresh measures again; other reloads may reuse the last few seconds' sample.
   const plan = useCommand(
-    () => (targets.length ? api.previewCleanup(workspace, phase) : Promise.resolve(undefined)),
+    () => (targets.length ? api.previewCleanup(workspace, phase, refresh > 0) : Promise.resolve(undefined)),
     [workspace, phase, key, refresh],
   );
   const [picking, setPicking] = useState(false);
@@ -212,7 +213,9 @@ function CleanupSide({
           return (
             <li key={t.process}>
               <div className="cleanup-row">
-                <span className="mono">{item?.displayName ?? t.process}</span>
+                <span className="cleanup-name" title={item?.displayName ?? `${t.process}.exe`}>
+                  {friendlyAppName(t.process)}
+                </span>
                 <select
                   value={t.mode}
                   onChange={(e) => setMode(t.process, e.target.value as CloseMode)}
@@ -229,7 +232,14 @@ function CleanupSide({
                   Remove
                 </button>
               </div>
-              <div className="small">{item ? <PlanItemStatus item={item} /> : <Spinner />}</div>
+              <div className="small">{item ? <PlanItemStatus item={item} /> : <span className="skeleton skeleton-line short" />}</div>
+              {item && item.executables.length > 0 && (
+                <div className={`small ${item.executables.length > 1 ? "warn-text" : "muted"}`} title={item.executables.join("\n")}>
+                  {item.executables.length > 1
+                    ? `Matches ${item.executables.length} different programs named ${t.process}.exe: ${item.executables.join(", ")}`
+                    : `Matches ${item.executables[0]}`}
+                </div>
+              )}
             </li>
           );
         })}
@@ -285,7 +295,7 @@ function CleanupSide({
           <ul className="cleanup-confirm">
             {closing.map((i) => (
               <li key={i.process}>
-                <span className="mono">{i.displayName}</span> ·{" "}
+                {friendlyAppName(i.process)} ·{" "}
                 {i.mode === "force" ? "force close" : "close nicely"} · <PlanItemStatus item={i} />
               </li>
             ))}

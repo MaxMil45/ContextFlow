@@ -28,6 +28,7 @@ cf-core.workspace = true
 cf-diff.workspace = true
 cf-storage.workspace = true
 cf-vscode.workspace = true
+cf-vstudio.workspace = true
 cf-windows.workspace = true
 anyhow.workspace = true
 base64 = "0.22"

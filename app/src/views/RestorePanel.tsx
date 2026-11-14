@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import { CleanupResults, PlanItemStatus, PlanSummary } from "../components/CleanupSection";
-import { Badge, ErrorBanner, Spinner } from "../components/ui";
-import { restoreStatusLabel, restoreStatusTone } from "../format";
+import { Badge, ErrorBanner, Notice, Spinner } from "../components/ui";
+import { Clock, GitBranch } from "lucide-react";
+import { formatDuration, friendlyAppName, relativeTime, restoreStatusLabel, restoreStatusTone } from "../format";
 import { api, toCommandError, type CleanupPlan, type CommandError, type RestoreReport } from "../ipc/client";
 
 type Props = {
@@ -11,6 +12,10 @@ type Props = {
   label: string;
   version?: number;
   dryRun: boolean;
+  /** "switch" saves the workspace you're in first, then restores this one. */
+  mode?: "restore" | "switch";
+  /** A report that already exists (a switch from the switcher): show it, run nothing. */
+  initialReport?: RestoreReport;
   /** Restore only these programs (a retry). */
   only?: string[];
   /** From a preview: go ahead and restore for real. */
@@ -25,9 +30,9 @@ type Props = {
  * Runs one restore: live progress lines from `restore://progress`, a Cancel
  * button while it runs, then the per-application report.
  */
-export function RestorePanel({ workspace, label, version, dryRun, only, onStart, onRetry, onClose, onFinished }: Props) {
+export function RestorePanel({ workspace, label, version, dryRun, mode = "restore", initialReport, only, onStart, onRetry, onClose, onFinished }: Props) {
   const [lines, setLines] = useState<string[]>([]);
-  const [report, setReport] = useState<RestoreReport>();
+  const [report, setReport] = useState<RestoreReport | undefined>(initialReport);
   const [error, setError] = useState<CommandError>();
   const [cancelling, setCancelling] = useState(false);
   const [cleanupPlan, setCleanupPlan] = useState<CleanupPlan>();
@@ -35,7 +40,7 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
 
   useEffect(() => {
     // StrictMode runs effects twice in development; start the restore once.
-    if (started.current) return;
+    if (started.current || initialReport) return;
     started.current = true;
 
     let unlisten: (() => void) | undefined;
@@ -44,7 +49,8 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
         if (p.workspace === workspace) setLines((l) => [...l, p.message]);
       });
       try {
-        setReport(await api.restore({ workspace, version, dryRun, only }));
+        const request = { workspace, version, dryRun, only };
+        setReport(await (mode === "switch" && !dryRun && !only ? api.switchWorkspace(request) : api.restore(request)));
       } catch (e) {
         setError(toCommandError(e));
       } finally {
@@ -78,7 +84,7 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
     <section className="card restore-panel" aria-live="polite">
       <header className="card-header">
         <h3>
-          {dryRun ? "Restore preview" : only ? "Retrying" : "Restoring"} · {label}
+          {dryRun ? "Restore preview" : only ? "Retrying" : mode === "switch" ? "Switching to" : "Restoring"} · {label}
           {report && ` v${report.version}`}
         </h3>
         {running ? (
@@ -97,12 +103,7 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
         )}
       </header>
 
-      {report?.note && (
-        <blockquote className="resume-card">
-          <span className="muted">Where you left off</span>
-          {report.note}
-        </blockquote>
-      )}
+      {report && !dryRun && !report.cancelled && <WelcomeBack report={report} />}
 
       {running && (
         <div className="progress">
@@ -148,7 +149,10 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
                 <span className="muted"> Nothing was started or moved.</span>
               </>
             ) : (
-              <Badge tone={restoreStatusTone[report.overall]}>{restoreStatusLabel[report.overall]}</Badge>
+              <>
+                <Badge tone={restoreStatusTone[report.overall]}>{restoreStatusLabel[report.overall]}</Badge>
+                <span className="muted num"> Ready in {formatDuration(report.durationMs)}</span>
+              </>
             )}
             {report.cancelled && <span className="muted"> Cancelled: apps not yet started were skipped.</span>}
           </p>
@@ -162,7 +166,7 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
                     <td>
                       <Badge tone={restoreStatusTone[s.status]}>{restoreStatusLabel[s.status]}</Badge>
                     </td>
-                    <td className="mono">{s.applicationId}</td>
+                    <td title={s.applicationId}>{friendlyAppName(s.applicationId)}</td>
                     <td>{s.message}</td>
                   </tr>
                 ))}
@@ -187,5 +191,39 @@ export function RestorePanel({ workspace, label, version, dryRun, only, onStart,
         </>
       )}
     </section>
+  );
+}
+
+/** The moment you come back: what you were doing, and what happened to the workspace you left. */
+function WelcomeBack({ report }: { report: RestoreReport }) {
+  const repo = report.repositories[0];
+  const dirty = repo ? repo.staged + repo.modified + repo.untracked : 0;
+  return (
+    <>
+      <section className="resume-card" aria-label="Where you left off">
+        <span className="eyebrow">Welcome back · where you left off</span>
+        <p className="resume-note">
+          {report.note ?? "No note was saved with this version."}
+        </p>
+        <div className="resume-meta">
+          <span>
+            <Clock size={13} aria-hidden /> Saved {relativeTime(report.savedAt)}
+          </span>
+          {repo && (
+            <span>
+              <GitBranch size={13} aria-hidden /> {repo.branch ?? "detached"}
+              {dirty > 0 ? ` · ${dirty} changed ${dirty === 1 ? "file" : "files"}` : " · clean"}
+            </span>
+          )}
+        </div>
+      </section>
+      {report.switchedFrom && (
+        <Notice tone={report.autoSaveNote ? "warn" : "ok"}>
+          {report.autoSavedVersion !== null
+            ? `Saved “${report.switchedFrom}” as v${report.autoSavedVersion} before switching.`
+            : `Left “${report.switchedFrom}”. ${report.autoSaveNote ?? ""}`}
+        </Notice>
+      )}
+    </>
   );
 }

@@ -12,8 +12,8 @@
 
 mod browser;
 mod desktop;
+mod editors;
 mod resolve;
-mod vscode;
 mod window_open;
 
 use std::collections::HashSet;
@@ -236,7 +236,7 @@ struct Pending<'a> {
 /// What a deferred application needs opened.
 enum DeferredWork {
     Tabs(cf_browser::BrowserAppState),
-    Folders(cf_vscode::VsCodeState),
+    Folders(editors::EditorWork),
 }
 
 /// A browser or VS Code that is not running and has saved tabs or folders. It
@@ -325,7 +325,7 @@ pub fn restore(
         };
 
         let tabs = browser::tab_state(app);
-        let folders = vscode::folder_state(app);
+        let folders = editors::editor_work(app);
 
         if opts.dry_run {
             let msg = match (&plan, &tabs, &folders) {
@@ -339,11 +339,12 @@ pub fn restore(
                     t.tab_count()
                 ),
                 (Some(_), None, Some(f)) => {
-                    format!("would be started with {} folder(s)", f.folder_count())
+                    format!("would be started with {} {}", f.count(), f.wording.noun)
                 }
                 (None, None, Some(f)) => format!(
-                    "already running; its windows would be repositioned and any of its {} saved folder(s) that aren't open would be added",
-                    f.folder_count()
+                    "already running; its windows would be repositioned and any of its {} saved {} that aren't open would be added",
+                    f.count(),
+                    f.wording.noun
                 ),
                 (Some(_), None, None) => "would be started".to_string(),
                 (None, None, None) => "already running; its windows would be repositioned".to_string(),
@@ -393,7 +394,7 @@ pub fn restore(
                 &browser::TABS,
             ),
             (None, None, Some(f)) => (
-                Some(vscode::restore_folders(
+                Some(editors::restore_windows(
                     desktop,
                     app,
                     &app.executable_path,
@@ -405,7 +406,7 @@ pub fn restore(
                     &budget,
                     log,
                 )),
-                &browser::FOLDERS,
+                f.wording,
             ),
             _ => (None, &browser::TABS),
         };
@@ -486,7 +487,7 @@ pub fn restore(
                     d.app.application_id
                 ));
                 (
-                    vscode::restore_folders(
+                    editors::restore_windows(
                         desktop,
                         d.app,
                         &d.exe,
@@ -498,7 +499,7 @@ pub fn restore(
                         &budget,
                         log,
                     ),
-                    &browser::FOLDERS,
+                    f.wording,
                 )
             }
         };

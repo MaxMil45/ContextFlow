@@ -1,0 +1,11 @@
+[package]
+name = "cf-vstudio"
+description = "ContextFlow Visual Studio integration: which solution or folder each window has open"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

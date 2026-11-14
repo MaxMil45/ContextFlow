@@ -4,7 +4,9 @@ use chrono::{TimeDelta, Utc};
 use rusqlite::Connection;
 
 use cf_core::{hash, CaptureStatus, DisplayState, Rect, SnapshotPayload, WindowState};
-use cf_storage::{Database, ExportFile, RetentionPolicy, StorageError};
+use cf_storage::{
+    Database, ExportFile, RetentionPolicy, SnapshotOrigin, StorageError, AUTO_SAVES_KEPT,
+};
 
 fn payload(n: u32) -> SnapshotPayload {
     let mut p = SnapshotPayload::default();
@@ -276,6 +278,16 @@ fn restore_runs_are_recorded_and_deleted_with_their_snapshot() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].overall_status, "partial_success");
 
+    // The workspace-level history says what went wrong, per program.
+    let recent = db.recent_restore_runs(id, 10).unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].version, 1);
+    assert_eq!(recent[0].steps, 2);
+    assert_eq!(
+        recent[0].problems,
+        vec![("chrome".to_string(), "failed".to_string(), None)]
+    );
+
     db.delete_snapshot(id, 1).unwrap();
     let steps: i64 = db
         .raw_connection()
@@ -475,4 +487,66 @@ fn cleanup_rules_round_trip_and_the_active_workspace_is_remembered() {
         db.cleanup_config(id),
         Err(StorageError::NotFound(_))
     ));
+}
+
+#[test]
+fn auto_saves_never_push_out_versions_saved_on_purpose() {
+    // Three saves made on purpose, then a long day of switching.
+    let (mut db, id) = db_with_versions(3);
+    for i in 0..12 {
+        db.create_snapshot_as(
+            id,
+            payload(100 + i),
+            CaptureStatus::Complete,
+            SnapshotOrigin::Auto,
+        )
+        .unwrap();
+    }
+    let policy = RetentionPolicy {
+        keep_last: Some(3),
+        max_age: None,
+    };
+    db.prune(id, &policy, Utc::now()).unwrap();
+    let left = versions(&db, id);
+    for manual in [1, 2, 3] {
+        assert!(
+            left.contains(&manual),
+            "v{manual} was saved on purpose: {left:?}"
+        );
+    }
+    let autos = db.auto_versions(id).unwrap();
+    assert_eq!(
+        autos.len(),
+        AUTO_SAVES_KEPT,
+        "only the newest auto-saves stay"
+    );
+    assert!(autos.contains(&15), "the newest one is kept");
+}
+
+#[test]
+fn auto_saves_are_capped_even_without_rules() {
+    let (mut db, id) = db_with_versions(1);
+    for i in 0..(AUTO_SAVES_KEPT as u32 + 3) {
+        db.create_snapshot_as(
+            id,
+            payload(50 + i),
+            CaptureStatus::Complete,
+            SnapshotOrigin::Auto,
+        )
+        .unwrap();
+    }
+    db.prune(id, &RetentionPolicy::default(), Utc::now())
+        .unwrap();
+    assert_eq!(db.auto_versions(id).unwrap().len(), AUTO_SAVES_KEPT);
+    assert!(versions(&db, id).contains(&1));
+}
+
+#[test]
+fn descriptions_can_be_set_and_cleared() {
+    let (db, id) = db_with_versions(1);
+    let ctx = db.set_description(id, Some("  Thesis chapter 3 ")).unwrap();
+    assert_eq!(ctx.description.as_deref(), Some("Thesis chapter 3"));
+    let ctx = db.set_description(id, Some("   ")).unwrap();
+    assert_eq!(ctx.description, None);
+    assert!(db.set_description(id, Some(&"x".repeat(501))).is_err());
 }

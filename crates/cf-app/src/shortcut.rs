@@ -189,6 +189,34 @@ Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -File | ForEach-Object {
         .collect())
 }
 
+/// After a workspace is renamed, rename its desktop icons that still carry the
+/// old name (icons the user renamed themselves are left alone). Returns the
+/// icons' paths after renaming.
+pub fn rename_for_workspace(
+    workspace_id: &str,
+    old_name: &str,
+    new_name: &str,
+) -> Result<Vec<PathBuf>> {
+    let old_file = format!("{}.lnk", file_safe_name(old_name));
+    let new_file = format!("{}.lnk", file_safe_name(new_name));
+    let mut out = Vec::new();
+    for path in find_for_workspace(workspace_id, None)? {
+        let matches_old = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .is_some_and(|f| f.eq_ignore_ascii_case(&old_file));
+        let target = path.with_file_name(&new_file);
+        if matches_old && !target.exists() {
+            std::fs::rename(&path, &target)
+                .with_context(|| format!("could not rename {}", path.display()))?;
+            out.push(target);
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(out)
+}
+
 /// Send shortcuts to the Recycle Bin, so deleting one is not final.
 pub fn recycle(paths: &[PathBuf]) -> Result<()> {
     if paths.is_empty() {

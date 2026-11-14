@@ -49,6 +49,9 @@ pub struct RunningApp {
     pub cpu_percent: f32,
     /// Set when cleanup would refuse to close it.
     pub protected: Option<String>,
+    /// The distinct executable files running under this name, so a rule can
+    /// show exactly what it would close (two programs can share a name).
+    pub executables: Vec<String>,
 }
 
 fn stem(name: &str) -> String {
@@ -117,7 +120,13 @@ pub fn running_apps(procs: &dyn Processes, sample: Duration) -> Vec<RunningApp> 
             protected: protected_reason(&p.name, p.path.as_deref())
                 .or_else(|| hosts.contains(&stem(&p.name)).then_some(HOST_REASON))
                 .map(String::from),
+            executables: Vec::new(),
         });
+        if let Some(path) = &p.path {
+            if !g.executables.iter().any(|e| e.eq_ignore_ascii_case(path)) {
+                g.executables.push(path.clone());
+            }
+        }
         g.process_count += 1;
         g.ram_bytes += p.ram_bytes;
         g.cpu_percent += (used as f64 / available_ticks * 100.0) as f32;
@@ -156,6 +165,8 @@ pub struct PlanItem {
     pub display_name: String,
     pub mode: CloseMode,
     pub action: PlannedAction,
+    /// Executable files the rule matches right now (empty when not running).
+    pub executables: Vec<String>,
 }
 
 /// What a cleanup would do, and what it would give back.
@@ -220,6 +231,7 @@ pub fn plan(targets: &[CleanupTarget], keep: &HashSet<String>, apps: &[RunningAp
             display_name,
             mode: t.mode,
             action,
+            executables: running.map(|a| a.executables.clone()).unwrap_or_default(),
         });
     }
     CleanupPlan {

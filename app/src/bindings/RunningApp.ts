@@ -7,4 +7,8 @@ export type RunningApp = { process: string, displayName: string, processCount: n
 /**
  * Why cleanup would refuse to close it, if it would.
  */
-protected: string | null, };
+protected: string | null, 
+/**
+ * The executable files running under this name.
+ */
+executables: Array<string>, };

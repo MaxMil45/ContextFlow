@@ -20,7 +20,11 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     // Two pages: the app, and the tiny framework-free quick-capture card.
     rollupOptions: {
-      input: { main: resolve(__dirname, "index.html"), toast: resolve(__dirname, "toast.html") },
+      input: {
+        main: resolve(__dirname, "index.html"),
+        toast: resolve(__dirname, "toast.html"),
+        switcher: resolve(__dirname, "switcher.html"),
+      },
     },
   },
 });

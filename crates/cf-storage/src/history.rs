@@ -22,6 +22,17 @@ pub struct RestoreStepRecord {
 /// Restore runs kept per snapshot; older ones are deleted as new ones arrive.
 const MAX_RUNS_PER_SNAPSHOT: i64 = 50;
 
+/// One past restore of a workspace, with what went wrong in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreRunRecord {
+    pub started_at: DateTime<Utc>,
+    pub version: u32,
+    pub overall_status: String,
+    pub steps: usize,
+    /// (program, status, message) of every step that didn't succeed.
+    pub problems: Vec<(String, String, Option<String>)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreRunSummary {
     pub started_at: DateTime<Utc>,
@@ -105,5 +116,51 @@ impl Database {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// The most recent restores of a workspace (any version), newest first.
+    pub fn recent_restore_runs(
+        &self,
+        context_id: cf_core::ContextId,
+        limit: u32,
+    ) -> Result<Vec<RestoreRunRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.id, r.started_at, s.version_number, r.overall_status,
+                    (SELECT COUNT(*) FROM restore_steps t WHERE t.restore_run_id = r.id)
+             FROM restore_runs r JOIN context_snapshots s ON s.id = r.snapshot_id
+             WHERE s.context_id = ?1 ORDER BY r.started_at DESC LIMIT ?2",
+        )?;
+        let runs = stmt
+            .query_map(params![context_id.to_string(), limit], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, u32>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut problems = self.conn.prepare(
+            "SELECT component_identifier, status, error_message FROM restore_steps
+             WHERE restore_run_id = ?1 AND status NOT IN ('success', 'skipped') ORDER BY id",
+        )?;
+        let mut out = Vec::new();
+        for (id, started, version, overall, steps) in runs {
+            let started_at = DateTime::parse_from_rfc3339(&started)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| crate::StorageError::Integrity(format!("restore run time: {e}")))?;
+            let list = problems
+                .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            out.push(RestoreRunRecord {
+                started_at,
+                version,
+                overall_status: overall,
+                steps: steps as usize,
+                problems: list,
+            });
+        }
+        Ok(out)
     }
 }

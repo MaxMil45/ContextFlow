@@ -23,8 +23,9 @@ const WIDTH: f64 = 380.0;
 const HEIGHT: f64 = 92.0;
 /// Gap to the screen corner, in logical pixels.
 const MARGIN: f64 = 16.0;
-/// How long a result stays on screen.
+/// How long a result stays on screen; problems stay longer so they can be read.
 const LINGER: Duration = Duration::from_millis(3200);
+const LINGER_PROBLEM: Duration = Duration::from_millis(9000);
 
 /// Each message gets a number, so an older one never hides a newer one.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -98,8 +99,13 @@ pub fn show(app: &AppHandle, kind: &'static str, title: &str, body: &str) -> boo
     );
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     if kind != "saving" {
+        let linger = if kind == "error" {
+            LINGER_PROBLEM
+        } else {
+            LINGER
+        };
         std::thread::spawn(move || {
-            std::thread::sleep(LINGER);
+            std::thread::sleep(linger);
             if GENERATION.load(Ordering::SeqCst) == generation {
                 let _ = window.hide();
             }

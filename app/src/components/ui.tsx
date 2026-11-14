@@ -25,7 +25,7 @@ import {
 } from "react";
 
 import type { Tone } from "../format";
-import type { CommandError } from "../ipc/client";
+import { api, type CommandError } from "../ipc/client";
 
 // ------------------------------------------------------------ small pieces
 
@@ -56,6 +56,11 @@ export function ErrorBanner({ error, onDismiss }: { error: CommandError; onDismi
       <span>
         <XCircle size={16} aria-hidden />
         {error.message}
+      </span>
+      <span className="banner-actions">
+        <button className="link" onClick={() => void api.openFolder("logs").catch(() => {})}>
+          Open logs
+        </button>
       </span>
       {onDismiss && (
         <button className="ghost icon" onClick={onDismiss} aria-label="Dismiss" data-tip="Dismiss">
@@ -155,7 +160,47 @@ export function workspaceColor(id: string): string {
   return `hsl(${h % 360} 52% 50%)`;
 }
 
+// Custom workspace pictures, fetched once per workspace and shared by every
+// place that shows the workspace (sidebar, page header).
+const iconCache = new Map<string, string | null>();
+const iconWaiters = new Map<string, Promise<void>>();
+const iconListeners = new Set<() => void>();
+
+/** Forget a workspace's picture (after it changes) so every surface reloads it. */
+export function invalidateWorkspaceIcon(id: string) {
+  iconCache.delete(id);
+  iconWaiters.delete(id);
+  iconListeners.forEach((l) => l());
+}
+
+export function useWorkspaceIcon(id: string): string | null {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const l = () => bump((n) => n + 1);
+    iconListeners.add(l);
+    return () => void iconListeners.delete(l);
+  }, []);
+  useEffect(() => {
+    if (iconCache.has(id) || iconWaiters.has(id)) return;
+    const p = api
+      .getWorkspaceIcon(id)
+      .then((i) => void iconCache.set(id, i.custom ? i.dataUrl : null))
+      .catch(() => void iconCache.set(id, null))
+      .finally(() => iconListeners.forEach((l) => l()));
+    iconWaiters.set(id, p);
+  }, [id]);
+  return iconCache.get(id) ?? null;
+}
+
 export function WorkspaceDot({ id, name }: { id: string; name: string }) {
+  const picture = useWorkspaceIcon(id);
+  if (picture) {
+    return (
+      <span className="ws-dot ws-dot-picture" aria-hidden>
+        <img src={picture} alt="" />
+      </span>
+    );
+  }
   return (
     <span className="ws-dot" style={{ background: workspaceColor(id) }} aria-hidden>
       {name.trim().charAt(0) || "?"}

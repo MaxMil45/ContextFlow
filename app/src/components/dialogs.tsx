@@ -7,6 +7,7 @@ import {
   type DeleteOutcome,
   type TrustReview,
   type WorkspaceSummary,
+  type WorkspaceUpdate,
 } from "../ipc/client";
 import { plural } from "../format";
 import { ErrorBanner, Spinner } from "./ui";
@@ -134,48 +135,63 @@ export function ConfirmDialog({
   );
 }
 
-export function RenameDialog({
+/** Name and description together. A rename also renames the desktop icon. */
+export function EditWorkspaceDialog({
   workspace,
-  onRenamed,
+  onSaved,
   onClose,
 }: {
   workspace: WorkspaceSummary;
-  onRenamed: (renamed: WorkspaceSummary) => void;
+  onSaved: (update: WorkspaceUpdate) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(workspace.name);
+  const [description, setDescription] = useState(workspace.description ?? "");
   const { busy, error, run } = useAction(onClose);
-  const unchanged = name.trim() === workspace.name;
+  const unchanged = name.trim() === workspace.name && description.trim() === (workspace.description ?? "");
+  const tooLong = description.trim().length > 500;
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (unchanged || !name.trim()) return;
-    void run(async () => onRenamed(await api.renameWorkspace(workspace.id, name.trim())));
+    if (unchanged || !name.trim() || tooLong) return;
+    void run(async () =>
+      onSaved(await api.updateWorkspace(workspace.id, name.trim(), description.trim() || null)),
+    );
   }
 
   return (
-    <Modal title="Rename workspace" onClose={onClose} busy={busy}>
-      <form onSubmit={submit}>
-        <input
-          className="wide"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label="Workspace name"
-          maxLength={120}
-          disabled={busy}
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <p className="muted small">
-          Snapshots and the pinned version are kept. An existing desktop icon keeps working under its old
-          name; use Desktop icon to make one with the new name.
-        </p>
+    <Modal title="Edit workspace" onClose={onClose} busy={busy}>
+      <form className="modal-body" onSubmit={submit}>
+        <label className="field">
+          <span className="field-label">Name</span>
+          <input
+            className="wide"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={120}
+            disabled={busy}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">Description</span>
+          <input
+            className="wide"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What this workspace is for (optional)"
+            disabled={busy}
+          />
+          {tooLong && <span className="small" style={{ color: "var(--bad)" }}>At most 500 characters.</span>}
+        </label>
+        <p className="muted small">Snapshots, the pinned version and its desktop icon are kept.</p>
         {error && <ErrorBanner error={error} />}
         <div className="modal-actions">
           <button type="button" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy || unchanged || !name.trim()}>
-            {busy ? "Renaming…" : "Rename"}
+          <button type="submit" className="primary" disabled={busy || unchanged || !name.trim() || tooLong}>
+            {busy ? "Saving…" : "Save"}
           </button>
         </div>
       </form>
@@ -270,6 +286,7 @@ export function DeleteWorkspaceDialog({
 }) {
   const [shortcuts, setShortcuts] = useState<string[]>();
   const [alsoShortcuts, setAlsoShortcuts] = useState(true);
+  const [exportFirst, setExportFirst] = useState(false);
   const { busy, error, run } = useAction(onClose);
 
   useEffect(() => {
@@ -308,6 +325,17 @@ export function DeleteWorkspaceDialog({
             To keep the workspace but hide it, archive it instead.
           </p>
         )}
+        {snapshotCount > 0 && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={exportFirst}
+              onChange={(e) => setExportFirst(e.target.checked)}
+              disabled={busy}
+            />
+            <span>Export a copy to a file first</span>
+          </label>
+        )}
         {shortcuts && shortcuts.length > 0 && !alsoShortcuts && (
           <p className="muted small">The icon will stop working; you'd need to delete it yourself.</p>
         )}
@@ -321,7 +349,14 @@ export function DeleteWorkspaceDialog({
           className="danger-fill"
           disabled={busy}
           onClick={() =>
-            run(async () => onDeleted(await api.deleteWorkspace(workspace, alsoShortcuts && !!shortcuts?.length)))
+            run(async () => {
+              if (exportFirst) {
+                // Cancelling the save dialog cancels the delete too.
+                const saved = await api.exportWorkspaces([workspace]);
+                if (!saved) throw { code: "conflict", message: "Not deleted: the export was cancelled." };
+              }
+              onDeleted(await api.deleteWorkspace(workspace, alsoShortcuts && !!shortcuts?.length));
+            })
           }
         >
           {busy ? "Deleting…" : "Delete workspace"}

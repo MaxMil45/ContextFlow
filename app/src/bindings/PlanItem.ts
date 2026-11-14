@@ -2,4 +2,8 @@
 import type { CloseMode } from "./CloseMode";
 import type { PlannedAction } from "./PlannedAction";
 
-export type PlanItem = { process: string, displayName: string, mode: CloseMode, action: PlannedAction, };
+export type PlanItem = { process: string, displayName: string, mode: CloseMode, action: PlannedAction, 
+/**
+ * Executable files the rule matches right now.
+ */
+executables: Array<string>, };

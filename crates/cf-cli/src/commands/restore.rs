@@ -20,6 +20,8 @@ pub(crate) fn restore_cmd(
     dry_run: bool,
     timeout: u64,
     no_cleanup: bool,
+    no_save: bool,
+    cfg: &cf_config::Config,
     max_tabs_per_window: usize,
     overall_timeout: Duration,
 ) -> Result<()> {
@@ -33,6 +35,7 @@ pub(crate) fn restore_cmd(
         overall_timeout,
         cancel: None,
         skip_cleanup: no_cleanup,
+        save_before_leaving: (!no_save).then(|| cfg.clone()),
     };
     let outcome = session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
     let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
@@ -45,6 +48,13 @@ pub(crate) fn restore_cmd(
     );
     if dry_run && !no_cleanup {
         super::cleanup::print_restore_previews(db, &ctx);
+    }
+    if let Some(from) = &outcome.left.from {
+        match (outcome.left.saved_version, &outcome.left.note) {
+            (Some(v), _) => println!("Saved '{from}' as v{v} before switching."),
+            (None, Some(why)) => println!("Left '{from}': {why}"),
+            (None, None) => {}
+        }
     }
     for report in &outcome.cleanups {
         super::cleanup::print_report(report);

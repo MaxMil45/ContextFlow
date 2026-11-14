@@ -54,6 +54,7 @@ fn short_hash(hash: &str) -> String {
 
 fn entry_from_summary(s: &SnapshotSummary) -> SnapshotEntry {
     SnapshotEntry {
+        auto: false,
         version: s.version,
         created_at: s.created_at.to_rfc3339(),
         short_hash: short_hash(&s.hash),
@@ -76,11 +77,17 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
             tab_count: cf_browser::BrowserAppState::from_value(&a.adapter_state)
                 .map_or(0, |b| b.tab_count() as u32),
             folder_count: cf_vscode::VsCodeState::from_value(&a.adapter_state)
-                .map_or(0, |v| v.folder_count() as u32),
+                .map(|v| v.folder_count() as u32)
+                .or_else(|| {
+                    cf_vstudio::VisualStudioState::from_value(&a.adapter_state)
+                        .map(|v| v.path_count() as u32)
+                })
+                .unwrap_or(0),
         })
         .collect();
     SnapshotDetail {
         entry: SnapshotEntry {
+            auto: false,
             version: s.version,
             created_at: s.created_at.to_rfc3339(),
             short_hash: short_hash(&s.hash),
@@ -192,10 +199,14 @@ pub async fn list_snapshots(
         let db = open(&path)?;
         let ctx = db.find_context(&workspace)?;
         // Newest first, as storage returns them.
+        let autos = db.auto_versions(ctx.id)?;
         Ok(db
             .list_snapshots(ctx.id)?
             .iter()
-            .map(entry_from_summary)
+            .map(|s| SnapshotEntry {
+                auto: autos.contains(&s.version),
+                ..entry_from_summary(s)
+            })
             .collect())
     })
     .await
@@ -273,6 +284,7 @@ pub(crate) fn do_capture(
         browser: &cfg.browser,
         browser_state_dir: cf_browser::default_state_dir(),
         vscode_storage: cf_vscode::default_storage_json(),
+        visual_studio_settings: cf_vstudio::default_settings_files(),
     });
 
     let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
@@ -322,10 +334,41 @@ pub async fn restore_workspace(
     state: State<'_, AppState>,
     request: RestoreRequest,
 ) -> CmdResult<RestoreReport> {
+    run_restore(app, &state, request, Feedback::Window).await
+}
+
+/// Switch to a workspace: save the one you are in (unless turned off), leave it,
+/// then restore the target. Every real restore does this now (the desktop icon
+/// and the CLI too); the separate command keeps the UI's intent explicit.
+#[tauri::command]
+pub async fn switch_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: RestoreRequest,
+) -> CmdResult<RestoreReport> {
+    run_restore(app, &state, request, Feedback::Window).await
+}
+
+/// How a restore reports while it runs and when it ends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Feedback {
+    /// From the window: progress lines there, a notification if it isn't in front.
+    Window,
+    /// From the switcher: progress and the result on the on-screen card.
+    Card,
+}
+
+pub(crate) async fn run_restore(
+    app: AppHandle,
+    state: &AppState,
+    request: RestoreRequest,
+    feedback: Feedback,
+) -> CmdResult<RestoreReport> {
     let path = state.paths.db.clone();
     let cfg = state.config();
     let notify_app = app.clone();
     let dry_run = request.dry_run.unwrap_or(false);
+    let started = std::time::Instant::now();
 
     // Register a cancel flag for real restores. The cross-process lock inside
     // `cf_app::session::restore_workspace` still guards against the CLI and
@@ -345,11 +388,24 @@ pub async fn restore_workspace(
             ));
         }
         *slot = Some(cancel.clone());
-        Some(CancelSlotGuard(&state))
+        Some(CancelSlotGuard(state))
     };
 
     let result = blocking(move || {
         let mut db = open(&path)?;
+        let workspace = request.workspace.clone();
+        let mut log = |m: &str| {
+            if feedback == Feedback::Card {
+                crate::overlay::show(&app, "saving", "Switching…", m);
+            }
+            let _ = app.emit(
+                RESTORE_PROGRESS,
+                RestoreProgress {
+                    workspace: workspace.clone(),
+                    message: m.to_string(),
+                },
+            );
+        };
         let args = RestoreArgs {
             version: request.version,
             only: request.only.clone().unwrap_or_default(),
@@ -359,21 +415,15 @@ pub async fn restore_workspace(
             overall_timeout: cfg.timeouts.restore_overall(),
             cancel: Some(cancel.clone()),
             skip_cleanup: false,
-        };
-        let workspace = request.workspace.clone();
-        let mut log = |m: &str| {
-            let _ = app.emit(
-                RESTORE_PROGRESS,
-                RestoreProgress {
-                    workspace: workspace.clone(),
-                    message: m.to_string(),
-                },
-            );
+            // Every real restore of another workspace is a switch, wherever it starts.
+            save_before_leaving: Some(cfg.clone()),
         };
         let outcome =
             cf_app::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;
+        let left = outcome.left;
         let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
         Ok(RestoreReport {
+            workspace_id: ctx.id.to_string(),
             workspace: ctx.name,
             version: snap.version,
             dry_run,
@@ -392,10 +442,16 @@ pub async fn restore_workspace(
                 })
                 .collect(),
             cleanups: outcome.cleanups.into_iter().map(Into::into).collect(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            saved_at: snap.created_at.to_rfc3339(),
+            repositories: detail(&snap).repositories,
+            switched_from: left.from,
+            auto_saved_version: left.saved_version,
+            auto_save_note: left.note,
         })
     })
     .await;
-    if let Ok(report) = &result {
+    if let (Feedback::Window, Ok(report)) = (feedback, &result) {
         crate::shell::notify_restore(&notify_app, report);
     }
     result
@@ -475,6 +531,79 @@ pub async fn rename_workspace(
         let renamed = db.rename_context(ctx.id, &new_name)?;
         tracing::info!("workspace renamed from the app");
         summarize(&db, &renamed)
+    })
+    .await
+}
+
+/// Change a workspace's name and description together. Its desktop icons that
+/// still carry the old name are renamed to match.
+#[tauri::command]
+pub async fn update_workspace(
+    state: State<'_, AppState>,
+    workspace: String,
+    name: String,
+    description: Option<String>,
+) -> CmdResult<WorkspaceUpdate> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let mut icon_error = None;
+        let name = name.trim();
+        if name != ctx.name {
+            db.rename_context(ctx.id, name)?;
+            if let Err(e) =
+                cf_app::shortcut::rename_for_workspace(&ctx.id.to_string(), &ctx.name, name)
+            {
+                tracing::warn!("desktop icon not renamed: {e:#}");
+                icon_error = Some(format!("{e:#}"));
+            }
+        }
+        let updated = db.set_description(ctx.id, description.as_deref())?;
+        tracing::info!("workspace edited from the app");
+        Ok(WorkspaceUpdate {
+            workspace: summarize(&db, &updated)?,
+            icon_error,
+        })
+    })
+    .await
+}
+
+/// The most recent restores of a workspace, newest first, with what went wrong.
+#[tauri::command]
+pub async fn list_restore_runs(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<Vec<RestoreRunEntry>> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let status = |s: &str| -> RestoreStatus {
+            // Stored with `RestoreStatus::as_str`, which is its serde name.
+            serde_json::from_value::<cf_core::RestoreStatus>(serde_json::Value::from(s))
+                .map(Into::into)
+                .unwrap_or(RestoreStatus::Failed)
+        };
+        Ok(db
+            .recent_restore_runs(ctx.id, 10)?
+            .into_iter()
+            .map(|r| RestoreRunEntry {
+                started_at: r.started_at.to_rfc3339(),
+                version: r.version,
+                overall: status(&r.overall_status),
+                steps: r.steps as u32,
+                problems: r
+                    .problems
+                    .into_iter()
+                    .map(|(app, st, message)| RestoreProblem {
+                        application_id: app,
+                        status: status(&st),
+                        message,
+                    })
+                    .collect(),
+            })
+            .collect())
     })
     .await
 }

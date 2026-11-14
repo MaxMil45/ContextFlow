@@ -85,10 +85,20 @@ pub(crate) fn print_report(report: &CleanupReport) {
     }
 }
 
-pub(crate) fn leave(db: &Database) -> Result<()> {
-    match session::leave_active_workspace(db, &mut |m| println!("  {m}..."))? {
+pub(crate) fn leave(db: &mut Database, cfg: &cf_config::Config) -> Result<()> {
+    let out = session::leave_active_workspace(db, Some(cfg), &mut |m| println!("  {m}..."))?;
+    let Some(name) = out.workspace else {
+        println!("No workspace is active.");
+        return Ok(());
+    };
+    match (out.saved.saved_version, &out.saved.note) {
+        (Some(v), _) => println!("Saved '{name}' as v{v}."),
+        (None, Some(why)) => println!("'{name}' was not saved: {why}"),
+        (None, None) => {}
+    }
+    match out.cleanup {
         Some(report) => print_report(&report),
-        None => println!("No workspace is active, or it has no 'when leaving' rules."),
+        None => println!("Left '{name}'. It has no 'when leaving' rules."),
     }
     Ok(())
 }

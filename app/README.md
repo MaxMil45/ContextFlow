@@ -1,9 +1,9 @@
-# ContextFlow desktop app (Phase 5)
+# ContextFlow desktop app
 
 Tauri 2 + React 19 + TypeScript (Vite). The Rust side (`src-tauri`, crate
-`contextflow-app`) is a thin shell: every behaviour lives in the `cf-*` crates
-and is shared with the CLI, so the app and `contextflow` read the same config
-and database (`CONTEXTFLOW_DB` / `CONTEXTFLOW_CONFIG` work for both).
+`contextflow-app`) is a thin shell over the `cf-app` service crate and the other
+`cf-*` crates, so the app, the CLI and desktop icons behave the same and share
+one config and database (`CONTEXTFLOW_DB` / `CONTEXTFLOW_CONFIG` work for all).
 
 ## Run
 
@@ -15,14 +15,71 @@ npm install
 npm run tauri dev
 ```
 
+The window uses the native Windows frame (Snap Layouts, Alt+Space menu). The
+first `tauri dev` compiles the whole workspace and can take a few minutes before
+the window appears.
+
+## What is in the window
+
+* **Sidebar:** workspaces with their picture or colour, Ctrl+K search, an
+  Archived group, Settings and Keyboard shortcuts.
+* **Workspace page:** one main action. *Switch to this* on a workspace you're
+  not in (save where you are, run its leave rules, bring this one back) or
+  *Restore* on the one you're in. Tabs: **Overview** (where you left off, what
+  comes back), **Focus rules** (programs closed on entering or leaving),
+  **History** (versions, auto-saves marked, recent restores).
+* **Settings:** General (switcher, auto-save, quick capture), Capture, Restore,
+  Your data, Advanced (About, logging).
+
+Two small extra pages, each without React so they stay light:
+`toast.html` (the corner card, created hidden at start-up) and
+`switcher.html` (the Ctrl+Alt+W picker, created on first use).
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `src-tauri/src/commands.rs` | Workspace, snapshot, capture and restore commands |
+| `src-tauri/src/cleanup_commands.rs` | Focus rules: running programs, previews, leave |
+| `src-tauri/src/review.rs` | Capture review and compare |
+| `src-tauri/src/settings.rs` | Settings, browser setup, backup, export, import, retention |
+| `src-tauri/src/switcher.rs` | The global switcher window and quick switch |
+| `src-tauri/src/hotkey.rs` | Global shortcuts: quick capture and the switcher |
+| `src-tauri/src/overlay.rs` | The corner card |
+| `src-tauri/src/shell.rs` | Tray and notifications |
+| `src-tauri/src/dto/` | IPC payloads (`workspace`, `cleanup`, `settings`), separate from `cf-core` |
+| `src-tauri/src/error.rs` | `CommandError { code, message }`, the only error the UI sees |
+| `src/bindings/` | **Generated** TypeScript types. Do not edit |
+| `src/ipc/client.ts` | Typed `invoke` wrappers and event listeners |
+| `src/views/`, `src/components/` | The React UI |
+
+After changing a struct in `dto/` or `error.rs`, regenerate the TS types and
+commit them (CI fails if they are stale):
+
+```bash
+npm run bindings
+```
+
+## Switching and auto-save
+
+Every real restore of another workspace is a switch, wherever it starts (the
+app, the switcher, the tray, a desktop icon, `contextflow restore`). Before the
+leave rules run, `cf_app::autosave` saves the workspace being left, unless:
+
+* none of its saved programs are open (an emptied desktop never replaces a save),
+* nothing that matters changed (window titles and capture metadata don't count),
+* *Save the workspace I'm leaving* is off in Settings, or `--no-save` is passed.
+
+Auto-saves keep the last note and are counted separately by retention: the
+newest five are kept, and they never push out versions you saved on purpose.
+
 ## Installer
 
 ```bash
-powershell -File scriptsuild-installer.ps1
+powershell -File scripts\build-installer.ps1
 ```
 
-Produces `targeteleaseundle
-sis\ContextFlow_<version>_x64-setup.exe`: a
+Produces `target\release\bundle\nsis\ContextFlow_<version>_x64-setup.exe`: a
 per-user installer (no admin prompt, installs under `%LOCALAPPDATA%\ContextFlow`).
 It puts four programs side by side: `contextflow-app.exe` (the app),
 `contextflow.exe` (the CLI), `contextflow-launch.exe` (what desktop icons run)
@@ -33,46 +90,7 @@ browser ("Load unpacked") is still the user's one manual step.
 
 The bundled programs are listed in `src-tauri/tauri.bundle.conf.json`, not in
 `tauri.conf.json`, so ordinary dev builds and CI don't need them. The first build
-downloads NSIS (cached in `%LOCALAPPDATA%	auri`). The installer is not code
-signed yet, so SmartScreen will warn on first run.
-
-## Layout
-
-| Path | Role |
-|---|---|
-| `src-tauri/src/commands.rs` | Tauri commands. Thin wrappers; blocking work runs on the blocking pool |
-| `src-tauri/src/dto.rs` | IPC payloads, separate from the `cf-core` model |
-| `src-tauri/src/error.rs` | `CommandError { code, message }`, the only error the UI sees |
-| `src-tauri/src/state.rs` | Paths and config, resolved exactly like the CLI |
-| `src-tauri/src/tray.rs` | Tray icon (Open / Quit) |
-| `src/bindings/` | **Generated** TypeScript types. Do not edit |
-| `src/ipc/client.ts` | Typed `invoke` wrappers and the `restore://progress` listener |
-| `src/views/` | Sidebar, workspace detail (capture, history, snapshot), restore panel |
-
-## IPC contract
-
-| Command | Purpose |
-|---|---|
-| `app_info` | Version and data locations |
-| `list_workspaces`, `create_workspace` | Workspaces, most recently used first |
-| `list_snapshots`, `get_snapshot` | Version history and one snapshot's contents |
-| `capture_workspace` | Same flow as `contextflow capture` (reuses repos, auto-prune) |
-| `restore_workspace` | Restore or dry run; emits `restore://progress` lines |
-| `cancel_restore` | Stops before the next app starts; never closes anything |
-
-After changing a struct in `dto.rs` or `error.rs`, regenerate the TS types and
-commit them (CI fails if they are stale):
-
-```bash
-npm run bindings
-```
-
-## Settings and data
-
-Settings are saved to `config.toml` (the same file the CLI reads, found with
-`CONTEXTFLOW_CONFIG`). The app rewrites the file when you save, so comments in it
-are not kept. Backups, exports, imports and the integrity check use the same code
-as `contextflow backup/export/import/verify` (`cf_cli::maintenance`).
+downloads NSIS (cached in `%LOCALAPPDATA%\tauri`).
 
 ## Signing
 
@@ -80,11 +98,20 @@ Set `CONTEXTFLOW_SIGN_THUMBPRINT` (the SHA-1 thumbprint of a code-signing
 certificate in your Windows certificate store) before running
 `scripts\build-installer.ps1`; optionally `CONTEXTFLOW_SIGN_TIMESTAMP_URL`. In CI,
 add the thumbprint as the `CONTEXTFLOW_SIGN_THUMBPRINT` secret on a runner that has
-the certificate installed. Without it the installer is unsigned.
+the certificate installed. Without it the installer is unsigned and SmartScreen
+warns on first run.
+
+## Settings and data
+
+Settings are saved to `config.toml` (the same file the CLI reads). The app
+rewrites the file when you save, so comments in it are not kept. Backups,
+exports, imports and the integrity check use the same code as
+`contextflow backup/export/import/verify` (`cf_app::maintenance`).
 
 ## Not done yet
 
-* A signing certificate (the build is ready for one).
+* A signing certificate, an auto-updater and a store-listed browser extension.
 * A clean-VM install and uninstall run of the installer.
-* The installer does not add `contextflow.exe` to your PATH; run it from the install folder.
+* Programs are told apart by executable name, so Focus rules show which files a
+  rule matches and warn when one name matches several programs.
 * `app-icon.png` is a placeholder; replace it and run `npx tauri icon app-icon.png`.

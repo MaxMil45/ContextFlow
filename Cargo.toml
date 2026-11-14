@@ -18,6 +18,7 @@ cf-windows = { path = "crates/cf-windows" }
 cf-config = { path = "crates/cf-config" }
 cf-browser = { path = "crates/cf-browser" }
 cf-vscode = { path = "crates/cf-vscode" }
+cf-vstudio = { path = "crates/cf-vstudio" }
 cf-engine = { path = "crates/cf-engine" }
 cf-cli = { path = "crates/cf-cli" }
 cf-cleanup = { path = "crates/cf-cleanup" }

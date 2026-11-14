@@ -120,6 +120,8 @@ pub struct RunningApp {
     pub cpu_percent: f32,
     /// Why cleanup would refuse to close it, if it would.
     pub protected: Option<String>,
+    /// The executable files running under this name.
+    pub executables: Vec<String>,
 }
 
 impl From<cf_cleanup::RunningApp> for RunningApp {
@@ -131,6 +133,7 @@ impl From<cf_cleanup::RunningApp> for RunningApp {
             ram_bytes: a.ram_bytes,
             cpu_percent: a.cpu_percent,
             protected: a.protected,
+            executables: a.executables,
         }
     }
 }
@@ -165,6 +168,8 @@ pub struct PlanItem {
     pub display_name: String,
     pub mode: CloseMode,
     pub action: PlannedAction,
+    /// Executable files the rule matches right now.
+    pub executables: Vec<String>,
 }
 
 /// What a cleanup would do, and what it would give back.
@@ -189,6 +194,7 @@ impl From<cf_cleanup::CleanupPlan> for CleanupPlan {
                 .map(|i| PlanItem {
                     process: i.process,
                     display_name: i.display_name,
+                    executables: i.executables,
                     mode: i.mode.into(),
                     action: match i.action {
                         cf_cleanup::PlannedAction::Close {
@@ -279,4 +285,18 @@ impl From<cf_app::session::CleanupReport> for CleanupReport {
                 .collect(),
         }
     }
+}
+
+/// The result of leaving a workspace without entering another.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct LeaveReport {
+    /// The workspace that was left; `null` when none was active.
+    pub workspace: Option<String>,
+    pub cleanup: Option<CleanupReport>,
+    /// The version saved before leaving, if one was.
+    pub saved_version: Option<u32>,
+    /// Why nothing was saved, when it wasn't.
+    pub save_note: Option<String>,
 }

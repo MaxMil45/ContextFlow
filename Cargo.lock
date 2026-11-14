@@ -544,6 +544,7 @@ dependencies = [
  "cf-git",
  "cf-storage",
  "cf-vscode",
+ "cf-vstudio",
  "cf-windows",
  "chrono",
  "hex",
@@ -596,6 +597,7 @@ dependencies = [
  "cf-git",
  "cf-storage",
  "cf-vscode",
+ "cf-vstudio",
  "cf-windows",
  "chrono",
  "clap",
@@ -649,6 +651,7 @@ dependencies = [
  "cf-browser",
  "cf-core",
  "cf-vscode",
+ "cf-vstudio",
  "cf-windows",
  "serde",
  "serde_json",
@@ -687,6 +690,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "cf-vstudio"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -834,6 +845,7 @@ dependencies = [
  "cf-diff",
  "cf-storage",
  "cf-vscode",
+ "cf-vstudio",
  "cf-windows",
  "chrono",
  "serde",

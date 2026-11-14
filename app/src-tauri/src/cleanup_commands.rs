@@ -74,11 +74,13 @@ pub async fn preview_cleanup(
     state: State<'_, AppState>,
     workspace: String,
     phase: CleanupPhase,
+    fresh: Option<bool>,
 ) -> CmdResult<CleanupPlan> {
     let path = state.paths.db.clone();
     blocking(move || {
         let db = open(&path)?;
-        Ok(cf_app::session::preview_cleanup(&db, &workspace, phase.into())?.into())
+        let fresh = fresh.unwrap_or(false);
+        Ok(cf_app::session::preview_cleanup_sampled(&db, &workspace, phase.into(), fresh)?.into())
     })
     .await
 }
@@ -99,13 +101,20 @@ pub async fn run_cleanup_now(
     .await
 }
 
-/// Leave the active workspace: run its "when leaving" cleanup and clear it.
+/// Leave the active workspace: save it, run its "when leaving" cleanup and clear it.
 #[tauri::command]
-pub async fn leave_workspace(state: State<'_, AppState>) -> CmdResult<Option<CleanupReport>> {
+pub async fn leave_workspace(state: State<'_, AppState>) -> CmdResult<LeaveReport> {
     let path = state.paths.db.clone();
+    let cfg = state.config();
     blocking(move || {
-        let db = open(&path)?;
-        Ok(cf_app::session::leave_active_workspace(&db, &mut |_| {})?.map(Into::into))
+        let mut db = open(&path)?;
+        let out = cf_app::session::leave_active_workspace(&mut db, Some(&cfg), &mut |_| {})?;
+        Ok(LeaveReport {
+            workspace: out.workspace,
+            cleanup: out.cleanup.map(Into::into),
+            saved_version: out.saved.saved_version,
+            save_note: out.saved.note,
+        })
     })
     .await
 }

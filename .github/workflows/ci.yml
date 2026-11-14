@@ -53,6 +53,11 @@ jobs:
       - name: TypeScript bindings up to date
         run: git diff --exit-code -- app/src/bindings
 
+      # The UI must still compile against the bindings `cargo test` just wrote.
+      - name: Typecheck the UI against the bindings
+        working-directory: app
+        run: npm run typecheck
+
       - name: Build release CLI
         run: cargo build --release -p cf-cli
 

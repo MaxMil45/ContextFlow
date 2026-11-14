@@ -85,6 +85,9 @@ pub(crate) enum Command {
         /// Don't close any programs, whatever the workspaces' cleanup rules say.
         #[arg(long)]
         no_cleanup: bool,
+        /// Don't save the workspace you are leaving first.
+        #[arg(long)]
+        no_save: bool,
     },
 
     /// Programs a workspace closes when you enter or leave it.
@@ -384,7 +387,7 @@ fn run(
             db, cfg, &workspace, only, repos, note, no_windows, unminimize, dry_run,
         ),
         Command::Cleanup(cmd) => commands::cleanup::cleanup_cmd(db, cmd),
-        Command::Leave => commands::cleanup::leave(db),
+        Command::Leave => commands::cleanup::leave(db, cfg),
         Command::Pin { workspace, version } => commands::history::pin(db, &workspace, version),
         Command::Unpin { workspace } => commands::history::unpin(db, &workspace),
         Command::Restore {
@@ -394,6 +397,7 @@ fn run(
             dry_run,
             timeout,
             no_cleanup,
+            no_save,
         } => commands::restore::restore_cmd(
             db,
             &workspace,
@@ -402,6 +406,8 @@ fn run(
             dry_run,
             timeout,
             no_cleanup,
+            no_save,
+            cfg,
             cfg.browser.max_tabs_per_window,
             cfg.timeouts.restore_overall(),
         ),

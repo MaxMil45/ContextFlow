@@ -1,4 +1,5 @@
 import {
+  ArrowRightLeft,
   Archive,
   ArchiveRestore,
   Camera,
@@ -24,8 +25,8 @@ import { useEffect, useState } from "react";
 import type { Pending } from "../App";
 import { CaptureReview } from "../components/CaptureReview";
 import { CompareDialog } from "../components/CompareDialog";
-import { ConfirmDialog, DeleteWorkspaceDialog, RenameDialog, TrustDialog } from "../components/dialogs";
-import { CleanupResults, CleanupSection } from "../components/CleanupSection";
+import { ConfirmDialog, DeleteWorkspaceDialog, EditWorkspaceDialog, TrustDialog } from "../components/dialogs";
+import { CleanupResults, CleanupSection, PlanItemStatus, PlanSummary } from "../components/CleanupSection";
 import { IconPicker } from "../components/IconPicker";
 import {
   AppIcon,
@@ -40,7 +41,14 @@ import {
   SkeletonText,
   useToast,
 } from "../components/ui";
-import { absoluteTime, plural, relativeTime } from "../format";
+import {
+  absoluteTime,
+  friendlyAppName,
+  plural,
+  relativeTime,
+  restoreStatusLabel,
+  restoreStatusTone,
+} from "../format";
 import { useCommand } from "../hooks";
 import {
   api,
@@ -48,6 +56,7 @@ import {
   type CaptureReport,
   type CleanupReport,
   type CommandError,
+  type RestoreReport,
   type SnapshotDetail,
   type SnapshotEntry,
   type WorkspaceSummary,
@@ -72,10 +81,19 @@ type Dialog =
   | "delete"
   | "approve"
   | "replaceIcon"
+  | "leave"
   | { deleteVersion: number }
   | { compare: { from: number; to?: number } };
 
-type RestoreRun = { dryRun: boolean; version?: number; only?: string[]; key: number };
+type RestoreRun = {
+  dryRun: boolean;
+  mode: "restore" | "switch";
+  version?: number;
+  only?: string[];
+  key: number;
+  /** Already finished elsewhere (the switcher): just show it. */
+  report?: RestoreReport;
+};
 
 const statusTone = { complete: "ok", partial: "warn", failed: "bad" } as const;
 const statusLabel = { complete: "Complete", partial: "Partial", failed: "Failed" } as const;
@@ -105,8 +123,11 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
   };
 
   const canRestore = workspace.latest !== null && workspace.isTrusted && !restore && !workspace.isArchived;
+  // Coming from another workspace, the main action is a switch (save where you are,
+  // then bring this one back). In the workspace you're already in, it's a plain restore.
+  const mode: "restore" | "switch" = workspace.isActive ? "restore" : "switch";
   const startRestore = (dryRun: boolean) => {
-    if (canRestore) setRestore({ dryRun, version, key: Date.now() });
+    if (canRestore) setRestore({ dryRun, mode, version, key: Date.now() });
   };
 
   // Keyboard: Ctrl+Enter restores, F2 renames.
@@ -128,7 +149,9 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
   // The tray or palette asked for a capture or a restore of this workspace.
   useEffect(() => {
     if (!pending) return;
-    if (pending.kind === "capture") {
+    if (pending.kind === "report") {
+      setRestore({ dryRun: false, mode: "switch", key: pending.key, report: pending.report });
+    } else if (pending.kind === "capture") {
       if (workspace.isArchived) setActionError({ code: "conflict", message: "This workspace is archived; unarchive it to capture." });
       else {
         setTab("overview");
@@ -139,7 +162,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
     } else if (!workspace.isTrusted) {
       setActionError({ code: "conflict", message: "This workspace was imported and must be approved before it can be restored." });
     } else {
-      setRestore({ dryRun: false, version, key: pending.key });
+      setRestore({ dryRun: false, mode, version, key: pending.key });
     }
     onPendingHandled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -167,8 +190,10 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
 
   const restoreLabel =
     version !== undefined && version !== (workspace.pinnedVersion ?? workspace.latest?.version)
-      ? `Restore v${version}`
-      : "Restore";
+      ? `${mode === "switch" ? "Switch to" : "Restore"} v${version}`
+      : mode === "switch"
+        ? "Switch to this"
+        : "Restore";
 
   return (
     <main className="content">
@@ -190,7 +215,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   (workspace.latest
                     ? `Last saved ${relativeTime(workspace.latest.createdAt)}`
                     : "Nothing saved yet")}
-                {workspace.pinnedVersion !== null && ` · Locked to v${workspace.pinnedVersion}`}
+                {workspace.pinnedVersion !== null && ` · Pinned to v${workspace.pinnedVersion}`}
               </p>
             </div>
           </div>
@@ -199,10 +224,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               <button
                 className="ghost"
                 data-tip="Run this workspace's “when I leave” rules and step out of it"
-                onClick={guard(async () => {
-                  setLeaveReport(await api.leaveWorkspace());
-                  onChanged();
-                })}
+                onClick={() => setDialog("leave")}
               >
                 <LogOut size={15} aria-hidden /> Leave
               </button>
@@ -219,9 +241,15 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               className="primary"
               disabled={!canRestore}
               onClick={() => startRestore(false)}
-              data-tip={workspace.isTrusted ? "Reopen everything (Ctrl+Enter)" : "Imported workspaces must be approved first"}
+              data-tip={
+                !workspace.isTrusted
+                  ? "Imported workspaces must be approved first"
+                  : mode === "switch"
+                    ? "Save where you are, then bring this workspace back"
+                    : "Reopen everything (Ctrl+Enter)"
+              }
             >
-              <Play size={14} aria-hidden /> {restoreLabel} <Kbd>Ctrl ↵</Kbd>
+              {mode === "switch" ? <ArrowRightLeft size={14} aria-hidden /> : <Play size={14} aria-hidden />} {restoreLabel} <Kbd>Ctrl ↵</Kbd>
             </button>
             <Menu label="More actions" trigger={<MoreHorizontal size={16} />}>
               {(close) => (
@@ -230,7 +258,7 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                     Create desktop icon
                   </MenuItem>
                   <MenuItem icon={Pencil} hint="F2" close={close} onSelect={() => setDialog("rename")}>
-                    Rename…
+                    Edit name and description…
                   </MenuItem>
                   <MenuItem
                     icon={FileDown}
@@ -301,9 +329,11 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
             label={name}
             version={restore.version}
             dryRun={restore.dryRun}
+            mode={restore.mode}
+            initialReport={restore.report}
             only={restore.only}
-            onStart={() => setRestore({ dryRun: false, version: restore.version, key: Date.now() })}
-            onRetry={(ids) => setRestore({ dryRun: false, version: restore.version, only: ids, key: Date.now() })}
+            onStart={() => setRestore({ dryRun: false, mode: restore.mode, version: restore.version, key: Date.now() })}
+            onRetry={(ids) => setRestore({ dryRun: false, mode: "restore", version: restore.version, only: ids, key: Date.now() })}
             onClose={() => setRestore(undefined)}
             onFinished={onChanged}
           />
@@ -347,6 +377,8 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               />
               {snapshot.error && <ErrorBanner error={snapshot.error} />}
               {snapshot.loading && !snapshot.data && <SkeletonText lines={4} />}
+              <SwitcherTip />
+              {snapshot.data && <BrowserNotice snapshot={snapshot.data} />}
               {snapshot.data ? (
                 <Overview snapshot={snapshot.data} />
               ) : (
@@ -390,6 +422,11 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
               <section className="card grow">
                 {snapshot.error && <ErrorBanner error={snapshot.error} />}
                 {snapshot.loading && !snapshot.data && <SkeletonText lines={5} />}
+                {!snapshot.loading && !snapshot.data && !snapshot.error && (
+                  <Empty icon={History} title="No versions yet">
+                    Each capture, and each switch away from this workspace, adds a version here.
+                  </Empty>
+                )}
                 {snapshot.data && (
                   <VersionDetails
                     snapshot={snapshot.data}
@@ -404,15 +441,33 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   />
                 )}
               </section>
+              <RecentRestores workspace={id} refreshKey={restore?.key} />
             </div>
           )}
         </div>
       </div>
 
       {dialog === "rename" && (
-        <RenameDialog
+        <EditWorkspaceDialog
           workspace={workspace}
-          onRenamed={() => onChanged()}
+          onSaved={(u) => {
+            if (u.iconError) toast.show(`Saved, but the desktop icon kept its old name: ${u.iconError}`, { tone: "bad", ms: 8000 });
+            onChanged();
+          }}
+          onClose={() => setDialog(undefined)}
+        />
+      )}
+      {dialog === "leave" && (
+        <LeaveDialog
+          workspace={id}
+          name={name}
+          onLeft={(r) => {
+            if (r.savedVersion !== null) toast.show(`Saved “${name}” as v${r.savedVersion} and left it`);
+            else toast.show(`Left “${name}”${r.saveNote ? `. ${r.saveNote}` : ""}`);
+            setLeaveReport(r.cleanup);
+            history.reload();
+            onChanged();
+          }}
           onClose={() => setDialog(undefined)}
         />
       )}
@@ -508,7 +563,8 @@ function HistoryRow({
             {entry.captureStatus !== "complete" && ` · ${statusLabel[entry.captureStatus].toLowerCase()}`}
           </span>
         </span>
-        {pinned && <Pin size={13} aria-label="Locked" style={{ marginLeft: "auto", color: "var(--accent)" }} />}
+        {entry.auto && <span className="tag">Auto</span>}
+        {pinned && <Pin size={13} aria-label="Pinned" className="pin-mark" />}
       </button>
       {older !== undefined && (
         <button
@@ -575,7 +631,7 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
           {snapshot.applications.map((a) => (
             <li className="app-row" key={a.applicationId}>
               <AppIcon applicationId={a.applicationId} />
-              <span className="app-name">{a.applicationId}</span>
+              <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
               <span className="muted small">
                 {[
                   plural(a.windowCount, "window"),
@@ -638,13 +694,13 @@ function VersionDetails({
             onClick={onPin}
             data-tip={pinned ? "Restore the newest save again" : "Always restore this version, even after new saves"}
           >
-            {pinned ? <PinOff size={15} aria-hidden /> : <Pin size={15} aria-hidden />} {pinned ? "Unlock" : "Lock"}
+            {pinned ? <PinOff size={15} aria-hidden /> : <Pin size={15} aria-hidden />} {pinned ? "Unpin" : "Pin"}
           </button>
           <button
             className="ghost danger"
             onClick={onDelete}
             disabled={pinned}
-            data-tip={pinned ? "Unlock it before deleting it" : "Permanently delete this version"}
+            data-tip={pinned ? "Unpin it before deleting it" : "Permanently delete this version"}
           >
             <Trash2 size={15} aria-hidden /> Delete
           </button>
@@ -654,12 +710,12 @@ function VersionDetails({
         Saved {absoluteTime(snapshot.createdAt)} · {plural(snapshot.applications.length, "app")},{" "}
         {plural(windows, "window")}, {plural(snapshot.monitorCount, "monitor")}
       </p>
-      {snapshot.notes.length > 0 && <p style={{ marginTop: 12 }}>“{snapshot.notes.at(-1)}”</p>}
-      <ul className="app-list" style={{ marginTop: 12 }}>
+      {snapshot.notes.length > 0 && <p className="gap-top">“{snapshot.notes.at(-1)}”</p>}
+      <ul className="app-list gap-top">
         {snapshot.applications.map((a) => (
           <li className="app-row" key={a.applicationId}>
             <AppIcon applicationId={a.applicationId} />
-            <span className="app-name">{a.applicationId}</span>
+            <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
             <span className="muted small">{plural(a.windowCount, "window")}</span>
           </li>
         ))}
@@ -710,11 +766,11 @@ function CaptureCard({
         </button>
       </div>
       {report && (
-        <div style={{ marginTop: 12 }}>
+        <div className="gap-top">
           <Notice onDismiss={() => setReport(undefined)}>
             Saved v{report.snapshot.version}
             {report.identicalToPrevious && " (identical to the previous version)"}.
-            {report.pinnedVersion !== null && ` Restore still uses locked v${report.pinnedVersion}.`}
+            {report.pinnedVersion !== null && ` Restore still uses pinned v${report.pinnedVersion}.`}
             {report.autoPruned.length > 0 && ` Removed ${plural(report.autoPruned.length, "old snapshot")}.`}
           </Notice>
           {report.warnings.length > 0 && (
@@ -738,5 +794,121 @@ function CaptureCard({
         />
       )}
     </section>
+  );
+}
+
+/** Leave the workspace you're in: it is saved first, then its leave rules run. */
+function LeaveDialog({
+  workspace,
+  name,
+  onLeft,
+  onClose,
+}: {
+  workspace: string;
+  name: string;
+  onLeft: (r: import("../ipc/client").LeaveReport) => void;
+  onClose: () => void;
+}) {
+  const plan = useCommand(() => api.previewCleanup(workspace, "leaving"), [workspace]);
+  const closing = plan.data?.items.filter((i) => i.action.kind === "close") ?? [];
+  return (
+    <ConfirmDialog
+      title={`Leave “${name}”?`}
+      confirmLabel={closing.length ? `Leave and close ${closing.length === 1 ? "1 program" : `${closing.length} programs`}` : "Leave"}
+      danger={closing.some((i) => i.mode === "force")}
+      action={async () => onLeft(await api.leaveWorkspace())}
+      onClose={onClose}
+    >
+      <p>Its layout is saved first (unless nothing has changed), so you can come back to it later.</p>
+      {plan.loading && !plan.data && <SkeletonText lines={2} />}
+      {closing.length > 0 && plan.data && (
+        <>
+          <p className="muted small">Its “when I leave” rules will close:</p>
+          <ul className="cleanup-confirm">
+            {closing.map((i) => (
+              <li key={i.process}>
+                {friendlyAppName(i.process)} · {i.mode === "force" ? "force close" : "close nicely"} ·{" "}
+                <PlanItemStatus item={i} />
+              </li>
+            ))}
+          </ul>
+          <p className="small">
+            <PlanSummary plan={plan.data} />
+          </p>
+        </>
+      )}
+      {plan.data && closing.length === 0 && <p className="muted small">Nothing will be closed.</p>}
+    </ConfirmDialog>
+  );
+}
+
+/** The last few restores of this workspace and what went wrong in them. */
+function RecentRestores({ workspace, refreshKey }: { workspace: string; refreshKey?: number }) {
+  const runs = useCommand(() => api.listRestoreRuns(workspace), [workspace, refreshKey]);
+  return (
+    <section className="card span-2">
+      <header className="card-header">
+        <h3>
+          <Clock size={15} aria-hidden /> Recent restores
+        </h3>
+      </header>
+      {runs.error && <ErrorBanner error={runs.error} />}
+      {runs.loading && !runs.data && <SkeletonList rows={2} />}
+      {runs.data?.length === 0 && <p className="muted">This workspace hasn't been restored yet.</p>}
+      <ul className="app-list">
+        {runs.data?.map((r) => (
+          <li className="app-row run-row" key={r.startedAt}>
+            <Badge tone={restoreStatusTone[r.overall]}>{restoreStatusLabel[r.overall]}</Badge>
+            <span className="app-name" title={absoluteTime(r.startedAt)}>
+              {relativeTime(r.startedAt)} · v{r.version}
+            </span>
+            <span className="muted small">
+              {r.problems.length === 0
+                ? plural(r.steps, "program")
+                : r.problems
+                    .map((p) => `${friendlyAppName(p.applicationId)}${p.message ? `: ${p.message}` : ""}`)
+                    .join(" · ")}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Workspaces with browsers only get their tabs back once the extension is connected. */
+function BrowserNotice({ snapshot }: { snapshot: SnapshotDetail }) {
+  const hasBrowser = snapshot.applications.some((a) => /^(chrome|msedge)$/i.test(a.applicationId));
+  const status = useCommand(
+    () => (hasBrowser ? api.getBrowserStatus() : Promise.resolve(undefined)),
+    [hasBrowser],
+  );
+  const connected = status.data?.browsers.some((b) => b.connected);
+  if (!hasBrowser || !status.data || connected) return null;
+  return (
+    <Notice tone="warn">
+      Browser tabs aren't being saved yet: the ContextFlow browser extension isn't connected. Set it up in
+      Settings → Capture → Browser tabs. Windows still come back without it.
+    </Notice>
+  );
+}
+
+const TIP_KEY = "contextflow.tip.switcher";
+
+/** A one-time pointer to the switcher, the fastest way to use ContextFlow. */
+function SwitcherTip() {
+  const [hidden, setHidden] = useState(() => localStorage.getItem(TIP_KEY) === "1");
+  const hotkey = useCommand(() => api.getSettings(), []).data?.app.switcherHotkey;
+  if (hidden || !hotkey) return null;
+  return (
+    <Notice
+      tone="muted"
+      onDismiss={() => {
+        localStorage.setItem(TIP_KEY, "1");
+        setHidden(true);
+      }}
+    >
+      Tip: press <Kbd>{hotkey}</Kbd> anywhere in Windows to switch workspaces without opening this window.
+    </Notice>
   );
 }

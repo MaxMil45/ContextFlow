@@ -16,4 +16,12 @@ startWithWindows: boolean,
 /**
  * Saves the active workspace from anywhere, e.g. `Ctrl+Alt+X`. Empty = off.
  */
-captureHotkey: string, };
+captureHotkey: string, 
+/**
+ * Opens the workspace switcher from anywhere, e.g. `Ctrl+Alt+W`. Empty = off.
+ */
+switcherHotkey: string, 
+/**
+ * Save the workspace you are leaving before switching to another one.
+ */
+autoSaveOnSwitch: boolean, };

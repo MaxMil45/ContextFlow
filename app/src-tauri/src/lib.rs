@@ -14,6 +14,7 @@ mod review;
 mod settings;
 mod shell;
 mod state;
+mod switcher;
 
 use tauri::{Manager, WindowEvent};
 
@@ -63,10 +64,11 @@ pub fn run() {
             }
             // The quick-capture shortcut. If another program already owns it, say so
             // instead of failing silently.
-            let hotkey = app.state::<state::AppState>().config().app.capture_hotkey;
-            if let Err(e) = hotkey::register(app.handle(), &hotkey) {
-                tracing::warn!("capture shortcut not set up: {e}");
-                shell::toast(app.handle(), "Capture shortcut not available", &e);
+            let keys = app.state::<state::AppState>().config().app;
+            let status =
+                hotkey::register(app.handle(), &keys.capture_hotkey, &keys.switcher_hotkey);
+            if let Some(problem) = status.summary() {
+                shell::toast(app.handle(), "A shortcut is not available", &problem);
             }
             // The window is created hidden; show it unless Windows started us at sign-in.
             if !std::env::args().any(|a| a == "--hidden") {
@@ -91,12 +93,17 @@ pub fn run() {
             commands::get_snapshot,
             commands::capture_workspace,
             commands::restore_workspace,
+            commands::switch_workspace,
+            switcher::quick_switch,
+            switcher::hide_switcher,
             commands::cancel_restore,
             commands::create_shortcut,
             commands::get_workspace_icon,
             commands::set_workspace_icon,
             commands::reset_workspace_icon,
             commands::rename_workspace,
+            commands::update_workspace,
+            commands::list_restore_runs,
             commands::set_workspace_archived,
             commands::get_workspace_shortcuts,
             commands::delete_workspace,
@@ -113,6 +120,7 @@ pub fn run() {
             review::discover_capture,
             review::compare_snapshots,
             settings::get_settings,
+            settings::get_hotkey_status,
             settings::save_settings,
             settings::get_browser_status,
             settings::install_browser_integration,

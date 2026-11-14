@@ -53,6 +53,8 @@ fn settings_from(cfg: &Config, start_with_windows: bool) -> Settings {
             close_to_tray: cfg.app.close_to_tray,
             start_with_windows,
             capture_hotkey: cfg.app.capture_hotkey.clone(),
+            switcher_hotkey: cfg.app.switcher_hotkey.clone(),
+            auto_save_on_switch: cfg.app.auto_save_on_switch,
         },
         log_level: cfg.logging.level.clone(),
     }
@@ -82,6 +84,8 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
     cfg.app.notifications = s.app.notifications;
     cfg.app.close_to_tray = s.app.close_to_tray;
     cfg.app.capture_hotkey = s.app.capture_hotkey.trim().to_string();
+    cfg.app.switcher_hotkey = s.app.switcher_hotkey.trim().to_string();
+    cfg.app.auto_save_on_switch = s.app.auto_save_on_switch;
     cfg.logging.level = s.log_level.clone();
     cfg
 }
@@ -90,6 +94,16 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
 pub async fn get_settings(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Settings> {
     let autostart = app.autolaunch().is_enabled().unwrap_or(false);
     Ok(settings_from(&state.config(), autostart))
+}
+
+/// Which global shortcuts are working right now, with a message for each that isn't.
+#[tauri::command]
+pub async fn get_hotkey_status(state: State<'_, AppState>) -> CmdResult<HotkeyStatusDto> {
+    let s = state.hotkeys.lock().map(|s| s.clone()).unwrap_or_default();
+    Ok(HotkeyStatusDto {
+        capture: s.capture,
+        switcher: s.switcher,
+    })
 }
 
 /// Validate and save the settings to `config.toml`. Nothing is changed if the
@@ -104,18 +118,35 @@ pub async fn save_settings(
     next.validate().map_err(conflict)?;
 
     // Take the new shortcut first: if another program owns it, nothing is saved.
-    let old_hotkey = state.config().app.capture_hotkey;
-    let hotkey_changed = next.app.capture_hotkey != old_hotkey;
+    let old = state.config().app;
+    let hotkey_changed = next.app.capture_hotkey != old.capture_hotkey
+        || next.app.switcher_hotkey != old.switcher_hotkey;
     if hotkey_changed {
-        crate::hotkey::register(&app, &next.app.capture_hotkey).map_err(|e| {
-            // Put the old shortcut back, so a failed change doesn't leave none.
-            let _ = crate::hotkey::register(&app, &old_hotkey);
-            conflict(e)
-        })?;
+        let status =
+            crate::hotkey::register(&app, &next.app.capture_hotkey, &next.app.switcher_hotkey);
+        // Only a shortcut you just changed can stop the save; one that was already
+        // unavailable stays reported in Settings.
+        let changed_problem = [
+            (
+                next.app.capture_hotkey != old.capture_hotkey,
+                status.capture,
+            ),
+            (
+                next.app.switcher_hotkey != old.switcher_hotkey,
+                status.switcher,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(changed, problem)| problem.filter(|_| changed));
+        if let Some(problem) = changed_problem {
+            // Put the old shortcuts back, so a failed change doesn't leave none.
+            let _ = crate::hotkey::register(&app, &old.capture_hotkey, &old.switcher_hotkey);
+            return Err(conflict(problem));
+        }
     }
     state.save_config(next.clone()).map_err(|e| {
         if hotkey_changed {
-            let _ = crate::hotkey::register(&app, &old_hotkey);
+            let _ = crate::hotkey::register(&app, &old.capture_hotkey, &old.switcher_hotkey);
         }
         CommandError::from(e)
     })?;

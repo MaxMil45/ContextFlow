@@ -3,16 +3,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NewWorkspaceDialog } from "./components/dialogs";
 import { Palette, type PaletteCommand } from "./components/Palette";
-import { TitleBar } from "./components/TitleBar";
 import { Empty, ErrorBanner, SkeletonText, ToastProvider } from "./components/ui";
 import { useCommand } from "./hooks";
-import { api, type WorkspaceSummary } from "./ipc/client";
+import { api, type RestoreReport, type WorkspaceSummary } from "./ipc/client";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { SettingsView } from "./views/SettingsView";
 import { Sidebar } from "./views/Sidebar";
 import { WorkspaceView } from "./views/WorkspaceView";
 
 /** Something the tray or the palette asked for, handled by the workspace page once it is showing. */
-export type Pending = { kind: "capture" | "restore"; workspaceId: string; key: number };
+export type Pending =
+  | { kind: "capture" | "restore"; workspaceId: string; key: number }
+  | { kind: "report"; workspaceId: string; key: number; report: RestoreReport };
 
 export function App() {
   return (
@@ -32,6 +34,7 @@ function Shell() {
   const [pending, setPending] = useState<Pending>();
   const [creating, setCreating] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [help, setHelp] = useState(false);
 
   // Default to the most recently used workspace.
   const current =
@@ -46,7 +49,7 @@ function Shell() {
     setView("workspace");
   }, []);
 
-  const ask = useCallback((kind: Pending["kind"], workspaceId: string) => {
+  const ask = useCallback((kind: "capture" | "restore", workspaceId: string) => {
     setView("workspace");
     setSelectedId(workspaceId);
     setPending({ kind, workspaceId, key: Date.now() });
@@ -67,6 +70,15 @@ function Shell() {
       .then(keep);
     // Tray: "Restore recent ▸ <workspace>" (the menu carries the workspace id).
     api.onTrayRestore((id) => ask("restore", id)).then(keep);
+    // A switch from the switcher needs attention: open its report here.
+    api
+      .onSwitchReport((report) => {
+        setView("workspace");
+        setSelectedId(report.workspaceId);
+        setPending({ kind: "report", workspaceId: report.workspaceId, key: Date.now(), report });
+        latest.current.reload();
+      })
+      .then(keep);
     // A quick capture (shortcut or tray) saved a snapshot: show the new version.
     api.onCaptureSaved(() => latest.current.reload()).then(keep);
     return () => {
@@ -83,8 +95,18 @@ function Shell() {
   // App-wide keyboard shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? "");
+      if (e.key === "?" && !typing && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setHelp(true);
+        return;
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key === "/") {
+        e.preventDefault();
+        setHelp(true);
+        return;
+      }
       if (e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
@@ -116,16 +138,21 @@ function Shell() {
     ...(workspaces.data ?? []).flatMap<PaletteCommand>((w) => [
       { id: `open:${w.id}`, label: w.name, hint: "Open", run: () => open(w.id) },
       ...(w.latest && w.isTrusted && !w.isArchived
-        ? [{ id: `restore:${w.id}`, label: `Restore ${w.name}`, hint: "Restore", run: () => ask("restore", w.id) }]
+        ? [{
+              id: `restore:${w.id}`,
+              label: w.isActive ? `Restore ${w.name}` : `Switch to ${w.name}`,
+              hint: w.isActive ? "Restore" : "Switch",
+              run: () => ask("restore", w.id),
+            }]
         : []),
     ]),
     { id: "new", label: "New workspace…", hint: "Ctrl+N", run: () => setCreating(true) },
     { id: "settings", label: "Settings", hint: "Ctrl+,", run: () => setView("settings") },
+    { id: "shortcuts", label: "Keyboard shortcuts", hint: "Ctrl+/", run: () => setHelp(true) },
   ];
 
   return (
     <div className="app">
-      <TitleBar />
       <div className="shell">
         <Sidebar
           workspaces={workspaces.data}
@@ -136,6 +163,7 @@ function Shell() {
           onShowArchived={setShowArchived}
           settingsOpen={view === "settings"}
           onSettings={() => setView("settings")}
+          onHelp={() => setHelp(true)}
           onNew={() => setCreating(true)}
           onPalette={() => setPalette(true)}
         />
@@ -184,6 +212,7 @@ function Shell() {
       </div>
       {creating && <NewWorkspaceDialog onCreated={created} onClose={() => setCreating(false)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
+      {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
     </div>
   );
 }

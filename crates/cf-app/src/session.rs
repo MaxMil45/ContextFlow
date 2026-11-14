@@ -90,6 +90,10 @@ pub struct RestoreArgs {
     pub cancel: Option<Arc<AtomicBool>>,
     /// Don't close any programs (the workspaces' cleanup rules are ignored).
     pub skip_cleanup: bool,
+    /// Save the workspace being left first, with these settings (`None` = don't).
+    /// Every way of switching passes the loaded config, so they all behave the
+    /// same; `auto_save_on_switch` in it can still turn saving off.
+    pub save_before_leaving: Option<Config>,
 }
 
 /// Which side of a workspace a cleanup belongs to.
@@ -130,6 +134,16 @@ pub struct RestoreOutcome {
     pub run: RestoreRun,
     /// Cleanups that ran first: leaving the previous workspace, entering this one.
     pub cleanups: Vec<CleanupReport>,
+    /// What happened to the workspace that was left.
+    pub left: crate::autosave::AutoSave,
+}
+
+/// The result of leaving a workspace without entering another.
+pub struct LeaveOutcome {
+    /// The workspace that was left; `None` when none was active.
+    pub workspace: Option<String>,
+    pub cleanup: Option<CleanupReport>,
+    pub saved: crate::autosave::AutoSave,
 }
 
 /// Application ids a snapshot uses: cleanup never closes these.
@@ -191,13 +205,18 @@ const SAMPLE_MAX_AGE: Duration = Duration::from_secs(3);
 /// per [`SAMPLE_MAX_AGE`]. Concurrent callers wait for the one measurement in
 /// progress instead of each starting their own.
 pub fn running_apps_cached() -> Vec<cf_cleanup::RunningApp> {
+    running_apps_sampled(false)
+}
+
+/// [`running_apps_cached`], or a new measurement when `fresh` (the Refresh button).
+pub fn running_apps_sampled(fresh: bool) -> Vec<cf_cleanup::RunningApp> {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
     type Sample = Option<(Instant, Vec<cf_cleanup::RunningApp>)>;
     static CACHE: OnceLock<Mutex<Sample>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let mut slot = cache.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, apps)) = slot.as_ref() {
+    if let Some((at, apps)) = slot.as_ref().filter(|_| !fresh) {
         if at.elapsed() < SAMPLE_MAX_AGE {
             return apps.clone();
         }
@@ -233,8 +252,18 @@ fn cleanup_inputs(
 
 /// What a workspace's cleanup would do right now, without doing it.
 pub fn preview_cleanup(db: &Database, workspace: &str, phase: CleanupPhase) -> Result<CleanupPlan> {
+    preview_cleanup_sampled(db, workspace, phase, false)
+}
+
+/// [`preview_cleanup`], measuring again when `fresh`.
+pub fn preview_cleanup_sampled(
+    db: &Database,
+    workspace: &str,
+    phase: CleanupPhase,
+    fresh: bool,
+) -> Result<CleanupPlan> {
     let (_, targets, keep) = cleanup_inputs(db, workspace, phase)?;
-    let apps = running_apps_cached();
+    let apps = running_apps_sampled(fresh);
     Ok(cf_cleanup::plan(&targets, &keep, &apps))
 }
 
@@ -259,11 +288,21 @@ pub fn run_cleanup_now(
 /// Leave the active workspace without entering another: run its "when
 /// leaving" cleanup and clear it. `None` when no workspace is active.
 pub fn leave_active_workspace(
-    db: &Database,
+    db: &mut Database,
+    save: Option<&Config>,
     log: &mut dyn FnMut(&str),
-) -> Result<Option<CleanupReport>> {
+) -> Result<LeaveOutcome> {
     let Some(active) = db.active_context()? else {
-        return Ok(None);
+        return Ok(LeaveOutcome {
+            workspace: None,
+            cleanup: None,
+            saved: Default::default(),
+        });
+    };
+    // Save where you are before anything closes.
+    let saved = match save {
+        Some(cfg) => crate::autosave::save_active(db, cfg, None, log),
+        None => Default::default(),
     };
     let ctx = db.find_context(&active.to_string())?;
     let config = db.cleanup_config(active)?;
@@ -275,7 +314,11 @@ pub fn leave_active_workspace(
         log,
     );
     db.set_active_context(None)?;
-    Ok(report)
+    Ok(LeaveOutcome {
+        workspace: Some(ctx.name),
+        cleanup: report,
+        saved,
+    })
 }
 
 /// Restore a workspace's snapshot onto the real desktop and record the run.
@@ -322,6 +365,15 @@ pub fn restore_workspace(
             Some(lock) => Some(lock),
             None => return Err(RestoreBusy.into()),
         }
+    };
+
+    // Save the workspace we're leaving before its leave rules close anything. A
+    // dry run or a retry of a few programs isn't a switch.
+    let left = match &args.save_before_leaving {
+        Some(cfg) if !args.dry_run && args.only.is_empty() => {
+            crate::autosave::save_active(db, cfg, Some(ctx.id), log)
+        }
+        _ => Default::default(),
     };
 
     // Cleanup comes first: leave the workspace we were in, then close what
@@ -413,5 +465,6 @@ pub fn restore_workspace(
         snapshot,
         run,
         cleanups,
+        left,
     })
 }

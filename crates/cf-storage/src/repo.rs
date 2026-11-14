@@ -17,6 +17,27 @@ pub struct Database {
     pub(crate) conn: Connection,
 }
 
+/// Where a snapshot came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotOrigin {
+    /// Saved on purpose: Capture, quick capture, the CLI.
+    Manual,
+    /// Saved automatically when switching away from or leaving a workspace.
+    Auto,
+}
+
+impl SnapshotOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+/// Auto-saves kept per workspace by retention, on top of the user's own rules.
+pub const AUTO_SAVES_KEPT: usize = 5;
+
 /// A workspace with everything a list needs, from [`Database::list_overview`].
 #[derive(Debug, Clone)]
 pub struct ContextOverview {
@@ -352,6 +373,24 @@ impl Database {
         }
     }
 
+    /// Set or clear a workspace's description (blank clears it).
+    pub fn set_description(&self, id: ContextId, description: Option<&str>) -> Result<Context> {
+        let description = description.map(str::trim).filter(|d| !d.is_empty());
+        if description.is_some_and(|d| d.chars().count() > 500) {
+            return Err(StorageError::Conflict(
+                "a description can be at most 500 characters".into(),
+            ));
+        }
+        let n = self.conn.execute(
+            "UPDATE contexts SET description = ?1, updated_at = ?2 WHERE id = ?3",
+            params![description, ts(&now()), id.to_string()],
+        )?;
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("no workspace with id {id}")));
+        }
+        self.find_context(&id.to_string())
+    }
+
     pub fn set_archived(&self, id: ContextId, archived: bool) -> Result<()> {
         let n = self.conn.execute(
             "UPDATE contexts SET is_archived = ?1, updated_at = ?2 WHERE id = ?3",
@@ -514,6 +553,26 @@ impl Database {
         payload: SnapshotPayload,
         capture_status: CaptureStatus,
     ) -> Result<Snapshot> {
+        self.create_snapshot_as(context_id, payload, capture_status, SnapshotOrigin::Manual)
+    }
+
+    /// Versions of this workspace that were saved automatically.
+    pub fn auto_versions(&self, context_id: ContextId) -> Result<std::collections::HashSet<u32>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT version_number FROM context_snapshots WHERE context_id = ?1 AND origin = 'auto'",
+        )?;
+        let rows = stmt.query_map([context_id.to_string()], |r| r.get::<_, u32>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// [`Self::create_snapshot`], recording where the snapshot came from.
+    pub fn create_snapshot_as(
+        &mut self,
+        context_id: ContextId,
+        payload: SnapshotPayload,
+        capture_status: CaptureStatus,
+        origin: SnapshotOrigin,
+    ) -> Result<Snapshot> {
         validate::payload(&payload)?;
         let payload_json = hash::canonical_json(&payload)?;
         let snapshot_hash = hash::sha256_hex(payload_json.as_bytes());
@@ -555,6 +614,7 @@ impl Database {
             &snapshot_hash,
             capture_status,
             &payload_json,
+            origin.as_str(),
         )?;
         tx.execute(
             "UPDATE contexts SET updated_at = ?1, last_version = ?2 WHERE id = ?3",
@@ -683,23 +743,44 @@ impl Database {
         policy: &RetentionPolicy,
         now: DateTime<Utc>,
     ) -> Result<Vec<SnapshotSummary>> {
-        if policy.keep_last.is_none() && policy.max_age.is_none() {
-            return Ok(Vec::new());
-        }
         let pinned = self.pinned_version(context_id)?;
+        let autos = self.auto_versions(context_id)?;
         let all = self.list_snapshots(context_id)?;
-        Ok(all
-            .into_iter()
-            .enumerate()
-            .skip(1) // the latest snapshot is always kept
-            .filter(|(_, s)| Some(s.version) != pinned) // and so is the pinned one
-            .filter(|(rank, s)| {
-                let outside_count = policy.keep_last.map(|n| *rank >= n as usize);
+        // Saves made on purpose and automatic saves are counted separately, so a
+        // day of switching never pushes out the versions you chose to keep. The
+        // newest AUTO_SAVES_KEPT auto-saves are kept whatever the rules say.
+        let (mut manual_rank, mut auto_rank) = (0usize, 0usize);
+        let mut out = Vec::new();
+        for (i, s) in all.into_iter().enumerate() {
+            let is_auto = autos.contains(&s.version);
+            let rank = if is_auto {
+                &mut auto_rank
+            } else {
+                &mut manual_rank
+            };
+            let this_rank = *rank;
+            *rank += 1;
+            // The latest snapshot is always kept, and so is the pinned one.
+            if i == 0 || Some(s.version) == pinned {
+                continue;
+            }
+            let prune = if is_auto {
+                let over_allowance = this_rank >= AUTO_SAVES_KEPT;
+                let too_old = policy.max_age.map(|age| s.created_at < now - age);
+                over_allowance || too_old == Some(true)
+            } else {
+                if policy.keep_last.is_none() && policy.max_age.is_none() {
+                    continue;
+                }
+                let outside_count = policy.keep_last.map(|n| this_rank >= n as usize);
                 let too_old = policy.max_age.map(|age| s.created_at < now - age);
                 [outside_count, too_old].into_iter().flatten().all(|b| b)
-            })
-            .map(|(_, s)| s)
-            .collect())
+            };
+            if prune {
+                out.push(s);
+            }
+        }
+        Ok(out)
     }
 
     /// Delete the snapshots selected by [`Self::retention_candidates`] in one
@@ -782,10 +863,11 @@ pub(crate) fn insert_snapshot_row(
     hash: &str,
     status: CaptureStatus,
     payload_json: &str,
+    origin: &str,
 ) -> Result<()> {
     tx.execute(
         &format!(
-            "INSERT INTO context_snapshots ({SNAPSHOT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+            "INSERT INTO context_snapshots ({SNAPSHOT_COLS}, origin) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
         ),
         params![
             id.to_string(),
@@ -794,7 +876,8 @@ pub(crate) fn insert_snapshot_row(
             ts(created_at),
             hash,
             status.as_str(),
-            payload_json
+            payload_json,
+            origin
         ],
     )?;
     Ok(())

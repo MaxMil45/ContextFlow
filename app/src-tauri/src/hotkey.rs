@@ -41,26 +41,69 @@ pub fn parse(hotkey: &str) -> Result<Shortcut, String> {
     Ok(shortcut)
 }
 
-/// Make `hotkey` the quick-capture shortcut (empty switches it off). ContextFlow
-/// has one global shortcut, so everything it registered before is replaced.
-pub fn register(app: &AppHandle, hotkey: &str) -> Result<(), String> {
-    let keys = app.global_shortcut();
-    keys.unregister_all()
-        .map_err(|e| format!("could not release the old shortcut: {e}"))?;
-    if hotkey.trim().is_empty() {
-        return Ok(());
+/// Whether each global shortcut is working; `Some(message)` when it isn't.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HotkeyStatus {
+    pub capture: Option<String>,
+    pub switcher: Option<String>,
+}
+
+impl HotkeyStatus {
+    /// One line for a notification, or `None` when both work.
+    pub fn summary(&self) -> Option<String> {
+        let parts: Vec<&str> = [self.capture.as_deref(), self.switcher.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" "))
     }
-    let shortcut = parse(hotkey)?;
-    keys.on_shortcut(shortcut, |app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            quick_capture(app.clone());
-        }
-    })
-    .map_err(|e| {
-        format!(
-            "{hotkey} couldn't be used: another program probably already has it. Choose a different combination ({e})"
-        )
-    })
+}
+
+fn register_one(
+    app: &AppHandle,
+    hotkey: &str,
+    what: &str,
+    action: fn(&AppHandle),
+) -> Option<String> {
+    if hotkey.trim().is_empty() {
+        return None;
+    }
+    let shortcut = match parse(hotkey) {
+        Ok(s) => s,
+        Err(e) => return Some(e),
+    };
+    app.global_shortcut()
+        .on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                action(app);
+            }
+        })
+        .err()
+        .map(|e| {
+            tracing::warn!("{what} shortcut {hotkey} not available: {e}");
+            format!(
+                "{hotkey} ({what}) is already used by another program. Choose a different combination in Settings → General."
+            )
+        })
+}
+
+/// Make `capture` the quick-capture shortcut and `switcher` the workspace-switcher
+/// shortcut (an empty one is off). Everything ContextFlow registered before is
+/// replaced. Each one is set up on its own, so one being taken never stops the other.
+pub fn register(app: &AppHandle, capture: &str, switcher: &str) -> HotkeyStatus {
+    if let Err(e) = app.global_shortcut().unregister_all() {
+        tracing::warn!("could not release the old shortcuts: {e}");
+    }
+    let status = HotkeyStatus {
+        capture: register_one(app, capture, "quick capture", |app| {
+            quick_capture(app.clone())
+        }),
+        switcher: register_one(app, switcher, "switcher", crate::switcher::toggle),
+    };
+    if let Ok(mut slot) = app.state::<AppState>().hotkeys.lock() {
+        *slot = status.clone();
+    }
+    status
 }
 
 /// The workspace a quick capture saves into: the one you are in; if none (or

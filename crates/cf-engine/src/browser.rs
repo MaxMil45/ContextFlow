@@ -36,19 +36,30 @@ pub(crate) struct TabRestore {
 }
 
 /// How step reports describe what was opened (shared with VS Code folders).
+#[derive(Debug)]
 pub(crate) struct Wording {
     pub noun: &'static str,
+    /// One of them, for messages ("folder", "solution or folder").
+    pub singular: &'static str,
     pub partial_code: &'static str,
 }
 
 pub(crate) const TABS: Wording = Wording {
     noun: "tab(s)",
+    singular: "tab",
     partial_code: "TABS_PARTIAL",
 };
 
 pub(crate) const FOLDERS: Wording = Wording {
     noun: "folder(s)",
+    singular: "folder",
     partial_code: "FOLDERS_PARTIAL",
+};
+
+pub(crate) const SOLUTIONS: Wording = Wording {
+    noun: "solution(s) or folder(s)",
+    singular: "solution or folder",
+    partial_code: "SOLUTIONS_PARTIAL",
 };
 
 /// The browser tabs to restore for `app`, if it carries any.

@@ -47,6 +47,11 @@ pub struct AppConfig {
     /// A key combination that saves the active workspace from anywhere, without
     /// opening the app, like `Ctrl+Alt+X`. Empty switches it off.
     pub capture_hotkey: String,
+    /// A key combination that opens the workspace switcher from anywhere, like
+    /// `Ctrl+Alt+W`. Empty switches it off.
+    pub switcher_hotkey: String,
+    /// Save the workspace you are leaving before switching to another one.
+    pub auto_save_on_switch: bool,
 }
 
 impl Default for AppConfig {
@@ -55,6 +60,8 @@ impl Default for AppConfig {
             notifications: true,
             close_to_tray: false,
             capture_hotkey: "Ctrl+Alt+X".into(),
+            switcher_hotkey: "Ctrl+Alt+W".into(),
+            auto_save_on_switch: true,
         }
     }
 }
@@ -275,6 +282,22 @@ impl Config {
                 "app.capture_hotkey must be a key combination such as Ctrl+Alt+X".into(),
             );
         }
+        if self.app.switcher_hotkey.chars().count() > 64
+            || self.app.switcher_hotkey.chars().any(char::is_control)
+        {
+            return invalid(
+                "app.switcher_hotkey must be a key combination such as Ctrl+Alt+W".into(),
+            );
+        }
+        if !self.app.capture_hotkey.trim().is_empty()
+            && self
+                .app
+                .capture_hotkey
+                .trim()
+                .eq_ignore_ascii_case(self.app.switcher_hotkey.trim())
+        {
+            return invalid("app.capture_hotkey and app.switcher_hotkey must be different".into());
+        }
         if !(1..=365).contains(&self.logging.max_files) {
             return invalid("logging.max_files must be between 1 and 365".into());
         }
@@ -338,6 +361,10 @@ close_to_tray = false
 # Saves the active workspace from anywhere, without opening the app.
 # Needs at least one of Ctrl, Alt, Shift. Use "" to switch it off.
 capture_hotkey = "Ctrl+Alt+X"
+# Opens the workspace switcher from anywhere. Use "" to switch it off.
+switcher_hotkey = "Ctrl+Alt+W"
+# Save the workspace you are leaving before switching to another one.
+auto_save_on_switch = true
 
 [logging]
 level = "info"
@@ -373,6 +400,28 @@ capture_hotkey = \"\"
         assert!(off.validate().is_ok());
         let mut bad = Config::default();
         bad.app.capture_hotkey = "x".repeat(65);
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn the_switcher_defaults_on_with_auto_save_and_cannot_clash_with_capture() {
+        let cfg = Config::default();
+        assert_eq!(cfg.app.switcher_hotkey, "Ctrl+Alt+W");
+        assert!(cfg.app.auto_save_on_switch);
+        assert!(cfg.validate().is_ok());
+
+        let mut same = Config::default();
+        same.app.switcher_hotkey = " ctrl+alt+x ".into();
+        assert!(same.validate().is_err(), "two actions on one shortcut");
+
+        // Turning the capture shortcut off frees the combination.
+        let mut off = Config::default();
+        off.app.capture_hotkey = String::new();
+        off.app.switcher_hotkey = "Ctrl+Alt+X".into();
+        assert!(off.validate().is_ok());
+
+        let mut bad = Config::default();
+        bad.app.switcher_hotkey = "x".repeat(65);
         assert!(bad.validate().is_err());
     }
 

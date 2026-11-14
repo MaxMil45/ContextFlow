@@ -64,6 +64,10 @@ pub struct AppSettings {
     pub start_with_windows: bool,
     /// Saves the active workspace from anywhere, e.g. `Ctrl+Alt+X`. Empty = off.
     pub capture_hotkey: String,
+    /// Opens the workspace switcher from anywhere, e.g. `Ctrl+Alt+W`. Empty = off.
+    pub switcher_hotkey: String,
+    /// Save the workspace you are leaving before switching to another one.
+    pub auto_save_on_switch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -240,4 +244,13 @@ pub struct CompareResult {
     /// Plain-language advice before restoring, shown first.
     pub recommendations: Vec<String>,
     pub groups: Vec<DiffGroup>,
+}
+
+/// Which global shortcuts work. `null` = working (or switched off); otherwise why not.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/bindings/")]
+pub struct HotkeyStatusDto {
+    pub capture: Option<String>,
+    pub switcher: Option<String>,
 }

@@ -205,6 +205,7 @@ impl Database {
                 &s.hash,
                 s.capture_status,
                 &s.payload_json,
+                "manual",
             )?;
         }
         tx.commit()?;

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ContextFlow switcher</title>
+    <link rel="stylesheet" href="/src/switcher.css" />
+  </head>
+  <body>
+    <div id="panel" role="dialog" aria-label="Switch workspace">
+      <input id="q" placeholder="Switch to…" aria-label="Search workspaces" autocomplete="off" spellcheck="false" />
+      <div id="list" role="listbox"></div>
+      <div id="foot"><span>↑↓ move</span><span>↵ switch</span><span>Esc close</span></div>
+    </div>
+    <script type="module" src="/src/switcher.ts"></script>
+  </body>
+</html>

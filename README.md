@@ -27,11 +27,13 @@ contextflow capture "University Development" --note "Working on the storage laye
 contextflow shortcut "University Development"
 ```
 
-**3. Double-click the icon.** ContextFlow starts each saved app that isn't already running, waits for its window, and moves every window back to its saved position, falling back to a connected monitor if one has gone. Nothing opens twice if you click it again, and anything it couldn't do is shown in one message box.
+**3. Double-click the icon.** Like every switch, it first saves the workspace you were in (see *Switch with one keystroke* below). ContextFlow starts each saved app that isn't already running, waits for its window, and moves every window back to its saved position, falling back to a connected monitor if one has gone. Nothing opens twice if you click it again, and anything it couldn't do is shown in one message box.
 
 You can also run it from a terminal: `contextflow restore "University Development"` (add `--dry-run` to preview).
 
 Store apps such as Teams and Claude are started by their package id. **Chrome and Edge also come back with their tabs** (see below), and **VS Code windows reopen the folder they had open**. For other apps ContextFlow reopens the windows, not what was inside them.
+
+**Visual Studio solutions.** Each Visual Studio window's solution or folder name is taken from its title and looked up in Visual Studio's own list of recent solutions (`ApplicationPrivateSettings.xml`); on restore each one reopens with `devenv.exe <path>` in its own window, put back where it was. If two entries share the name, the one opened most recently is used; if they are equally recent, none is saved rather than guessing.
 
 **VS Code folders.** At capture, each VS Code window's folder name is taken from its title and looked up in VS Code's own `storage.json`; on restore the folder is reopened with `code --folder-uri`. If a name could mean more than one folder, no folder is saved for that window (capture says so) rather than guessing.
 
@@ -52,7 +54,7 @@ Then in Chrome or Edge open `chrome://extensions` (or `edge://extensions`), turn
 | `workspace create/list/archive/unarchive/delete` | Manage workspaces |
 | `workspace trust <name> [--yes]` | Review and approve an imported workspace so it can be restored |
 | `capture <ws> [--only a,b] [--note N] [--unminimize] [--dry-run]` | Save the open applications and windows as a new snapshot version (`--unminimize` saves minimized windows as normal; `--repo P` optionally adds Git info) |
-| `restore <ws> [--version N] [--only a,b] [--dry-run]` | Reopen the saved applications and put their windows back (uses the pinned version if there is one) |
+| `restore <ws> [--version N] [--only a,b] [--dry-run] [--no-save]` | Switch to the workspace: save the one you're in (unless `--no-save`), then reopen the saved applications and put their windows back (uses the pinned version if there is one) |
 | `pin <ws> [--version N]` / `unpin <ws>` | Make restore always use one snapshot version / go back to the latest |
 | `browser install/status/uninstall` | Set up and check the Chrome/Edge extension |
 | `shortcut <ws> [--name N] [--folder DIR] [--force]` | Create a desktop icon that restores the workspace |
@@ -66,7 +68,7 @@ Then in Chrome or Edge open `chrome://extensions` (or `edge://extensions`), turn
 | `verify [<ws>] [--version N]` | Re-hash snapshots and check database health |
 | `config path/show/init` | Configuration file |
 | `cleanup add/remove/show/apps` | Programs a workspace closes when you enter or leave it |
-| `leave` | Leave the active workspace (runs its "when leaving" cleanup) |
+| `leave` | Leave the active workspace: save it, then run its "when leaving" cleanup |
 | `info` | Where the database, config, logs and backups live |
 | `windows [--json]` | Debug: windows ContextFlow can see |
 
@@ -76,12 +78,13 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 
 The app (see [app/README.md](app/README.md)) does everything the command line does, and more:
 
+* **Switch with one keystroke:** press **Ctrl+Alt+W** (change it in Settings) from anywhere, type a few letters and press Enter. ContextFlow saves the workspace you're in (skipped if none of its programs are open, so an emptied desktop never overwrites it), runs its leave rules, restores the other one and runs its enter rules. A card in the corner says how long it took ("“Focus” is ready · 6.2 s"). In the app, the main button on any workspace you're not in is **Switch to this**, and the restore ends with a "Welcome back" card: your note, how long ago it was saved and the Git branch with changed files. Turn auto-save off in Settings → General.
 * **Keyboard first:** **Ctrl+K** finds any workspace or action, **Ctrl+N** creates one, **Ctrl+1…9** jumps between them, **Ctrl+Enter** restores, **F2** renames, **Ctrl+,** opens Settings.
 * **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
 * **Quick capture:** press **Ctrl+Alt+X** (change it in Settings, or turn it off) from anywhere and the workspace you're in is saved in the background, with no window in the way. A small card in the corner of the screen confirms it at once ("Saving…", then "Saved “Focus” v3 · 7 programs") and fades away; it never takes focus or blocks clicks. The tray's **Capture now** does the same. With no active workspace it saves into the one you used last.
 * **Capture review:** a checklist of everything a capture would save (programs, windows, browser tabs, VS Code folders, Git repositories), so you choose what goes in. From the tray, **Capture current…** is two clicks to a saved snapshot.
 * **History and compare:** tick two versions to compare them, or compare one with your screen right now. Advice about what restoring would do comes first.
-* **Workspace management:** rename, archive, delete (with its desktop icon), pin a version, delete a version, approve imported workspaces, export and import.
+* **Workspace management:** edit the name and description (its desktop icon is renamed too), archive with undo, delete (optionally exporting a copy first, and with its desktop icon), pin a version, delete a version, see recent restores, approve imported workspaces, export and import.
 * **Settings:** what is captured and excluded, browser tabs and the extension setup, timeouts, how long history is kept, notifications, close-to-tray and start with Windows. Saved into `config.toml`.
 * **Your data:** back up, check integrity, export and import, from the Settings screen.
 
@@ -116,6 +119,7 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `cf-config` | `config.toml` loading and validation |
 | `cf-browser` | Browser extension protocol, native-messaging host, tab matching and install |
 | `cf-vscode` | Works out which folder each VS Code window has open |
+| `cf-vstudio` | Works out which solution or folder each Visual Studio window has open |
 | `cf-git` | Read-only Git inspection (`status --porcelain=v2`, `--no-optional-locks`) |
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |

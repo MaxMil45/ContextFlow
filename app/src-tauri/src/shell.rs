@@ -21,7 +21,7 @@ pub const EVENT_RESTORE: &str = "tray://restore";
 
 /// The workspaces the tray offers to restore: the most recently used ones that
 /// have a snapshot and can be restored.
-fn recent_workspaces(app: &AppHandle) -> Vec<String> {
+fn recent_workspaces(app: &AppHandle) -> Vec<(String, String)> {
     let state = app.state::<AppState>();
     let Ok(db) = Database::open(&state.paths.db) else {
         return Vec::new();
@@ -35,7 +35,7 @@ fn recent_workspaces(app: &AppHandle) -> Vec<String> {
                 && db.list_snapshots(c.id).is_ok_and(|s| !s.is_empty())
         })
         .take(MAX_RECENT)
-        .map(|c| c.name)
+        .map(|c| (c.id.to_string(), c.name))
         .collect()
 }
 
@@ -47,10 +47,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let recent = recent_workspaces(app);
     let items = recent
         .iter()
-        .map(|name| {
+        .map(|(id, name)| {
+            // The menu item carries the workspace id, so a rename can't redirect it.
             MenuItem::with_id(
                 app,
-                format!("{RESTORE_PREFIX}{name}"),
+                format!("{RESTORE_PREFIX}{id}"),
                 name,
                 true,
                 None::<&str>,
@@ -96,9 +97,9 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 "quit" => app.exit(0),
                 _ => {
-                    if let Some(name) = id.strip_prefix(RESTORE_PREFIX) {
+                    if let Some(workspace_id) = id.strip_prefix(RESTORE_PREFIX) {
                         crate::show_main_window(app);
-                        let _ = app.emit(EVENT_RESTORE, name.to_string());
+                        let _ = app.emit(EVENT_RESTORE, workspace_id.to_string());
                     }
                 }
             }

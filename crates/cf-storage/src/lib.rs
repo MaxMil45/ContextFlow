@@ -19,4 +19,4 @@ pub use export::{
     ExportFile, ExportedSnapshot, ExportedWorkspace, EXPORT_FORMAT, EXPORT_FORMAT_VERSION,
 };
 pub use history::{RestoreRunSummary, RestoreStepRecord};
-pub use repo::{Database, IntegrityReport, RetentionPolicy};
+pub use repo::{ContextOverview, Database, IntegrityReport, RetentionPolicy};

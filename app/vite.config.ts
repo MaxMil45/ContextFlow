@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -17,5 +18,9 @@ export default defineConfig({
     target: "chrome120",
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // Two pages: the app, and the tiny framework-free quick-capture card.
+    rollupOptions: {
+      input: { main: resolve(__dirname, "index.html"), toast: resolve(__dirname, "toast.html") },
+    },
   },
 });

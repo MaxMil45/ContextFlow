@@ -131,7 +131,7 @@ export function CleanupSection({ workspace, onActivity }: { workspace: string; o
     <section className="card cleanup">
       <header className="card-header">
         <div>
-          <h3>Workspace Cleanup</h3>
+          <h3>Focus rules</h3>
           <p className="muted small">
             Close the programs that distract you here, and free their memory and CPU. Only the programs you
             list are touched, and critical Windows programs are never closed.

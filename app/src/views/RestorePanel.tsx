@@ -7,6 +7,8 @@ import { api, toCommandError, type CleanupPlan, type CommandError, type RestoreR
 
 type Props = {
   workspace: string;
+  /** The workspace name, for the title. */
+  label: string;
   version?: number;
   dryRun: boolean;
   /** Restore only these programs (a retry). */
@@ -23,7 +25,7 @@ type Props = {
  * Runs one restore: live progress lines from `restore://progress`, a Cancel
  * button while it runs, then the per-application report.
  */
-export function RestorePanel({ workspace, version, dryRun, only, onStart, onRetry, onClose, onFinished }: Props) {
+export function RestorePanel({ workspace, label, version, dryRun, only, onStart, onRetry, onClose, onFinished }: Props) {
   const [lines, setLines] = useState<string[]>([]);
   const [report, setReport] = useState<RestoreReport>();
   const [error, setError] = useState<CommandError>();
@@ -76,7 +78,7 @@ export function RestorePanel({ workspace, version, dryRun, only, onStart, onRetr
     <section className="card restore-panel" aria-live="polite">
       <header className="card-header">
         <h3>
-          {dryRun ? "Restore preview" : only ? "Retrying" : "Restoring"} · {workspace}
+          {dryRun ? "Restore preview" : only ? "Retrying" : "Restoring"} · {label}
           {report && ` v${report.version}`}
         </h3>
         {running ? (

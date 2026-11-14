@@ -1,7 +1,8 @@
+import { Database, Globe, KeyRound, RotateCcw, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ConfirmDialog } from "../components/dialogs";
-import { Badge, ErrorBanner, Spinner } from "../components/ui";
+import { Badge, ErrorBanner, Notice, SkeletonText, Spinner } from "../components/ui";
 import { plural } from "../format";
 import { useCommand } from "../hooks";
 import {
@@ -202,6 +203,14 @@ function HotkeyField({
   );
 }
 
+const NAV: Array<["general" | "capture" | "restore" | "data" | "advanced", string, LucideIcon]> = [
+  ["general", "General", SlidersHorizontal],
+  ["capture", "Capture", Globe],
+  ["restore", "Restore", KeyRound],
+  ["data", "Your data", Database],
+  ["advanced", "Advanced", Wrench],
+];
+
 export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const loaded = useCommand(() => api.getSettings(), []);
   const browser = useCommand(() => api.getBrowserStatus(), []);
@@ -213,6 +222,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const [retention, setRetention] = useState<RetentionResult>();
   const [verify, setVerify] = useState<VerifyResult>();
   const [busy, setBusy] = useState<string>();
+  const [tab, setTab] = useState<"general" | "capture" | "restore" | "data" | "advanced">("general");
 
   useEffect(() => {
     if (loaded.data) {
@@ -222,7 +232,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
   }, [loaded.data]);
 
   if (loaded.error) return <main className="content"><ErrorBanner error={loaded.error} /></main>;
-  if (!draft || !saved) return <main className="content"><Spinner label="Loading settings…" /></main>;
+  if (!draft || !saved) return <main className="content"><div className="page"><SkeletonText lines={5} /></div></main>;
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const set = (patch: (s: Settings) => Settings) => {
@@ -265,23 +275,24 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
 
   return (
     <main className="content settings">
-      <header className="content-header sticky">
-        <h1>Settings</h1>
-        <div className="actions">
-          <button disabled={!dirty || saving} onClick={() => setDraft(saved)}>
-            Revert
-          </button>
-          <button className="primary" disabled={!dirty || saving} onClick={save}>
-            {saving ? "Saving…" : "Save settings"}
-          </button>
-        </div>
-      </header>
+      <div className="page">
+        <header className="page-head">
+          <h1>Settings</h1>
+        </header>
 
-      {error && <ErrorBanner error={error} onDismiss={() => setError(undefined)} />}
-      {notice && <div className="banner banner-ok">{notice}</div>}
-      {dirty && <div className="banner banner-muted">You have unsaved changes.</div>}
+        {error && <ErrorBanner error={error} onDismiss={() => setError(undefined)} />}
+        {notice && <Notice onDismiss={() => setNotice(undefined)}>{notice}</Notice>}
 
-      <section className="card">
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="Settings sections">
+            {NAV.map(([key, label, Icon]) => (
+              <button key={key} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>
+                <Icon size={15} aria-hidden /> {label}
+              </button>
+            ))}
+          </nav>
+          <div className="settings-panels">
+      <section className="card" hidden={tab !== "general"}>
         <h3>General</h3>
         <Toggle
           checked={draft.app.notifications}
@@ -306,7 +317,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         </Toggle>
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "general"}>
         <h3>Quick capture</h3>
         <p className="muted small">
           Press this from anywhere to save the workspace you're in, without opening ContextFlow. A small
@@ -322,7 +333,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         </p>
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "capture"}>
         <h3>What gets captured</h3>
         <Toggle
           checked={draft.capture.includeWindows}
@@ -347,7 +358,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         />
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "capture"}>
         <h3>Browser tabs</h3>
         <Toggle
           checked={b.captureTabs}
@@ -427,7 +438,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         )}
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "restore"}>
         <h3>Restore</h3>
         <NumberField
           label="Longest a whole restore may take"
@@ -447,7 +458,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         />
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "data"}>
         <h3>Keeping history</h3>
         <p className="muted small">
           Old snapshots are deleted only when they break <em>every</em> rule you set. The newest snapshot and a
@@ -492,7 +503,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         </div>
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "data"}>
         <h3>Your data</h3>
         {info && (
           <dl className="paths">
@@ -564,7 +575,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         )}
       </section>
 
-      <section className="card">
+      <section className="card" hidden={tab !== "advanced"}>
         <h3>Logging</h3>
         <label className="field number-field">
           <span className="field-label">Detail level</span>
@@ -610,6 +621,23 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
           )}
         </ConfirmDialog>
       )}
+          </div>
+        </div>
+
+        {dirty && (
+          <div className="savebar" role="region" aria-label="Unsaved changes">
+            <span className="muted">You have unsaved changes.</span>
+            <div className="actions">
+              <button disabled={saving} onClick={() => setDraft(saved)}>
+                <RotateCcw size={14} aria-hidden /> Discard
+              </button>
+              <button className="primary" disabled={saving} onClick={save}>
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </main>
   );
 }

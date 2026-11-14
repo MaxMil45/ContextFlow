@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context as _, Result};
-use cf_cli::session::{self, Paths};
+use cf_app::session::{self, Paths};
 use cf_config::Config;
 
 /// Commands open their own database connection each time: SQLite in WAL mode
@@ -17,7 +17,7 @@ pub struct AppState {
     /// Cancel flag of the restore in progress, if any.
     pub restore_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// Keeps the log file writer alive for the life of the process.
-    _log_guard: Option<cf_cli::logging::WorkerGuard>,
+    _log_guard: Option<cf_app::logging::WorkerGuard>,
 }
 
 impl AppState {
@@ -32,7 +32,7 @@ impl AppState {
             .with_context(|| format!("loading config {}", config_path.display()))?;
         let db_override = std::env::var_os("CONTEXTFLOW_DB").map(PathBuf::from);
         let paths = session::resolve_paths(db_override, config_path, &config)?;
-        let log_guard = cf_cli::logging::init(&config.logging, &paths.logs);
+        let log_guard = cf_app::logging::init(&config.logging, &paths.logs);
         Ok(Self {
             paths,
             config: RwLock::new(config),

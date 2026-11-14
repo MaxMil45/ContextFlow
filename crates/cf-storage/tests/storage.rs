@@ -80,15 +80,9 @@ fn snapshots_cannot_be_updated() {
         .unwrap();
 
     let conn = db.raw_connection();
-    for sql in [
-        "UPDATE context_snapshots SET payload_json = '{}'",
-        "UPDATE snapshot_windows SET x = 5",
-        "UPDATE snapshot_git_states SET branch_name = 'evil'",
-        "UPDATE snapshot_notes SET note_content = 'changed'",
-    ] {
-        let err = conn.execute(sql, []).unwrap_err();
-        assert!(err.to_string().contains("immutable"), "{sql}: {err}");
-    }
+    let sql = "UPDATE context_snapshots SET payload_json = '{}'";
+    let err = conn.execute(sql, []).unwrap_err();
+    assert!(err.to_string().contains("immutable"), "{sql}: {err}");
     assert!(db.verify_snapshot(ctx.id, None).unwrap().ok());
 }
 

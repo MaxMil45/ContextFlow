@@ -183,6 +183,30 @@ fn run_cleanup(
 /// How long [`preview_cleanup`] watches programs to estimate their CPU use.
 const CPU_SAMPLE: Duration = Duration::from_millis(600);
 
+/// A sample younger than this is reused, so opening several workspaces (or both
+/// sides of one) does not repeat the 600 ms measurement.
+const SAMPLE_MAX_AGE: Duration = Duration::from_secs(3);
+
+/// The running programs with memory and recent CPU use, measured at most once
+/// per [`SAMPLE_MAX_AGE`]. Concurrent callers wait for the one measurement in
+/// progress instead of each starting their own.
+pub fn running_apps_cached() -> Vec<cf_cleanup::RunningApp> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+    type Sample = Option<(Instant, Vec<cf_cleanup::RunningApp>)>;
+    static CACHE: OnceLock<Mutex<Sample>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut slot = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, apps)) = slot.as_ref() {
+        if at.elapsed() < SAMPLE_MAX_AGE {
+            return apps.clone();
+        }
+    }
+    let apps = cf_cleanup::running_apps(&WindowsProcesses, CPU_SAMPLE);
+    *slot = Some((Instant::now(), apps.clone()));
+    apps
+}
+
 /// A workspace's rules for one side, and the programs it keeps open.
 /// Entering: the programs of the snapshot a restore would use are kept.
 /// Leaving: the next workspace isn't known, so nothing is kept.
@@ -210,7 +234,7 @@ fn cleanup_inputs(
 /// What a workspace's cleanup would do right now, without doing it.
 pub fn preview_cleanup(db: &Database, workspace: &str, phase: CleanupPhase) -> Result<CleanupPlan> {
     let (_, targets, keep) = cleanup_inputs(db, workspace, phase)?;
-    let apps = cf_cleanup::running_apps(&WindowsProcesses, CPU_SAMPLE);
+    let apps = running_apps_cached();
     Ok(cf_cleanup::plan(&targets, &keep, &apps))
 }
 

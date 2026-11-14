@@ -3,7 +3,8 @@
 //! becomes "Saved …", and fades away. It never takes focus and lets clicks
 //! through, so it doesn't get in the way of what you were doing.
 //!
-//! The window is created hidden at start-up, so showing it is instant.
+//! The window is created hidden at start-up, so showing it is instant. It loads
+//! `toast.html`, a tiny page with no framework, so keeping it costs little memory.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -38,7 +39,7 @@ struct Message {
 
 /// Create the (hidden) card window. Call once at start-up.
 pub fn preload(app: &AppHandle) -> tauri::Result<()> {
-    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html#toast".into()))
+    let window = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("toast.html".into()))
         .title("ContextFlow")
         .inner_size(WIDTH, HEIGHT)
         .decorations(false)

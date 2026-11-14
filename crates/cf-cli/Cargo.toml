@@ -25,6 +25,7 @@ name = "contextflow-launch"
 path = "src/launch.rs"
 
 [dependencies]
+cf-app.workspace = true
 cf-browser.workspace = true
 cf-cleanup.workspace = true
 cf-config.workspace = true

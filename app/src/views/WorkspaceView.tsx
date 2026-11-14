@@ -1,4 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  Archive,
+  ArchiveRestore,
+  Camera,
+  FileDown,
+  GitBranch,
+  GitCompareArrows,
+  History,
+  Layers,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Eye,
+  Shield,
+  MonitorUp,
+  Trash2,
+  LogOut,
+  Clock,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { Pending } from "../App";
 import { CaptureReview } from "../components/CaptureReview";
@@ -6,8 +27,20 @@ import { CompareDialog } from "../components/CompareDialog";
 import { ConfirmDialog, DeleteWorkspaceDialog, RenameDialog, TrustDialog } from "../components/dialogs";
 import { CleanupResults, CleanupSection } from "../components/CleanupSection";
 import { IconPicker } from "../components/IconPicker";
-import { Badge, Empty, ErrorBanner, Spinner } from "../components/ui";
-import { absoluteTime, captureStatusTone, plural, relativeTime } from "../format";
+import {
+  AppIcon,
+  Badge,
+  Empty,
+  ErrorBanner,
+  Kbd,
+  Menu,
+  MenuItem,
+  Notice,
+  SkeletonList,
+  SkeletonText,
+  useToast,
+} from "../components/ui";
+import { absoluteTime, plural, relativeTime } from "../format";
 import { useCommand } from "../hooks";
 import {
   api,
@@ -16,6 +49,7 @@ import {
   type CleanupReport,
   type CommandError,
   type SnapshotDetail,
+  type SnapshotEntry,
   type WorkspaceSummary,
 } from "../ipc/client";
 import { RestorePanel } from "./RestorePanel";
@@ -23,7 +57,6 @@ import { RestorePanel } from "./RestorePanel";
 type Props = {
   workspace: WorkspaceSummary;
   onChanged: () => void;
-  onRenamed: (renamed: WorkspaceSummary) => void;
   /** The workspace was deleted, or archived while archived ones are hidden. */
   onGone: () => void;
   showArchived: boolean;
@@ -32,39 +65,37 @@ type Props = {
   onPendingHandled: () => void;
 };
 
+type Tab = "overview" | "rules" | "history";
+
 type Dialog =
   | "rename"
   | "delete"
   | "approve"
+  | "replaceIcon"
   | { deleteVersion: number }
   | { compare: { from: number; to?: number } };
 
 type RestoreRun = { dryRun: boolean; version?: number; only?: string[]; key: number };
 
-export function WorkspaceView({
-  workspace,
-  onChanged,
-  onRenamed,
-  onGone,
-  showArchived,
-  pending,
-  onPendingHandled,
-}: Props) {
-  const name = workspace.name;
-  const history = useCommand(() => api.listSnapshots(name), [name]);
+const statusTone = { complete: "ok", partial: "warn", failed: "bad" } as const;
+const statusLabel = { complete: "Complete", partial: "Partial", failed: "Failed" } as const;
+
+export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pending, onPendingHandled }: Props) {
+  const { id, name } = workspace;
+  const toast = useToast();
+  const history = useCommand(() => api.listSnapshots(id), [id]);
+  const [tab, setTab] = useState<Tab>("overview");
   const [selectedVersion, setSelectedVersion] = useState<number>();
   const version = selectedVersion ?? workspace.pinnedVersion ?? workspace.latest?.version;
   const snapshot = useCommand(
-    () => (version === undefined ? Promise.resolve(undefined) : api.getSnapshot(name, version)),
-    [name, version],
+    () => (version === undefined ? Promise.resolve(undefined) : api.getSnapshot(id, version)),
+    [id, version],
   );
   const [restore, setRestore] = useState<RestoreRun>();
   const [dialog, setDialog] = useState<Dialog>();
   const [actionError, setActionError] = useState<CommandError>();
   const [leaveReport, setLeaveReport] = useState<CleanupReport | null>();
-  const [compareSel, setCompareSel] = useState<number[]>([]);
-  const [notice, setNotice] = useState<string>();
-  /** Changes to open the capture review (from the tray). */
+  /** Changes to open the capture review (from the tray or the palette). */
   const [captureKey, setCaptureKey] = useState<number>();
 
   const refresh = () => {
@@ -73,16 +104,38 @@ export function WorkspaceView({
     onChanged();
   };
 
-  const canRestore = workspace.latest !== null && workspace.isTrusted && !restore;
+  const canRestore = workspace.latest !== null && workspace.isTrusted && !restore && !workspace.isArchived;
+  const startRestore = (dryRun: boolean) => {
+    if (canRestore) setRestore({ dryRun, version, key: Date.now() });
+  };
 
-  // The tray asked for a capture or a restore of this workspace.
+  // Keyboard: Ctrl+Enter restores, F2 renames.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        startRestore(false);
+      } else if (e.key === "F2") {
+        e.preventDefault();
+        setDialog("rename");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // The tray or palette asked for a capture or a restore of this workspace.
   useEffect(() => {
     if (!pending) return;
     if (pending.kind === "capture") {
       if (workspace.isArchived) setActionError({ code: "conflict", message: "This workspace is archived; unarchive it to capture." });
-      else setCaptureKey(pending.key);
+      else {
+        setTab("overview");
+        setCaptureKey(pending.key);
+      }
     } else if (workspace.latest === null) {
-      setActionError({ code: "conflict", message: "This workspace has no snapshot to restore yet." });
+      setActionError({ code: "conflict", message: "Nothing has been saved in this workspace yet, so there is nothing to restore." });
     } else if (!workspace.isTrusted) {
       setActionError({ code: "conflict", message: "This workspace was imported and must be approved before it can be restored." });
     } else {
@@ -92,233 +145,312 @@ export function WorkspaceView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending?.key]);
 
+  const guard = (run: () => Promise<void>) => async () => {
+    setActionError(undefined);
+    try {
+      await run();
+    } catch (e) {
+      setActionError(toCommandError(e));
+    }
+  };
+
+  async function createShortcut(overwrite: boolean) {
+    try {
+      const r = await api.createShortcut(id, overwrite);
+      toast.show(`Desktop icon created: ${r.path}`);
+    } catch (e) {
+      const err = toCommandError(e);
+      if (err.code === "already_exists" && !overwrite) setDialog("replaceIcon");
+      else toast.show(err.message, { tone: "bad" });
+    }
+  }
+
+  const restoreLabel =
+    version !== undefined && version !== (workspace.pinnedVersion ?? workspace.latest?.version)
+      ? `Restore v${version}`
+      : "Restore";
+
   return (
     <main className="content">
-      <header className="content-header">
-        <div className="title">
-          <IconPicker workspace={name} />
-          <div>
-          <h1>
-            {name} {workspace.isActive && <Badge tone="ok">active</Badge>}
-          </h1>
-          {workspace.description && <p className="muted">{workspace.description}</p>}
-          {workspace.pinnedVersion !== null && (
-            <p className="muted">Restore uses pinned v{workspace.pinnedVersion}.</p>
-          )}
+      <div className="page">
+        <header className="page-head">
+          <div className="title">
+            <IconPicker workspace={id} name={name} />
+            <div className="title-text">
+              <h1>
+                {name}
+                {workspace.isActive && (
+                  <Badge tone="ok" icon={Layers}>
+                    You're here
+                  </Badge>
+                )}
+              </h1>
+              <p className="muted">
+                {workspace.description ??
+                  (workspace.latest
+                    ? `Last saved ${relativeTime(workspace.latest.createdAt)}`
+                    : "Nothing saved yet")}
+                {workspace.pinnedVersion !== null && ` · Locked to v${workspace.pinnedVersion}`}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="actions">
-          {workspace.isActive && (
-            <button
-              title="Run this workspace's 'when I leave' cleanup and stop being in it"
-              onClick={async () => {
-                setActionError(undefined);
-                try {
+          <div className="actions">
+            {workspace.isActive && (
+              <button
+                className="ghost"
+                data-tip="Run this workspace's “when I leave” rules and step out of it"
+                onClick={guard(async () => {
                   setLeaveReport(await api.leaveWorkspace());
                   onChanged();
-                } catch (e) {
-                  setActionError(toCommandError(e));
-                }
-              }}
-            >
-              Leave workspace
-            </button>
-          )}
-          <ShortcutButton workspace={name} disabled={workspace.latest === null} />
-          <WorkspaceMenu
-            archived={workspace.isArchived}
-            onRename={() => setDialog("rename")}
-            onDelete={() => setDialog("delete")}
-            onExport={async () => {
-              setActionError(undefined);
-              try {
-                const r = await api.exportWorkspaces([name]);
-                if (r) setNotice(`${r.message} ${r.path}`);
-              } catch (e) {
-                setActionError(toCommandError(e));
-              }
-            }}
-            onArchive={async () => {
-              setActionError(undefined);
-              try {
-                await api.setWorkspaceArchived(name, !workspace.isArchived);
-                // Archived workspaces are hidden unless "Show archived" is on.
-                if (!workspace.isArchived && !showArchived) onGone();
-                else onChanged();
-              } catch (e) {
-                setActionError(toCommandError(e));
-              }
-            }}
-          />
-          <button
-            disabled={!canRestore}
-            onClick={() => setRestore({ dryRun: true, version, key: Date.now() })}
-          >
-            Preview restore
-          </button>
-          <button
-            className="primary"
-            disabled={!canRestore}
-            onClick={() => setRestore({ dryRun: false, version, key: Date.now() })}
-            title={workspace.isTrusted ? undefined : "Imported workspaces must be approved first"}
-          >
-            Restore{version !== undefined ? ` v${version}` : ""}
-          </button>
-        </div>
-      </header>
-
-      {!workspace.isTrusted && (
-        <div className="banner banner-warn">
-          <span>This workspace was imported and has not been approved, so it can't be restored yet.</span>
-          <button onClick={() => setDialog("approve")}>Review and approve…</button>
-        </div>
-      )}
-
-      {workspace.isArchived && (
-        <div className="banner banner-muted">
-          This workspace is archived. Unarchive it from the ⋯ menu to capture new snapshots.
-        </div>
-      )}
-
-      {leaveReport && leaveReport.results.length > 0 && (
-        <section className="card">
-          <CleanupResults report={leaveReport} />
-          <button className="link" onClick={() => setLeaveReport(undefined)}>
-            Dismiss
-          </button>
-        </section>
-      )}
-
-      {actionError && <ErrorBanner error={actionError} onDismiss={() => setActionError(undefined)} />}
-      {notice && (
-        <div className="banner banner-ok">
-          <span>{notice}</span>
-          <button className="link" onClick={() => setNotice(undefined)}>
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {restore && (
-        <RestorePanel
-          key={restore.key}
-          workspace={name}
-          version={restore.version}
-          dryRun={restore.dryRun}
-          only={restore.only}
-          onStart={() => setRestore({ dryRun: false, version: restore.version, key: Date.now() })}
-          onRetry={(ids) => setRestore({ dryRun: false, version: restore.version, only: ids, key: Date.now() })}
-          onClose={() => setRestore(undefined)}
-          onFinished={onChanged}
-        />
-      )}
-
-      <CaptureCard
-        workspace={name}
-        disabled={workspace.isArchived}
-        openKey={captureKey}
-        onCaptured={() => {
-          setSelectedVersion(undefined);
-          refresh();
-        }}
-      />
-
-      <CleanupSection workspace={name} onActivity={onChanged} />
-
-      <div className="columns">
-        <section className="card">
-          <header className="card-header">
-            <h3>History</h3>
-            {compareSel.length === 2 ? (
-              <button
-                onClick={() => {
-                  const [from, to] = [...compareSel].sort((a, b) => a - b);
-                  setDialog({ compare: { from: from!, to } });
-                }}
+                })}
               >
-                Compare selected
+                <LogOut size={15} aria-hidden /> Leave
               </button>
-            ) : (
-              (history.data?.length ?? 0) > 1 && <span className="muted small">Tick two to compare</span>
             )}
-          </header>
-          {history.error && <ErrorBanner error={history.error} />}
-          {history.loading && !history.data && <Spinner />}
-          {history.data?.length === 0 && <p className="muted">No snapshots yet. Capture one above.</p>}
-          <ol className="timeline">
-            {history.data?.map((s) => (
-              <li key={s.version} className="timeline-row">
-                <input
-                  type="checkbox"
-                  aria-label={`Select v${s.version} to compare`}
-                  checked={compareSel.includes(s.version)}
-                  onChange={() =>
-                    setCompareSel((sel) =>
-                      sel.includes(s.version)
-                        ? sel.filter((v) => v !== s.version)
-                        : [...sel, s.version].slice(-2),
-                    )
-                  }
-                />
-                <button
-                  className={`timeline-item${s.version === version ? " active" : ""}`}
-                  onClick={() => setSelectedVersion(s.version)}
-                >
-                  <Badge tone={captureStatusTone[s.captureStatus]}>v{s.version}</Badge>
-                  <span title={absoluteTime(s.createdAt)}>{relativeTime(s.createdAt)}</span>
-                  {s.version === workspace.pinnedVersion && <Badge tone="muted">pinned</Badge>}
-                  <span className="mono muted">{s.shortHash}</span>
-                </button>
-              </li>
-            ))}
-          </ol>
-        </section>
+            <button
+              className="ghost"
+              disabled={!canRestore}
+              data-tip="See what a restore would do, without doing it"
+              onClick={() => startRestore(true)}
+            >
+              <Eye size={15} aria-hidden /> Preview
+            </button>
+            <button
+              className="primary"
+              disabled={!canRestore}
+              onClick={() => startRestore(false)}
+              data-tip={workspace.isTrusted ? "Reopen everything (Ctrl+Enter)" : "Imported workspaces must be approved first"}
+            >
+              <Play size={14} aria-hidden /> {restoreLabel} <Kbd>Ctrl ↵</Kbd>
+            </button>
+            <Menu label="More actions" trigger={<MoreHorizontal size={16} />}>
+              {(close) => (
+                <>
+                  <MenuItem icon={MonitorUp} close={close} onSelect={() => void createShortcut(false)}>
+                    Create desktop icon
+                  </MenuItem>
+                  <MenuItem icon={Pencil} hint="F2" close={close} onSelect={() => setDialog("rename")}>
+                    Rename…
+                  </MenuItem>
+                  <MenuItem
+                    icon={FileDown}
+                    close={close}
+                    onSelect={guard(async () => {
+                      const r = await api.exportWorkspaces([id]);
+                      if (r) toast.show(`${r.message} ${r.path}`);
+                    })}
+                  >
+                    Export…
+                  </MenuItem>
+                  <hr />
+                  <MenuItem
+                    icon={workspace.isArchived ? ArchiveRestore : Archive}
+                    close={close}
+                    onSelect={guard(async () => {
+                      const archiving = !workspace.isArchived;
+                      await api.setWorkspaceArchived(id, archiving);
+                      toast.show(archiving ? `Archived “${name}”` : `Restored “${name}” from the archive`, {
+                        action: {
+                          label: "Undo",
+                          run: () => void api.setWorkspaceArchived(id, !archiving).then(onChanged),
+                        },
+                      });
+                      // Archived workspaces are hidden unless the list shows them.
+                      if (archiving && !showArchived) onGone();
+                      else onChanged();
+                    })}
+                  >
+                    {workspace.isArchived ? "Unarchive" : "Archive"}
+                  </MenuItem>
+                  <MenuItem icon={Trash2} danger close={close} onSelect={() => setDialog("delete")}>
+                    Delete…
+                  </MenuItem>
+                </>
+              )}
+            </Menu>
+          </div>
+        </header>
 
-        <section className="card grow">
-          {snapshot.error && <ErrorBanner error={snapshot.error} />}
-          {snapshot.data ? (
-            <SnapshotDetails
-              snapshot={snapshot.data}
-              pinned={snapshot.data.version === workspace.pinnedVersion}
-              onPin={async (pin) => {
-                setActionError(undefined);
-                try {
-                  await api.setPinnedVersion(name, pin ? snapshot.data!.version : null);
+        {!workspace.isTrusted && (
+          <div className="banner banner-warn">
+            <span>
+              <Shield size={16} aria-hidden />
+              This workspace was imported and hasn't been approved, so it can't be restored yet.
+            </span>
+            <button onClick={() => setDialog("approve")}>Review and approve…</button>
+          </div>
+        )}
+        {workspace.isArchived && (
+          <Notice tone="muted">This workspace is archived. Unarchive it from the ⋯ menu to save new snapshots.</Notice>
+        )}
+        {actionError && <ErrorBanner error={actionError} onDismiss={() => setActionError(undefined)} />}
+
+        {leaveReport && leaveReport.results.length > 0 && (
+          <section className="card">
+            <CleanupResults report={leaveReport} />
+            <button className="link" onClick={() => setLeaveReport(undefined)}>
+              Dismiss
+            </button>
+          </section>
+        )}
+
+        {restore && (
+          <RestorePanel
+            key={restore.key}
+            workspace={id}
+            label={name}
+            version={restore.version}
+            dryRun={restore.dryRun}
+            only={restore.only}
+            onStart={() => setRestore({ dryRun: false, version: restore.version, key: Date.now() })}
+            onRetry={(ids) => setRestore({ dryRun: false, version: restore.version, only: ids, key: Date.now() })}
+            onClose={() => setRestore(undefined)}
+            onFinished={onChanged}
+          />
+        )}
+
+        <div className="tabs" role="tablist" aria-label="Workspace sections">
+          {(
+            [
+              ["overview", "Overview", null],
+              ["rules", "Focus rules", null],
+              ["history", "History", history.data?.length ?? null],
+            ] as const
+          ).map(([key, label, count]) => (
+            <button
+              key={key}
+              role="tab"
+              id={`tab-${key}`}
+              aria-selected={tab === key}
+              aria-controls={`panel-${key}`}
+              className="tab"
+              onClick={() => setTab(key)}
+            >
+              {label}
+              {count !== null && <span className="tab-count">{count}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="tab-panel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} key={tab}>
+          {tab === "overview" && (
+            <>
+              <CaptureCard
+                workspace={id}
+                label={name}
+                disabled={workspace.isArchived}
+                openKey={captureKey}
+                onCaptured={() => {
+                  setSelectedVersion(undefined);
                   refresh();
-                } catch (e) {
-                  setActionError(toCommandError(e));
-                }
-              }}
-              onDelete={() => setDialog({ deleteVersion: snapshot.data!.version })}
-              onCompareNow={() => setDialog({ compare: { from: snapshot.data!.version } })}
-            />
-          ) : (
-            !snapshot.loading && <Empty title="Nothing captured yet">Open your apps, then capture.</Empty>
+                }}
+              />
+              {snapshot.error && <ErrorBanner error={snapshot.error} />}
+              {snapshot.loading && !snapshot.data && <SkeletonText lines={4} />}
+              {snapshot.data ? (
+                <Overview snapshot={snapshot.data} />
+              ) : (
+                !snapshot.loading && (
+                  <Empty icon={Camera} title="Nothing saved yet">
+                    Open the apps you work in, arrange them how you like, then choose Capture. Next time, one
+                    click brings it all back.
+                  </Empty>
+                )
+              )}
+            </>
           )}
-        </section>
+
+          {tab === "rules" && <CleanupSection workspace={id} onActivity={onChanged} />}
+
+          {tab === "history" && (
+            <div className="columns">
+              <section className="card">
+                <header className="card-header">
+                  <h3>
+                    <History size={15} aria-hidden /> Saved versions
+                  </h3>
+                </header>
+                {history.error && <ErrorBanner error={history.error} />}
+                {history.loading && !history.data && <SkeletonList rows={3} />}
+                {history.data?.length === 0 && <p className="muted">No snapshots yet. Capture one from Overview.</p>}
+                <ol className="timeline">
+                  {history.data?.map((s, i) => (
+                    <HistoryRow
+                      key={s.version}
+                      entry={s}
+                      active={s.version === version}
+                      pinned={s.version === workspace.pinnedVersion}
+                      older={history.data?.[i + 1]?.version}
+                      onSelect={() => setSelectedVersion(s.version)}
+                      onCompare={(from) => setDialog({ compare: { from, to: s.version } })}
+                    />
+                  ))}
+                </ol>
+              </section>
+              <section className="card grow">
+                {snapshot.error && <ErrorBanner error={snapshot.error} />}
+                {snapshot.loading && !snapshot.data && <SkeletonText lines={5} />}
+                {snapshot.data && (
+                  <VersionDetails
+                    snapshot={snapshot.data}
+                    pinned={snapshot.data.version === workspace.pinnedVersion}
+                    onPin={guard(async () => {
+                      const pin = snapshot.data!.version !== workspace.pinnedVersion;
+                      await api.setPinnedVersion(id, pin ? snapshot.data!.version : null);
+                      refresh();
+                    })}
+                    onDelete={() => setDialog({ deleteVersion: snapshot.data!.version })}
+                    onCompareNow={() => setDialog({ compare: { from: snapshot.data!.version } })}
+                  />
+                )}
+              </section>
+            </div>
+          )}
+        </div>
       </div>
 
       {dialog === "rename" && (
-        <RenameDialog workspace={workspace} onRenamed={onRenamed} onClose={() => setDialog(undefined)} />
+        <RenameDialog
+          workspace={workspace}
+          onRenamed={() => onChanged()}
+          onClose={() => setDialog(undefined)}
+        />
       )}
       {dialog === "approve" && (
-        <TrustDialog workspace={name} onApproved={onChanged} onClose={() => setDialog(undefined)} />
+        <TrustDialog workspace={id} name={name} onApproved={onChanged} onClose={() => setDialog(undefined)} />
       )}
       {dialog === "delete" && (
         <DeleteWorkspaceDialog
-          workspace={name}
+          workspace={id}
+          name={name}
           snapshotCount={history.data?.length ?? 0}
           onDeleted={(outcome) => {
-            // The workspace is gone even if its icon couldn't be removed; say so on the next screen.
-            if (outcome.shortcutError) window.alert(`The workspace was deleted, but its desktop icon could not be removed: ${outcome.shortcutError}`);
+            if (outcome.shortcutError) {
+              toast.show(`Deleted, but its desktop icon could not be removed: ${outcome.shortcutError}`, { tone: "bad", ms: 8000 });
+            } else {
+              toast.show(`Deleted “${name}”`);
+            }
             onGone();
           }}
           onClose={() => setDialog(undefined)}
         />
       )}
+      {dialog === "replaceIcon" && (
+        <ConfirmDialog
+          title="Replace the desktop icon?"
+          confirmLabel="Replace"
+          action={() => createShortcut(true)}
+          onClose={() => setDialog(undefined)}
+        >
+          <p>
+            A desktop icon for <strong>{name}</strong> already exists. Replacing it keeps the same name and points it at
+            this workspace.
+          </p>
+        </ConfirmDialog>
+      )}
       {typeof dialog === "object" && "compare" in dialog && (
         <CompareDialog
-          workspace={name}
+          workspace={id}
           from={dialog.compare.from}
           to={dialog.compare.to}
           onClose={() => setDialog(undefined)}
@@ -326,19 +458,19 @@ export function WorkspaceView({
       )}
       {typeof dialog === "object" && "deleteVersion" in dialog && (
         <ConfirmDialog
-          title={`Delete v${dialog.deleteVersion}?`}
+          title={`Delete version ${dialog.deleteVersion}?`}
           confirmLabel="Delete version"
           danger
           action={async () => {
-            await api.deleteSnapshot(name, dialog.deleteVersion);
+            await api.deleteSnapshot(id, dialog.deleteVersion);
             setSelectedVersion(undefined);
             refresh();
           }}
           onClose={() => setDialog(undefined)}
         >
           <p>
-            This permanently deletes version {dialog.deleteVersion} of <strong>{name}</strong>. Other
-            versions are kept, and the number is not reused.
+            This permanently deletes version {dialog.deleteVersion} of <strong>{name}</strong>. Other versions are
+            kept, and the number is not reused.
           </p>
         </ConfirmDialog>
       )}
@@ -346,70 +478,137 @@ export function WorkspaceView({
   );
 }
 
-/** The ⋯ menu: rename, archive, delete. */
-function WorkspaceMenu({
-  archived,
-  onRename,
-  onArchive,
-  onDelete,
-  onExport,
+function HistoryRow({
+  entry,
+  active,
+  pinned,
+  older,
+  onSelect,
+  onCompare,
 }: {
-  archived: boolean;
-  onRename: () => void;
-  onArchive: () => void;
-  onDelete: () => void;
-  onExport: () => void;
+  entry: SnapshotEntry;
+  active: boolean;
+  pinned: boolean;
+  older: number | undefined;
+  onSelect: () => void;
+  onCompare: (from: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const item = (label: string, run: () => void, danger = false) => (
-    <button
-      role="menuitem"
-      className={danger ? "danger" : undefined}
-      onClick={() => {
-        setOpen(false);
-        run();
-      }}
-    >
-      {label}
-    </button>
-  );
-
   return (
-    <div className="shortcut" ref={root}>
-      <button aria-haspopup="menu" aria-expanded={open} aria-label="More actions" onClick={() => setOpen((o) => !o)}>
-        ⋯
+    <li className="timeline-row">
+      <button
+        className={`timeline-item${active ? " active" : ""}`}
+        onClick={onSelect}
+        title={`Version ${entry.version} · ${absoluteTime(entry.createdAt)} · ${entry.shortHash}`}
+      >
+        <span className={`status-dot ${statusTone[entry.captureStatus]}`} role="img" aria-label={statusLabel[entry.captureStatus]} />
+        <span className="timeline-main">
+          <span className="timeline-when">{relativeTime(entry.createdAt)}</span>
+          <span className="timeline-sub">
+            Version {entry.version}
+            {entry.captureStatus !== "complete" && ` · ${statusLabel[entry.captureStatus].toLowerCase()}`}
+          </span>
+        </span>
+        {pinned && <Pin size={13} aria-label="Locked" style={{ marginLeft: "auto", color: "var(--accent)" }} />}
       </button>
-      {open && (
-        <div className="menu menu-right" role="menu">
-          {item("Rename…", onRename)}
-          {item("Export…", onExport)}
-          {item(archived ? "Unarchive" : "Archive", onArchive)}
-          {item("Delete…", onDelete, true)}
-        </div>
+      {older !== undefined && (
+        <button
+          className="ghost icon"
+          aria-label={`Compare v${entry.version} with v${older}`}
+          data-tip={`What changed since v${older}?`}
+          onClick={() => onCompare(older)}
+        >
+          <GitCompareArrows size={15} />
+        </button>
       )}
-    </div>
+    </li>
   );
 }
 
-function SnapshotDetails({
+/** "Where you left off": the first thing you see when you open a workspace. */
+function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
+  const windows = snapshot.applications.reduce((n, a) => n + a.windowCount, 0);
+  const note = snapshot.notes.at(-1);
+  const repo = snapshot.repositories[0];
+  const dirty = repo ? repo.staged + repo.modified + repo.untracked : 0;
+
+  return (
+    <>
+      <section className="resume-card" aria-label="Where you left off">
+        <span className="eyebrow">Where you left off</span>
+        <p className="resume-note">{note ?? "No note on this save. Add one when you capture to remember what you were doing."}</p>
+        <div className="resume-meta">
+          <span title={absoluteTime(snapshot.createdAt)}>
+            <Clock size={13} aria-hidden /> Saved {relativeTime(snapshot.createdAt)}
+          </span>
+          {repo && (
+            <span>
+              <GitBranch size={13} aria-hidden /> {repo.branch ?? "detached"}
+              {dirty > 0 ? ` · ${plural(dirty, "changed file")}` : " · clean"}
+            </span>
+          )}
+          {snapshot.captureStatus !== "complete" && (
+            <Badge tone={statusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]} save</Badge>
+          )}
+        </div>
+      </section>
+
+      <div className="stat-row">
+        <div className="stat">
+          <div className="stat-value">{snapshot.applications.length}</div>
+          <div className="stat-label">{snapshot.applications.length === 1 ? "App" : "Apps"}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-value">{windows}</div>
+          <div className="stat-label">{windows === 1 ? "Window" : "Windows"}</div>
+        </div>
+        <div className="stat">
+          <div className="stat-value">{snapshot.monitorCount}</div>
+          <div className="stat-label">{snapshot.monitorCount === 1 ? "Monitor" : "Monitors"}</div>
+        </div>
+      </div>
+
+      <section className="card">
+        <header className="card-header">
+          <h3>What comes back</h3>
+        </header>
+        <ul className="app-list">
+          {snapshot.applications.map((a) => (
+            <li className="app-row" key={a.applicationId}>
+              <AppIcon applicationId={a.applicationId} />
+              <span className="app-name">{a.applicationId}</span>
+              <span className="muted small">
+                {[
+                  plural(a.windowCount, "window"),
+                  a.tabCount > 0 && plural(a.tabCount, "tab"),
+                  a.folderCount > 0 && plural(a.folderCount, "folder"),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {snapshot.repositories.length > 0 && (
+          <>
+            <h4>Repositories</h4>
+            <ul className="repos">
+              {snapshot.repositories.map((r) => (
+                <li key={r.path}>
+                  <span className="mono">{r.path}</span> <Badge tone="muted">{r.branch ?? "detached"}</Badge>{" "}
+                  <span className="muted">
+                    {r.staged} staged, {r.modified} modified, {r.untracked} untracked
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
+function VersionDetails({
   snapshot,
   pinned,
   onPin,
@@ -418,7 +617,7 @@ function SnapshotDetails({
 }: {
   snapshot: SnapshotDetail;
   pinned: boolean;
-  onPin: (pin: boolean) => void;
+  onPin: () => void;
   onDelete: () => void;
   onCompareNow: () => void;
 }) {
@@ -427,84 +626,57 @@ function SnapshotDetails({
     <>
       <header className="card-header">
         <h3>
-          v{snapshot.version} · {absoluteTime(snapshot.createdAt)}
+          Version {snapshot.version}
+          <Badge tone={statusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]}</Badge>
         </h3>
         <div className="actions">
-          <Badge tone={captureStatusTone[snapshot.captureStatus]}>{snapshot.captureStatus}</Badge>
-          <button onClick={onCompareNow} title="What has changed on your screen since this was saved?">
-            Compare with now
+          <button className="ghost" onClick={onCompareNow} data-tip="What changed on your screen since this was saved?">
+            <GitCompareArrows size={15} aria-hidden /> Compare with now
           </button>
           <button
-            onClick={() => onPin(!pinned)}
-            title={
-              pinned
-                ? "Restore the latest snapshot again"
-                : "Make restore and the desktop icon always use this version"
-            }
+            className="ghost"
+            onClick={onPin}
+            data-tip={pinned ? "Restore the newest save again" : "Always restore this version, even after new saves"}
           >
-            {pinned ? "Unpin" : "Pin this version"}
+            {pinned ? <PinOff size={15} aria-hidden /> : <Pin size={15} aria-hidden />} {pinned ? "Unlock" : "Lock"}
           </button>
           <button
-            className="danger"
+            className="ghost danger"
             onClick={onDelete}
             disabled={pinned}
-            title={pinned ? "Unpin it before deleting it" : "Permanently delete this version"}
+            data-tip={pinned ? "Unlock it before deleting it" : "Permanently delete this version"}
           >
-            Delete…
+            <Trash2 size={15} aria-hidden /> Delete
           </button>
         </div>
       </header>
       <p className="muted">
-        {plural(snapshot.applications.length, "application")}, {plural(windows, "window")},{" "}
-        {plural(snapshot.monitorCount, "monitor")}
+        Saved {absoluteTime(snapshot.createdAt)} · {plural(snapshot.applications.length, "app")},{" "}
+        {plural(windows, "window")}, {plural(snapshot.monitorCount, "monitor")}
       </p>
-      {snapshot.notes.length > 0 && (
-        <blockquote className="resume-card">{snapshot.notes.at(-1)}</blockquote>
-      )}
-      <table className="apps">
-        <tbody>
-          {snapshot.applications.map((a) => (
-            <tr key={a.applicationId}>
-              <td className="mono">{a.applicationId}</td>
-              <td>{plural(a.windowCount, "window")}</td>
-              <td className="muted">
-                {[
-                  a.tabCount > 0 && plural(a.tabCount, "tab"),
-                  a.folderCount > 0 && plural(a.folderCount, "folder"),
-                ]
-                  .filter(Boolean)
-                  .join(", ")}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {snapshot.repositories.length > 0 && (
-        <>
-          <h4>Repositories</h4>
-          <ul className="repos">
-            {snapshot.repositories.map((r) => (
-              <li key={r.path}>
-                <span className="mono">{r.path}</span> <Badge tone="muted">{r.branch ?? "detached"}</Badge>{" "}
-                <span className="muted">
-                  {r.staged} staged, {r.modified} modified, {r.untracked} untracked
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      {snapshot.notes.length > 0 && <p style={{ marginTop: 12 }}>“{snapshot.notes.at(-1)}”</p>}
+      <ul className="app-list" style={{ marginTop: 12 }}>
+        {snapshot.applications.map((a) => (
+          <li className="app-row" key={a.applicationId}>
+            <AppIcon applicationId={a.applicationId} />
+            <span className="app-name">{a.applicationId}</span>
+            <span className="muted small">{plural(a.windowCount, "window")}</span>
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
 
 function CaptureCard({
   workspace,
+  label,
   disabled,
   openKey,
   onCaptured,
 }: {
   workspace: string;
+  label: string;
   disabled: boolean;
   /** Changes to open the review (the tray's "Capture current…"). */
   openKey?: number;
@@ -521,23 +693,30 @@ function CaptureCard({
   return (
     <section className="card">
       <div className="capture">
-        <span className="muted">
-          {hotkey
-            ? `Press ${hotkey} from anywhere to save instantly, or review what goes in:`
-            : "Save what's open now as a new snapshot. You choose what goes in."}
-        </span>
+        <div>
+          <h3>Save what's open now</h3>
+          <p className="muted small">
+            {hotkey ? (
+              <>
+                You choose what goes in. Or press <Kbd>{hotkey}</Kbd> anywhere to save instantly.
+              </>
+            ) : (
+              "You choose what goes in."
+            )}
+          </p>
+        </div>
         <button className="primary" disabled={disabled} onClick={() => setOpen(true)}>
-          Capture…
+          <Camera size={15} aria-hidden /> Capture…
         </button>
       </div>
       {report && (
-        <div className="banner banner-ok">
-          <span>
+        <div style={{ marginTop: 12 }}>
+          <Notice onDismiss={() => setReport(undefined)}>
             Saved v{report.snapshot.version}
             {report.identicalToPrevious && " (identical to the previous version)"}.
-            {report.pinnedVersion !== null && ` Restore still uses pinned v${report.pinnedVersion}.`}
-            {report.autoPruned.length > 0 && ` Auto-pruned ${plural(report.autoPruned.length, "old snapshot")}.`}
-          </span>
+            {report.pinnedVersion !== null && ` Restore still uses locked v${report.pinnedVersion}.`}
+            {report.autoPruned.length > 0 && ` Removed ${plural(report.autoPruned.length, "old snapshot")}.`}
+          </Notice>
           {report.warnings.length > 0 && (
             <ul className="warnings">
               {report.warnings.map((w) => (
@@ -550,6 +729,7 @@ function CaptureCard({
       {open && (
         <CaptureReview
           workspace={workspace}
+          label={label}
           onSaved={(r) => {
             setReport(r);
             onCaptured();
@@ -558,48 +738,5 @@ function CaptureCard({
         />
       )}
     </section>
-  );
-}
-
-/** "Desktop icon": the same shortcut `contextflow shortcut` makes. */
-function ShortcutButton({ workspace, disabled }: { workspace: string; disabled: boolean }) {
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string }>();
-
-  async function create(overwrite: boolean) {
-    setBusy(true);
-    setResult(undefined);
-    try {
-      const r = await api.createShortcut(workspace, overwrite);
-      setResult({ ok: true, text: `Icon created: ${r.path}` });
-    } catch (e) {
-      const err = toCommandError(e);
-      if (err.code === "already_exists" && !overwrite) {
-        if (window.confirm(`A desktop icon for "${workspace}" already exists. Replace it?`)) {
-          return create(true);
-        }
-      } else {
-        setResult({ ok: false, text: err.message });
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <span className="shortcut">
-      <button
-        disabled={disabled || busy}
-        onClick={() => create(false)}
-        title={disabled ? "Capture the workspace first" : "Double-click the icon to restore this workspace"}
-      >
-        {busy ? "Creating…" : "Desktop icon"}
-      </button>
-      {result && (
-        <span className={`shortcut-result ${result.ok ? "ok" : "bad"}`} role="status">
-          {result.text}
-        </span>
-      )}
-    </span>
   );
 }

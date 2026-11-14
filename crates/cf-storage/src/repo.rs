@@ -17,6 +17,16 @@ pub struct Database {
     pub(crate) conn: Connection,
 }
 
+/// A workspace with everything a list needs, from [`Database::list_overview`].
+#[derive(Debug, Clone)]
+pub struct ContextOverview {
+    pub context: Context,
+    pub is_trusted: bool,
+    pub pinned_version: Option<u32>,
+    pub latest: Option<SnapshotSummary>,
+    pub is_active: bool,
+}
+
 /// Result of re-hashing a stored snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityReport {
@@ -163,6 +173,8 @@ impl Database {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(Duration::from_secs(5))?;
+        // Cheap when the schema is current (one pragma read), and it refuses a
+        // database written by a newer version.
         migrations::run(&mut conn)?;
         Ok(Self { conn })
     }
@@ -226,6 +238,62 @@ impl Database {
             ))),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Every workspace with its approval, pinned version, newest snapshot and
+    /// whether it is the active one, in a single query (newest activity first).
+    pub fn list_overview(&self, include_archived: bool) -> Result<Vec<ContextOverview>> {
+        let sql = "SELECT c.id, c.name, c.description, c.created_at, c.updated_at, c.is_archived,
+                          c.is_trusted, c.pinned_version,
+                          s.id, s.version_number, s.created_at, s.snapshot_hash, s.capture_status,
+                          (c.id = (SELECT value FROM app_state WHERE key = 'active_context'))
+                   FROM contexts c
+                   LEFT JOIN context_snapshots s
+                     ON s.context_id = c.id
+                    AND s.version_number = (SELECT MAX(version_number)
+                                            FROM context_snapshots WHERE context_id = c.id)
+                   WHERE (?1 OR c.is_archived = 0)
+                   ORDER BY c.updated_at DESC, c.name";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([include_archived], |row| {
+            let context = row_to_context(row)?;
+            let is_trusted = row.get::<_, i64>(6)? != 0;
+            let pinned_version: Option<u32> = row.get(7)?;
+            let latest = match row.get::<_, Option<String>>(8)? {
+                None => None,
+                Some(_) => Some((
+                    SnapshotId(get_uuid(row, 8)?),
+                    row.get::<_, u32>(9)?,
+                    get_ts(row, 10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                )),
+            };
+            let is_active = row.get::<_, Option<bool>>(13)?.unwrap_or(false);
+            Ok((context, is_trusted, pinned_version, latest, is_active))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (context, is_trusted, pinned_version, latest, is_active) = row?;
+            let latest = match latest {
+                None => None,
+                Some((id, version, created_at, hash, status)) => Some(SnapshotSummary {
+                    id,
+                    version,
+                    created_at,
+                    hash,
+                    capture_status: status.parse().map_err(StorageError::Integrity)?,
+                }),
+            };
+            out.push(ContextOverview {
+                context,
+                is_trusted,
+                pinned_version,
+                latest,
+                is_active,
+            });
+        }
+        Ok(out)
     }
 
     pub fn list_contexts(&self, include_archived: bool) -> Result<Vec<Context>> {
@@ -488,7 +556,6 @@ impl Database {
             capture_status,
             &payload_json,
         )?;
-        insert_projections(&tx, id, &payload, &created_at)?;
         tx.execute(
             "UPDATE contexts SET updated_at = ?1, last_version = ?2 WHERE id = ?3",
             params![ts(&created_at), version, context_id.to_string()],
@@ -575,7 +642,7 @@ impl Database {
 
     // ------------------------------------------------------ deletion / retention
 
-    /// Permanently delete one snapshot and its projections. Version numbers
+    /// Permanently delete one snapshot and its restore history. Version numbers
     /// are never reused afterwards.
     pub fn delete_snapshot(&self, context_id: ContextId, version: u32) -> Result<()> {
         if self.pinned_version(context_id)? == Some(version) {
@@ -730,79 +797,5 @@ pub(crate) fn insert_snapshot_row(
             payload_json
         ],
     )?;
-    Ok(())
-}
-
-pub(crate) fn insert_projections(
-    tx: &Transaction<'_>,
-    snapshot_id: SnapshotId,
-    p: &SnapshotPayload,
-    created_at: &DateTime<Utc>,
-) -> Result<()> {
-    let sid = snapshot_id.to_string();
-
-    let mut apps = tx.prepare(
-        "INSERT INTO snapshot_applications
-         (snapshot_id, application_id, executable_path, launch_arguments_json,
-          working_directory, adapter_id, adapter_state_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-    for a in &p.applications {
-        apps.execute(params![
-            sid,
-            a.application_id,
-            a.executable_path,
-            serde_json::to_string(&a.launch_arguments).map_err(cf_core::CoreError::from)?,
-            a.working_directory,
-            a.adapter_id,
-            hash::canonical_json(&a.adapter_state)?,
-        ])?;
-    }
-
-    let mut wins = tx.prepare(
-        "INSERT INTO snapshot_windows
-         (snapshot_id, application_id, title, window_class, monitor_identifier,
-          x, y, width, height, display_state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-    )?;
-    for w in &p.windows {
-        wins.execute(params![
-            sid,
-            w.application_id,
-            w.title,
-            w.window_class,
-            w.monitor_id,
-            w.rect.x,
-            w.rect.y,
-            w.rect.width,
-            w.rect.height,
-            w.display_state.as_str(),
-        ])?;
-    }
-
-    let mut git = tx.prepare(
-        "INSERT INTO snapshot_git_states
-         (snapshot_id, repository_path, branch_name, head_commit,
-          staged_changes, modified_changes, untracked_changes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-    )?;
-    for g in &p.git {
-        git.execute(params![
-            sid,
-            g.repository_path,
-            g.branch,
-            g.head_commit,
-            g.staged,
-            g.modified,
-            g.untracked
-        ])?;
-    }
-
-    let mut notes = tx.prepare(
-        "INSERT INTO snapshot_notes (snapshot_id, note_content, created_at) VALUES (?1, ?2, ?3)",
-    )?;
-    for n in &p.notes {
-        notes.execute(params![sid, n, ts(created_at)])?;
-    }
     Ok(())
 }

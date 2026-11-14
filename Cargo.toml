@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/contextflow"
+repository = "https://github.com/MaxMil45/ContextFlow"
 
 [workspace.dependencies]
 cf-core = { path = "crates/cf-core" }
@@ -21,6 +21,7 @@ cf-vscode = { path = "crates/cf-vscode" }
 cf-engine = { path = "crates/cf-engine" }
 cf-cli = { path = "crates/cf-cli" }
 cf-cleanup = { path = "crates/cf-cleanup" }
+cf-app = { path = "crates/cf-app" }
 
 anyhow = "1"
 toml = "0.8"

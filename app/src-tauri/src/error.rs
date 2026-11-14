@@ -58,10 +58,10 @@ impl From<cf_storage::StorageError> for CommandError {
 
 impl From<anyhow::Error> for CommandError {
     fn from(e: anyhow::Error) -> Self {
-        let code = if e.downcast_ref::<cf_cli::session::RestoreBusy>().is_some() {
+        let code = if e.downcast_ref::<cf_app::session::RestoreBusy>().is_some() {
             ErrorCode::RestoreBusy
         } else if e
-            .downcast_ref::<cf_cli::shortcut::ShortcutExists>()
+            .downcast_ref::<cf_app::shortcut::ShortcutExists>()
             .is_some()
         {
             ErrorCode::AlreadyExists

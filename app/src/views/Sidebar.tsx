@@ -1,15 +1,16 @@
-import { useState, type FormEvent } from "react";
+import { ChevronDown, ChevronRight, Plus, Search, Settings } from "lucide-react";
 
-import { Badge, ErrorBanner, Spinner } from "../components/ui";
-import { captureStatusTone, relativeTime } from "../format";
-import { api, toCommandError, type CommandError, type WorkspaceSummary } from "../ipc/client";
+import { Kbd, SkeletonList, WorkspaceDot } from "../components/ui";
+import { relativeTime } from "../format";
+import type { WorkspaceSummary } from "../ipc/client";
 
 type Props = {
   workspaces: WorkspaceSummary[] | undefined;
   loading: boolean;
   selected: string | undefined;
-  onSelect: (name: string) => void;
-  onCreated: (ws: WorkspaceSummary) => void;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onPalette: () => void;
   showArchived: boolean;
   onShowArchived: (show: boolean) => void;
   settingsOpen: boolean;
@@ -21,91 +22,75 @@ export function Sidebar({
   loading,
   selected,
   onSelect,
-  onCreated,
+  onNew,
+  onPalette,
   showArchived,
   onShowArchived,
   settingsOpen,
   onSettings,
 }: Props) {
+  const live = workspaces?.filter((w) => !w.isArchived) ?? [];
+  const archived = workspaces?.filter((w) => w.isArchived) ?? [];
+
+  const row = (ws: WorkspaceSummary, n?: number) => (
+    <button
+      key={ws.id}
+      className={`ws-item${ws.id === selected ? " active" : ""}${ws.isArchived ? " archived" : ""}`}
+      aria-current={ws.id === selected ? "page" : undefined}
+      onClick={() => onSelect(ws.id)}
+      title={n ? `Ctrl+${n}` : undefined}
+    >
+      <WorkspaceDot id={ws.id} name={ws.name} />
+      <span className="ws-text">
+        <span className="ws-name">
+          {ws.name}
+          {ws.isActive && <span className="live-dot" role="img" aria-label="You are in this workspace" />}
+        </span>
+        <span className="ws-meta">
+          {ws.latest ? `Saved ${relativeTime(ws.latest.createdAt)}` : "Nothing saved yet"}
+        </span>
+      </span>
+    </button>
+  );
+
   return (
-    <aside className="sidebar">
-      <header className="sidebar-header">
-        <span className="brand">ContextFlow</span>
-      </header>
-      <NewWorkspace onCreated={onCreated} />
+    <aside className="sidebar" aria-label="Sidebar">
+      <div className="sidebar-head">
+        <span className="sidebar-label">Workspaces</span>
+        <button className="ghost icon" onClick={onNew} aria-label="New workspace" data-tip="New workspace (Ctrl+N)">
+          <Plus size={16} />
+        </button>
+      </div>
+      <button className="search-hint" onClick={onPalette}>
+        <Search size={14} aria-hidden /> Search <Kbd>Ctrl K</Kbd>
+      </button>
       <nav className="ws-list" aria-label="Workspaces">
-        {loading && !workspaces && <Spinner label="Loading…" />}
-        {workspaces?.length === 0 && <p className="muted pad">No workspaces yet.</p>}
-        {workspaces?.map((ws) => (
-          <button
-            key={ws.id}
-            className={`ws-item${ws.name === selected ? " active" : ""}${ws.isArchived ? " archived" : ""}`}
-            onClick={() => onSelect(ws.name)}
-          >
-            <span className="ws-name">
-              {ws.name}
-              {ws.isActive && <Badge tone="ok">active</Badge>}
-              {ws.isArchived && <Badge tone="muted">archived</Badge>}
-            </span>
-            <span className="ws-meta">
-              {ws.latest ? (
-                <>
-                  <Badge tone={captureStatusTone[ws.latest.captureStatus]}>v{ws.latest.version}</Badge>
-                  <span>{relativeTime(ws.latest.createdAt)}</span>
-                </>
-              ) : (
-                <span className="muted">Not captured yet</span>
-              )}
-            </span>
-          </button>
-        ))}
+        {loading && !workspaces && <SkeletonList rows={3} />}
+        {workspaces && live.length === 0 && archived.length === 0 && (
+          <p className="muted pad">No workspaces yet. Press the + above.</p>
+        )}
+        {live.map((ws, i) => row(ws, i < 9 ? i + 1 : undefined))}
+        <button
+          className="group-toggle"
+          aria-expanded={showArchived}
+          onClick={() => onShowArchived(!showArchived)}
+        >
+          {showArchived ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          Archived{showArchived && archived.length > 0 ? ` · ${archived.length}` : ""}
+        </button>
+        {showArchived && archived.map((ws) => row(ws))}
+        {showArchived && archived.length === 0 && <p className="muted small pad">Nothing archived.</p>}
       </nav>
       <div className="sidebar-footer">
-        <label className="check">
-          <input type="checkbox" checked={showArchived} onChange={(e) => onShowArchived(e.target.checked)} />
-          Show archived
-        </label>
-        <button className={`settings-link${settingsOpen ? " active" : ""}`} onClick={onSettings}>
-          Settings
+        <button
+          className={`nav-item${settingsOpen ? " active" : ""}`}
+          aria-current={settingsOpen ? "page" : undefined}
+          onClick={onSettings}
+          title="Ctrl+,"
+        >
+          <Settings size={15} aria-hidden /> Settings
         </button>
       </div>
     </aside>
-  );
-}
-
-function NewWorkspace({ onCreated }: { onCreated: (ws: WorkspaceSummary) => void }) {
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<CommandError>();
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      onCreated(await api.createWorkspace(name.trim()));
-      setName("");
-    } catch (err) {
-      setError(toCommandError(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form className="new-ws" onSubmit={submit}>
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="New workspace…"
-        aria-label="New workspace name"
-        disabled={busy}
-      />
-      <button type="submit" disabled={busy || !name.trim()}>
-        Add
-      </button>
-      {error && <ErrorBanner error={error} onDismiss={() => setError(undefined)} />}
-    </form>
   );
 }

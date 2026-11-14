@@ -1,5 +1,4 @@
-//! More data sent to the UI: settings, browser setup, data maintenance,
-//! capture review and comparing snapshots. Re-exported from `dto`.
+//! Settings, browser setup, data maintenance, capture review and comparing snapshots.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

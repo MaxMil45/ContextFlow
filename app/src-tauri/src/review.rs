@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use tauri::State;
 
-use cf_cli::capture;
+use cf_app::capture;
 use cf_core::{Rect, Snapshot, SnapshotPayload};
 use cf_diff::{FieldChange, ItemStatus};
 

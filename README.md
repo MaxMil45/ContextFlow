@@ -76,6 +76,7 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 
 The app (see [app/README.md](app/README.md)) does everything the command line does, and more:
 
+* **Keyboard first:** **Ctrl+K** finds any workspace or action, **Ctrl+N** creates one, **Ctrl+1…9** jumps between them, **Ctrl+Enter** restores, **F2** renames, **Ctrl+,** opens Settings.
 * **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
 * **Quick capture:** press **Ctrl+Alt+X** (change it in Settings, or turn it off) from anywhere and the workspace you're in is saved in the background, with no window in the way. A small card in the corner of the screen confirms it at once ("Saving…", then "Saved “Focus” v3 · 7 programs") and fades away; it never takes focus or blocks clicks. The tray's **Capture now** does the same. With no active workspace it saves into the one you used last.
 * **Capture review:** a checklist of everything a capture would save (programs, windows, browser tabs, VS Code folders, Git repositories), so you choose what goes in. From the tray, **Capture current…** is two clicks to a saved snapshot.
@@ -84,7 +85,7 @@ The app (see [app/README.md](app/README.md)) does everything the command line do
 * **Settings:** what is captured and excluded, browser tabs and the extension setup, timeouts, how long history is kept, notifications, close-to-tray and start with Windows. Saved into `config.toml`.
 * **Your data:** back up, check integrity, export and import, from the Settings screen.
 
-## Workspace Cleanup
+## Workspace Cleanup ("Focus rules" in the app)
 
 Each workspace can close the programs that distract from it, and free their memory and CPU:
 
@@ -120,8 +121,9 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |
 | `cf-engine` | The restore pipeline: launch, wait for windows, place them, report per app |
 | `cf-cleanup` | Workspace cleanup: running programs with memory and CPU, the preview, protected programs, close and force close |
-| `cf-cli` | `contextflow` (CLI) and `contextflow-launch` (windowless, started by desktop icons) |
-| `app/src-tauri` | Tauri desktop app (`contextflow-app`): thin commands over the crates above, React UI in `app/src` |
+| `cf-app` | Application services shared by every front end: capture, restore sessions, shortcuts, icons, maintenance, logging |
+| `cf-cli` | `contextflow` (CLI) and `contextflow-launch` (windowless, started by desktop icons): thin adapters over `cf-app` |
+| `app/src-tauri` | Tauri desktop app (`contextflow-app`): thin commands over `cf-app` and the crates above, React UI in `app/src` |
 
 ## Development
 

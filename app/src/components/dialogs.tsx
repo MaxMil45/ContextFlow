@@ -11,7 +11,13 @@ import {
 import { plural } from "../format";
 import { ErrorBanner, Spinner } from "./ui";
 
-/** A centred dialog over a dimmed backdrop. Escape and a backdrop click close it. */
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * A centred dialog over a dimmed backdrop. Escape and a backdrop click close it,
+ * Tab stays inside it, focus moves in when it opens and returns to whatever
+ * opened it when it closes.
+ */
 export function Modal({
   title,
   onClose,
@@ -24,19 +30,48 @@ export function Modal({
   children: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  // Callers pass inline handlers; keep the latest without re-running the focus logic.
+  const latest = useRef({ onClose, busy });
+  latest.current = { onClose, busy };
+
+  // Runs once per dialog: remember the opener, take focus, give it back afterwards.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const el = box.current;
+    (el?.querySelector<HTMLElement>("input:not([type=checkbox]), button.primary, button.danger-fill") ??
+      el?.querySelector<HTMLElement>(FOCUSABLE))?.focus();
+    return () => opener?.focus?.();
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
+      if (e.key === "Escape" && !latest.current.busy) {
+        e.stopPropagation();
+        latest.current.onClose();
+      }
+      if (e.key === "Tab" && box.current) {
+        const items = [...box.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+        if (!items.length) return;
+        const first = items[0]!;
+        const last = items[items.length - 1]!;
+        if (e.shiftKey && document.activeElement === first) {
+          last.focus();
+          e.preventDefault();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          first.focus();
+          e.preventDefault();
+        }
+      }
     };
-    document.addEventListener("keydown", onKey);
-    // Move focus into the dialog so the keyboard works straight away.
-    box.current?.querySelector<HTMLElement>("input, button.primary, button.danger-fill")?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
 
   return (
-    <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <div
+      className="backdrop"
+      onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}
+    >
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={box}>
         <h2>{title}</h2>
         {children}
@@ -115,7 +150,7 @@ export function RenameDialog({
   function submit(e: FormEvent) {
     e.preventDefault();
     if (unchanged || !name.trim()) return;
-    void run(async () => onRenamed(await api.renameWorkspace(workspace.name, name.trim())));
+    void run(async () => onRenamed(await api.renameWorkspace(workspace.id, name.trim())));
   }
 
   return (
@@ -154,10 +189,13 @@ export function RenameDialog({
  */
 export function TrustDialog({
   workspace,
+  name,
   onApproved,
   onClose,
 }: {
+  /** The workspace id. */
   workspace: string;
+  name: string;
   onApproved: () => void;
   onClose: () => void;
 }) {
@@ -175,7 +213,7 @@ export function TrustDialog({
   return (
     <Modal title="Approve imported workspace" onClose={onClose} busy={busy}>
       <p>
-        <strong>{workspace}</strong> came from a file. If you approve it, restoring can start these
+        <strong>{name}</strong> came from a file. If you approve it, restoring can start these
         programs on this computer. Approve it only if you recognise all of them.
       </p>
       {loadError && <ErrorBanner error={loadError} />}
@@ -217,11 +255,14 @@ export function TrustDialog({
 /** Delete a workspace, and optionally its desktop icon(s). */
 export function DeleteWorkspaceDialog({
   workspace,
+  name,
   snapshotCount,
   onDeleted,
   onClose,
 }: {
+  /** The workspace id. */
   workspace: string;
+  name: string;
   snapshotCount: number;
   /** Called after a successful delete; `outcome.shortcutError` may still be set. */
   onDeleted: (outcome: DeleteOutcome) => void;
@@ -241,7 +282,7 @@ export function DeleteWorkspaceDialog({
   const fileName = (p: string) => p.split("\\").pop() ?? p;
 
   return (
-    <Modal title={`Delete "${workspace}"?`} onClose={onClose} busy={busy}>
+    <Modal title={`Delete "${name}"?`} onClose={onClose} busy={busy}>
       <div className="modal-body">
         <p>
           {snapshotCount > 0
@@ -286,6 +327,64 @@ export function DeleteWorkspaceDialog({
           {busy ? "Deleting…" : "Delete workspace"}
         </button>
       </div>
+    </Modal>
+  );
+}
+
+/** Name a new workspace; optionally review and save what is open right now into it. */
+export function NewWorkspaceDialog({
+  onCreated,
+  onClose,
+}: {
+  onCreated: (workspace: WorkspaceSummary, captureNow: boolean) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [captureNow, setCaptureNow] = useState(true);
+  const { busy, error, run } = useAction(onClose);
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    void run(async () => onCreated(await api.createWorkspace(name.trim()), captureNow));
+  }
+
+  return (
+    <Modal title="New workspace" onClose={onClose} busy={busy}>
+      <form className="modal-body" onSubmit={submit}>
+        <input
+          className="wide"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. University project"
+          aria-label="Workspace name"
+          maxLength={120}
+          disabled={busy}
+        />
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={captureNow}
+            onChange={(e) => setCaptureNow(e.target.checked)}
+            disabled={busy}
+          />
+          <span>Save the apps I have open now into it</span>
+        </label>
+        <p className="muted small">
+          {captureNow
+            ? "You'll choose which windows, tabs and folders go in before anything is saved."
+            : "It starts empty. Arrange your apps later and capture when you're ready."}
+        </p>
+        {error && <ErrorBanner error={error} />}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || !name.trim()}>
+            {busy ? "Creating…" : captureNow ? "Create and review" : "Create"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

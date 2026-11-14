@@ -1,5 +1,5 @@
-//! Tauri commands: thin wrappers over `cf-storage`, `cf-cli::capture` and
-//! `cf-cli::session`. Every command that touches the desktop or the database
+//! Tauri commands: thin wrappers over `cf-storage`, `cf-app::capture` and
+//! `cf-app::session`. Every command that touches the desktop or the database
 //! runs on the blocking pool so the UI thread never waits on it.
 
 use std::path::{Path, PathBuf};
@@ -10,8 +10,8 @@ use std::time::Duration;
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, State};
 
-use cf_cli::capture;
-use cf_cli::session::RestoreArgs;
+use cf_app::capture;
+use cf_app::session::RestoreArgs;
 use cf_core::{Context, Snapshot, SnapshotSummary};
 use cf_storage::{Database, RetentionPolicy, StorageError};
 
@@ -119,6 +119,20 @@ fn summarize(db: &Database, ctx: &Context) -> CmdResult<WorkspaceSummary> {
     })
 }
 
+fn summary_from_overview(o: &cf_storage::ContextOverview) -> WorkspaceSummary {
+    WorkspaceSummary {
+        id: o.context.id.to_string(),
+        name: o.context.name.clone(),
+        description: o.context.description.clone(),
+        updated_at: o.context.updated_at.to_rfc3339(),
+        is_archived: o.context.is_archived,
+        is_trusted: o.is_trusted,
+        pinned_version: o.pinned_version,
+        latest: o.latest.as_ref().map(entry_from_summary),
+        is_active: o.is_active,
+    }
+}
+
 #[tauri::command]
 pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
     let p = &state.paths;
@@ -138,13 +152,12 @@ pub async fn list_workspaces(
     let path = state.paths.db.clone();
     blocking(move || {
         let db = open(&path)?;
-        let mut out = db
-            .list_contexts(include_archived.unwrap_or(false))?
+        // One query, already newest-activity first (what the dashboard shows).
+        let out = db
+            .list_overview(include_archived.unwrap_or(false))?
             .iter()
-            .map(|c| summarize(&db, c))
-            .collect::<CmdResult<Vec<_>>>()?;
-        // Most recently touched first: that's what the dashboard shows.
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            .map(summary_from_overview)
+            .collect::<Vec<_>>();
         Ok(out)
     })
     .await
@@ -315,7 +328,7 @@ pub async fn restore_workspace(
     let dry_run = request.dry_run.unwrap_or(false);
 
     // Register a cancel flag for real restores. The cross-process lock inside
-    // `cf_cli::session::restore_workspace` still guards against the CLI and
+    // `cf_app::session::restore_workspace` still guards against the CLI and
     // the desktop icon; this only gives the UI something to cancel.
     let cancel = Arc::new(AtomicBool::new(false));
     let _guard = if dry_run {
@@ -358,7 +371,7 @@ pub async fn restore_workspace(
             );
         };
         let outcome =
-            cf_cli::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;
+            cf_app::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;
         let (ctx, snap, run) = (outcome.context, outcome.snapshot, outcome.run);
         Ok(RestoreReport {
             workspace: ctx.name,
@@ -431,8 +444,8 @@ pub async fn create_shortcut(
             .map(PathBuf::from)
             .filter(|p| p.exists());
         let id = ctx.id.to_string();
-        let icon = cf_cli::icons::custom_icon(&cf_cli::icons::icon_dir(&path), &id);
-        let created = cf_cli::shortcut::create(&cf_cli::shortcut::ShortcutSpec {
+        let icon = cf_app::icons::custom_icon(&cf_app::icons::icon_dir(&path), &id);
+        let created = cf_app::shortcut::create(&cf_app::shortcut::ShortcutSpec {
             workspace_id: &id,
             display_name: &ctx.name,
             folder: None,
@@ -493,7 +506,7 @@ pub async fn get_workspace_shortcuts(
         let db = open(&path)?;
         let ctx = db.find_context(&workspace)?;
         Ok(
-            cf_cli::shortcut::find_for_workspace(&ctx.id.to_string(), None)?
+            cf_app::shortcut::find_for_workspace(&ctx.id.to_string(), None)?
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
@@ -518,7 +531,7 @@ pub async fn delete_workspace(
         // Look first: after the delete the id is gone, but the icons stay.
         let mut lookup_error = None;
         let shortcuts = if delete_shortcuts.unwrap_or(false) {
-            cf_cli::shortcut::find_for_workspace(&id, None).unwrap_or_else(|e| {
+            cf_app::shortcut::find_for_workspace(&id, None).unwrap_or_else(|e| {
                 lookup_error = Some(format!("{e:#}"));
                 Vec::new()
             })
@@ -527,10 +540,10 @@ pub async fn delete_workspace(
         };
         db.delete_context(ctx.id)?;
         // The picture kept for its desktop icon is of no use any more.
-        cf_cli::icons::clear_custom_icon(&cf_cli::icons::icon_dir(&path), &id);
+        cf_app::icons::clear_custom_icon(&cf_app::icons::icon_dir(&path), &id);
         tracing::info!(workspace = %ctx.name, "workspace deleted from the app");
         // The workspace is gone either way; a problem with the icons is reported, not fatal.
-        let shortcut_error = match cf_cli::shortcut::recycle(&shortcuts) {
+        let shortcut_error = match cf_app::shortcut::recycle(&shortcuts) {
             Ok(()) => lookup_error,
             Err(e) => Some(format!("{e:#}")),
         };
@@ -671,18 +684,18 @@ fn apply_icon(db_path: &Path, workspace: &str, picture: Option<&[u8]>) -> CmdRes
     let db = open(db_path)?;
     let ctx = db.find_context(workspace)?;
     let id = ctx.id.to_string();
-    let dir = cf_cli::icons::icon_dir(db_path);
+    let dir = cf_app::icons::icon_dir(db_path);
     let icon = match picture {
         Some(bytes) => Some(
-            cf_cli::icons::set_custom_icon(&dir, &id, bytes)
+            cf_app::icons::set_custom_icon(&dir, &id, bytes)
                 .map_err(|e| CommandError::new(ErrorCode::Conflict, format!("{e:#}")))?,
         ),
         None => {
-            cf_cli::icons::clear_custom_icon(&dir, &id);
+            cf_app::icons::clear_custom_icon(&dir, &id);
             None
         }
     };
-    let shortcuts = cf_cli::shortcut::update_icon(&id, None, icon.as_deref())?;
+    let shortcuts = cf_app::shortcut::update_icon(&id, None, icon.as_deref())?;
     Ok(IconUpdate {
         icon: icon_info(icon.as_deref())?,
         shortcut_path: shortcuts.first().map(|p| p.display().to_string()),
@@ -698,7 +711,7 @@ pub async fn get_workspace_icon(
     blocking(move || {
         let db = open(&path)?;
         let ctx = db.find_context(&workspace)?;
-        let icon = cf_cli::icons::custom_icon(&cf_cli::icons::icon_dir(&path), &ctx.id.to_string());
+        let icon = cf_app::icons::custom_icon(&cf_app::icons::icon_dir(&path), &ctx.id.to_string());
         icon_info(icon.as_deref())
     })
     .await
@@ -784,110 +797,4 @@ mod tests {
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%2"), "%2");
     }
-}
-
-// ----------------------------------------------------------------- cleanup
-
-/// Programs running now with their memory and CPU use, for the program picker.
-/// Takes about a second: CPU use is measured over a short window.
-#[tauri::command]
-pub async fn list_running_apps() -> CmdResult<Vec<RunningApp>> {
-    blocking(|| {
-        Ok(
-            cf_cleanup::running_apps(&cf_cleanup::WindowsProcesses, Duration::from_millis(700))
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        )
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn get_cleanup_config(
-    state: State<'_, AppState>,
-    workspace: String,
-) -> CmdResult<CleanupConfig> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        let ctx = db.find_context(&workspace)?;
-        Ok(db.cleanup_config(ctx.id)?.into())
-    })
-    .await
-}
-
-/// Save a workspace's cleanup rules. Critical system programs are refused.
-#[tauri::command]
-pub async fn set_cleanup_config(
-    state: State<'_, AppState>,
-    workspace: String,
-    config: CleanupConfig,
-) -> CmdResult<CleanupConfig> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        let ctx = db.find_context(&workspace)?;
-        let config: cf_core::CleanupConfig = config.into();
-        for t in config.on_enter.iter().chain(&config.on_exit) {
-            let name = cf_core::cleanup::normalize_process_name(&t.process)
-                .map_err(|e| CommandError::new(ErrorCode::Conflict, e.to_string()))?;
-            if let Some(reason) = cf_cleanup::protected_reason(&format!("{name}.exe"), None) {
-                return Err(CommandError::new(
-                    ErrorCode::Conflict,
-                    format!("'{name}' can't be closed by a workspace: {reason}"),
-                ));
-            }
-        }
-        let saved = db.set_cleanup_config(ctx.id, config).map_err(|e| match e {
-            cf_storage::StorageError::Core(c) => {
-                CommandError::new(ErrorCode::Conflict, c.to_string())
-            }
-            other => other.into(),
-        })?;
-        Ok(saved.into())
-    })
-    .await
-}
-
-/// What one side of a workspace's cleanup would do right now.
-#[tauri::command]
-pub async fn preview_cleanup(
-    state: State<'_, AppState>,
-    workspace: String,
-    phase: CleanupPhase,
-) -> CmdResult<CleanupPlan> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        Ok(cf_cli::session::preview_cleanup(&db, &workspace, phase.into())?.into())
-    })
-    .await
-}
-
-/// Run one side of a workspace's cleanup now. The UI shows the preview and asks first.
-#[tauri::command]
-pub async fn run_cleanup_now(
-    state: State<'_, AppState>,
-    workspace: String,
-    phase: CleanupPhase,
-) -> CmdResult<CleanupReport> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        let report = cf_cli::session::run_cleanup_now(&db, &workspace, phase.into(), &mut |_| {})?;
-        Ok(report.into())
-    })
-    .await
-}
-
-/// Leave the active workspace: run its "when leaving" cleanup and clear it.
-#[tauri::command]
-pub async fn leave_workspace(state: State<'_, AppState>) -> CmdResult<Option<CleanupReport>> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        Ok(cf_cli::session::leave_active_workspace(&db, &mut |_| {})?.map(Into::into))
-    })
-    .await
 }

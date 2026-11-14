@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use cf_core::{hash, validate, CaptureStatus, Context, ContextId, SnapshotId, SnapshotPayload};
 
-use crate::repo::{insert_projections, insert_snapshot_row, is_unique_violation, now, ts};
+use crate::repo::{insert_snapshot_row, is_unique_violation, now, ts};
 use crate::{Database, Result, StorageError};
 
 pub const EXPORT_FORMAT: &str = "contextflow-export";
@@ -194,7 +194,7 @@ impl Database {
             }
             Err(e) => return Err(e.into()),
         }
-        for (s, payload) in ws.snapshots.iter().zip(&payloads) {
+        for s in ws.snapshots.iter() {
             let sid = SnapshotId::new();
             insert_snapshot_row(
                 &tx,
@@ -206,7 +206,6 @@ impl Database {
                 s.capture_status,
                 &s.payload_json,
             )?;
-            insert_projections(&tx, sid, payload, &s.created_at)?;
         }
         tx.commit()?;
         tracing::info!(workspace = %name, snapshots = ws.snapshots.len(), "workspace imported");

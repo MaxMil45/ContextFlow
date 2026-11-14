@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { workspaceColor } from "./ui";
 import { useCommand } from "../hooks";
 import { api, toCommandError, type IconUpdate } from "../ipc/client";
 
@@ -9,7 +10,7 @@ const ACCEPT = ".png,.jpg,.jpeg,.bmp,.ico";
  * The workspace's desktop-icon picture. Click it to choose a new picture or go
  * back to the standard icon; the desktop shortcut (if any) changes straight away.
  */
-export function IconPicker({ workspace }: { workspace: string }) {
+export function IconPicker({ workspace, name }: { workspace: string; name: string }) {
   const icon = useCommand(() => api.getWorkspaceIcon(workspace), [workspace]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -72,17 +73,18 @@ export function IconPicker({ workspace }: { workspace: string }) {
   return (
     <div className="icon-picker" ref={root}>
       <button
-        className={`icon-tile${custom ? "" : " default"}`}
+        className="icon-tile"
+        style={custom ? { background: "var(--muted-bg)" } : { background: workspaceColor(workspace) }}
         onClick={() => setOpen((o) => !o)}
         disabled={busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Change this workspace's desktop icon"
+        data-tip="Change this workspace's desktop icon"
       >
         {custom && icon.data?.dataUrl ? (
           <img src={icon.data.dataUrl} alt="Workspace icon" />
         ) : (
-          <span aria-hidden>{workspace.trim().charAt(0).toUpperCase() || "?"}</span>
+          <span aria-hidden>{name.trim().charAt(0).toUpperCase() || "?"}</span>
         )}
       </button>
       {open && (

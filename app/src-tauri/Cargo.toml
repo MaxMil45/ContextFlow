@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [lib]
-name = "cf_app"
+name = "contextflow_app"
 # `staticlib`/`cdylib` are only needed for mobile targets; keep the desktop build lean.
 crate-type = ["rlib"]
 
@@ -22,7 +22,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 cf-browser.workspace = true
 cf-cleanup.workspace = true
-cf-cli.workspace = true
+cf-app.workspace = true
 cf-config.workspace = true
 cf-core.workspace = true
 cf-diff.workspace = true

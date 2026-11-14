@@ -531,6 +531,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
+name = "cf-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cf-browser",
+ "cf-cleanup",
+ "cf-config",
+ "cf-core",
+ "cf-diff",
+ "cf-engine",
+ "cf-git",
+ "cf-storage",
+ "cf-vscode",
+ "cf-windows",
+ "chrono",
+ "hex",
+ "image",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cf-browser"
 version = "0.1.0"
 dependencies = [
@@ -560,6 +586,7 @@ name = "cf-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cf-app",
  "cf-browser",
  "cf-cleanup",
  "cf-config",
@@ -799,9 +826,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "cf-app",
  "cf-browser",
  "cf-cleanup",
- "cf-cli",
  "cf-config",
  "cf-core",
  "cf-diff",

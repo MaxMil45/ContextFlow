@@ -103,18 +103,16 @@ fn killing_a_writer_never_leaves_partial_snapshots() {
                 s.version
             );
         }
-        // Every snapshot has all of its projection rows (nothing half-inserted).
-        let partial: i64 = db
-            .raw_connection()
-            .query_row(
-                "SELECT COUNT(*) FROM context_snapshots s
-                 WHERE (SELECT COUNT(*) FROM snapshot_windows w WHERE w.snapshot_id = s.id) != ?1
-                    OR (SELECT COUNT(*) FROM snapshot_notes n WHERE n.snapshot_id = s.id) != 1",
-                [WINDOWS_PER_SNAPSHOT as i64],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(partial, 0, "iteration {i}: partial snapshot found");
+        // Every snapshot's payload is complete (nothing half-written).
+        for s in &snaps {
+            let full = db.get_snapshot(ctx.id, Some(s.version)).unwrap();
+            assert_eq!(
+                full.payload.windows.len(),
+                WINDOWS_PER_SNAPSHOT,
+                "iteration {i}: partial snapshot v{}",
+                s.version
+            );
+        }
     }
 
     // Guard against a vacuous pass (e.g. the child never managed to write).

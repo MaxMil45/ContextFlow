@@ -4,9 +4,9 @@
 //! and is shared with the CLI. This crate wires those into Tauri commands, the
 //! tray and the single-instance guard.
 
+mod cleanup_commands;
 mod commands;
 mod dto;
-mod dto_more;
 mod error;
 mod hotkey;
 mod overlay;
@@ -104,12 +104,12 @@ pub fn run() {
             commands::delete_snapshot,
             commands::get_trust_review,
             commands::approve_workspace,
-            commands::list_running_apps,
-            commands::get_cleanup_config,
-            commands::set_cleanup_config,
-            commands::preview_cleanup,
-            commands::run_cleanup_now,
-            commands::leave_workspace,
+            cleanup_commands::list_running_apps,
+            cleanup_commands::get_cleanup_config,
+            cleanup_commands::set_cleanup_config,
+            cleanup_commands::preview_cleanup,
+            cleanup_commands::run_cleanup_now,
+            cleanup_commands::leave_workspace,
             review::discover_capture,
             review::compare_snapshots,
             settings::get_settings,

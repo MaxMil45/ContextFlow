@@ -59,7 +59,7 @@ fn deleting_the_latest_never_reuses_its_version() {
 }
 
 #[test]
-fn deleting_cascades_to_projections() {
+fn deleting_cascades_to_snapshots() {
     let (db, id) = db_with_versions(2);
     db.delete_snapshot(id, 1).unwrap();
     let count = |table: &str| -> i64 {
@@ -67,12 +67,10 @@ fn deleting_cascades_to_projections() {
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             .unwrap()
     };
-    assert_eq!(count("snapshot_windows"), 1);
-    assert_eq!(count("snapshot_notes"), 1);
+    assert_eq!(count("context_snapshots"), 1);
 
     db.delete_context(id).unwrap();
     assert_eq!(count("context_snapshots"), 0);
-    assert_eq!(count("snapshot_windows"), 0);
     assert!(db.find_context("W").is_err());
 }
 

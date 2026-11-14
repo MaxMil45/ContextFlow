@@ -8,7 +8,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::DialogExt as _;
 
-use cf_cli::maintenance;
+use cf_app::maintenance;
 use cf_config::Config;
 use cf_storage::Database;
 
@@ -296,7 +296,7 @@ pub async fn export_workspaces(
             return Err(conflict("there are no workspaces to export"));
         }
         let suggested = match contexts.as_slice() {
-            [one] => format!("{}.contextflow.json", cf_cli::shortcut::file_safe_name(&one.name)),
+            [one] => format!("{}.contextflow.json", cf_app::shortcut::file_safe_name(&one.name)),
             _ => "contextflow-workspaces.json".to_string(),
         };
         let Some(dest) = app

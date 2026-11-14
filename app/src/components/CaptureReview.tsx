@@ -18,10 +18,13 @@ import { ErrorBanner, Spinner } from "./ui";
  */
 export function CaptureReview({
   workspace,
+  label,
   onSaved,
   onClose,
 }: {
   workspace: string;
+  /** The workspace name, for the title. */
+  label: string;
   onSaved: (report: CaptureReport) => void;
   onClose: () => void;
 }) {
@@ -73,7 +76,7 @@ export function CaptureReview({
   const nothing = apps.size === 0 && repos.size === 0;
 
   return (
-    <Modal title={`Capture “${workspace}”`} onClose={onClose} busy={saving}>
+    <Modal title={`Capture “${label}”`} onClose={onClose} busy={saving}>
       {loadError && <ErrorBanner error={loadError} />}
       {!found && !loadError && <Spinner label="Looking at what's open…" />}
       {found && (

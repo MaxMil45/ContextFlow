@@ -60,6 +60,14 @@ commit them (CI fails if they are stale):
 npm run bindings
 ```
 
+## Window permissions
+
+`build.rs` lists every command, so each becomes a permission, and each window is
+granted only what it uses (`capabilities/`): the main window everything except
+the small windows' own commands, the switcher `list_workspaces`, `quick_switch`
+and `hide_switcher`, the corner card only `current_toast`. Add a new command to
+`build.rs` and to the right capability, or no window can call it.
+
 ## Switching and auto-save
 
 Every real restore of another workspace is a switch, wherever it starts (the

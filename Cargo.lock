@@ -541,6 +541,7 @@ dependencies = [
  "cf-core",
  "cf-diff",
  "cf-engine",
+ "cf-explorer",
  "cf-git",
  "cf-storage",
  "cf-vscode",
@@ -594,6 +595,7 @@ dependencies = [
  "cf-core",
  "cf-diff",
  "cf-engine",
+ "cf-explorer",
  "cf-git",
  "cf-storage",
  "cf-vscode",
@@ -650,12 +652,21 @@ version = "0.1.0"
 dependencies = [
  "cf-browser",
  "cf-core",
+ "cf-explorer",
  "cf-vscode",
  "cf-vstudio",
  "cf-windows",
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "cf-explorer"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -843,6 +854,7 @@ dependencies = [
  "cf-config",
  "cf-core",
  "cf-diff",
+ "cf-explorer",
  "cf-storage",
  "cf-vscode",
  "cf-vstudio",

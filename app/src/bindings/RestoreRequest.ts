@@ -8,4 +8,8 @@ version?: number, dryRun?: boolean,
 /**
  * Restore only these programs (retry what failed). Cleanup is skipped.
  */
-only?: Array<string>, };
+only?: Array<string>, 
+/**
+ * A note for the workspace being left, saved with it.
+ */
+leaveNote?: string, };

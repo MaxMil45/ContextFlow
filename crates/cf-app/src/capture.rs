@@ -44,6 +44,8 @@ pub struct CaptureOptions<'a> {
     /// Visual Studio's settings files with its recent solutions (empty = do not
     /// save Visual Studio solutions).
     pub visual_studio_settings: Vec<PathBuf>,
+    /// Save which folder each File Explorer window shows.
+    pub explorer_folders: bool,
 }
 
 pub struct CaptureResult {
@@ -183,6 +185,9 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         if !opts.visual_studio_settings.is_empty() {
             attach_visual_studio(&mut payload, &opts.visual_studio_settings, &mut warnings);
         }
+        if opts.explorer_folders {
+            attach_explorer_folders(&mut payload, &mut warnings);
+        }
     }
 
     for repo in opts.repos {
@@ -304,6 +309,38 @@ fn attach_visual_studio(
     if state.path_count() > 0 {
         let app = &mut payload.applications[i];
         app.adapter_id = Some(cf_vstudio::ADAPTER_ID.to_string());
+        app.adapter_state = state.to_value();
+    }
+}
+
+/// Work out which folder each captured File Explorer window shows, from
+/// Windows' own list of open folders. Special places (This PC, a search) have
+/// no folder and come back as an ordinary Explorer window.
+fn attach_explorer_folders(payload: &mut SnapshotPayload, warnings: &mut Vec<String>) {
+    let Some(i) = payload
+        .applications
+        .iter()
+        .position(|a| cf_explorer::is_explorer(&a.application_id))
+    else {
+        return;
+    };
+    let titles: Vec<String> = payload
+        .windows
+        .iter()
+        .filter(|w| cf_explorer::is_explorer(&w.application_id))
+        .map(|w| w.title.clone())
+        .collect();
+    let open = cf_explorer::open_folders();
+    let state = cf_explorer::build_state(&titles, &open, &cf_explorer::folder_exists);
+    let unresolved = state.windows.len() - state.path_count();
+    if unresolved > 0 && state.path_count() > 0 {
+        warnings.push(format!(
+            "File Explorer: {unresolved} window(s) show a place that isn't a folder on disk; they will reopen as ordinary Explorer windows"
+        ));
+    }
+    if state.path_count() > 0 {
+        let app = &mut payload.applications[i];
+        app.adapter_id = Some(cf_explorer::ADAPTER_ID.to_string());
         app.adapter_state = state.to_value();
     }
 }
@@ -464,6 +501,7 @@ mod tests {
             browser_state_dir: None,
             vscode_storage: None,
             visual_studio_settings: Vec::new(),
+            explorer_folders: false,
         });
         assert!(r.payload.windows.is_empty());
         assert!(r.payload.applications.is_empty());

@@ -10,6 +10,7 @@ license.workspace = true
 cf-browser.workspace = true
 cf-vscode.workspace = true
 cf-vstudio.workspace = true
+cf-explorer.workspace = true
 cf-core.workspace = true
 cf-windows.workspace = true
 serde.workspace = true

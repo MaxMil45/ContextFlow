@@ -126,6 +126,7 @@ pub async fn quick_switch(
     app: AppHandle,
     state: State<'_, AppState>,
     target: String,
+    note: Option<String>,
 ) -> CmdResult<()> {
     let _ = state; // the task below fetches its own handle; this only ensures the state exists
     if let Some(w) = app.get_webview_window(LABEL) {
@@ -143,6 +144,7 @@ pub async fn quick_switch(
             version: None,
             only: None,
             dry_run: Some(false),
+            leave_note: note,
         };
         let state = app.state::<AppState>();
         SWITCHING.store(true, Ordering::SeqCst);

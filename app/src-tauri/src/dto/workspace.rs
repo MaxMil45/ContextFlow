@@ -177,6 +177,10 @@ pub struct RestoreRequest {
     #[serde(default)]
     #[ts(optional)]
     pub only: Option<Vec<String>>,
+    /// A note for the workspace being left, saved with it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub leave_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -243,6 +247,8 @@ pub struct RestoreReport {
     pub auto_saved_version: Option<u32>,
     /// Why the workspace that was left was not saved, when it wasn't.
     pub auto_save_note: Option<String>,
+    /// Set when the layout saved for the current screens was used instead of the newest.
+    pub layout_note: Option<String>,
 }
 
 /// Payload of the `restore://progress` event.

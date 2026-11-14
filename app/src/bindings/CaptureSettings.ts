@@ -12,4 +12,8 @@ excludedProcesses: Array<string>,
 /**
  * Windows whose title contains one of these are skipped.
  */
-excludedTitlePatterns: Array<string>, };
+excludedTitlePatterns: Array<string>, 
+/**
+ * Programs that belong to every workspace: never saved in one, never closed by Focus rules.
+ */
+alwaysOn: Array<string>, };

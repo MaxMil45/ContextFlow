@@ -231,6 +231,15 @@ Use a throwaway database for the first three (see section 2).
 3. Close Visual Studio and restore: each solution reopens in its own window, where it was.
 4. Restore again with both open: nothing opens twice.
 
+### M. Restart recovery, notes, always-on, display layouts, Explorer
+
+1. While in a workspace, end ContextFlow from Task Manager (or restart Windows). Start it again: it offers to bring that workspace back. Quit from the tray instead: no offer next time.
+2. Press the switcher shortcut, type a note, switch. Come back: the Welcome back card shows the note.
+3. Add `spotify` to Always-on apps. Capture: Spotify isn't in the snapshot. A Focus rule for Spotify never closes it.
+4. Capture docked, undock, capture again, dock again and restore: the docked layout is used (the report says so).
+5. Open two folders in File Explorer, capture, close them, restore: both reopen where they were.
+6. Settings → Advanced → Run health check; Save diagnostics report.
+
 ## 4. Not built yet
 
 Apps, their windows, browser tabs and VS Code folders come back. Not built yet: VS Code's open files, terminal directories, and the contents of any other app (only their windows return). Tab and folder comparison in `diff` is also not built yet.

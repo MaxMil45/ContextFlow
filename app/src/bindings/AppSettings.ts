@@ -24,4 +24,16 @@ switcherHotkey: string,
 /**
  * Save the workspace you are leaving before switching to another one.
  */
-autoSaveOnSwitch: boolean, };
+autoSaveOnSwitch: boolean, 
+/**
+ * After a restart, offer to bring back the workspace you were in.
+ */
+offerResume: boolean, 
+/**
+ * Save the workspace you're in every this many minutes (0 = off).
+ */
+checkpointMinutes: number, 
+/**
+ * Restore the layout saved for the screens connected now.
+ */
+matchDisplaySetup: boolean, };

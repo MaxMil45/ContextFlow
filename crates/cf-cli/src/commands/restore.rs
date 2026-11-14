@@ -35,6 +35,9 @@ pub(crate) fn restore_cmd(
         overall_timeout,
         cancel: None,
         skip_cleanup: no_cleanup,
+        always_on: cfg.capture.normalized_always_on(),
+        leave_note: None,
+        match_display: cfg.app.match_display_setup,
         save_before_leaving: (!no_save).then(|| cfg.clone()),
     };
     let outcome = session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
@@ -47,7 +50,7 @@ pub(crate) fn restore_cmd(
         snap.version
     );
     if dry_run && !no_cleanup {
-        super::cleanup::print_restore_previews(db, &ctx);
+        super::cleanup::print_restore_previews(db, &ctx, &cfg.capture.normalized_always_on());
     }
     if let Some(from) = &outcome.left.from {
         match (outcome.left.saved_version, &outcome.left.note) {

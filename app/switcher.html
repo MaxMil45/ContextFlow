@@ -9,6 +9,10 @@
     <div id="panel" role="dialog" aria-label="Switch workspace">
       <input id="q" placeholder="Switch to…" aria-label="Search workspaces" autocomplete="off" spellcheck="false" />
       <div id="list" role="listbox"></div>
+      <label id="note-row" hidden>
+        <span id="note-label">Note for where you are</span>
+        <input id="note" placeholder="What were you doing? (optional, Tab to reach)" autocomplete="off" spellcheck="true" maxlength="500" />
+      </label>
       <div id="foot"><span>↑↓ move</span><span>↵ switch</span><span>Esc close</span></div>
     </div>
     <script type="module" src="/src/switcher.ts"></script>

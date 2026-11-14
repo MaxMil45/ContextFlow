@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-current-toast"
+description = "Enables the current_toast command without any pre-configured scope."
+commands.allow = ["current_toast"]
+
+[[permission]]
+identifier = "deny-current-toast"
+description = "Denies the current_toast command without any pre-configured scope."
+commands.deny = ["current_toast"]

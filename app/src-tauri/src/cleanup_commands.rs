@@ -77,10 +77,18 @@ pub async fn preview_cleanup(
     fresh: Option<bool>,
 ) -> CmdResult<CleanupPlan> {
     let path = state.paths.db.clone();
+    let always_on = state.config().capture.normalized_always_on();
     blocking(move || {
         let db = open(&path)?;
         let fresh = fresh.unwrap_or(false);
-        Ok(cf_app::session::preview_cleanup_sampled(&db, &workspace, phase.into(), fresh)?.into())
+        Ok(cf_app::session::preview_cleanup_sampled(
+            &db,
+            &workspace,
+            phase.into(),
+            &always_on,
+            fresh,
+        )?
+        .into())
     })
     .await
 }
@@ -93,9 +101,16 @@ pub async fn run_cleanup_now(
     phase: CleanupPhase,
 ) -> CmdResult<CleanupReport> {
     let path = state.paths.db.clone();
+    let always_on = state.config().capture.normalized_always_on();
     blocking(move || {
         let db = open(&path)?;
-        let report = cf_app::session::run_cleanup_now(&db, &workspace, phase.into(), &mut |_| {})?;
+        let report = cf_app::session::run_cleanup_now(
+            &db,
+            &workspace,
+            phase.into(),
+            &always_on,
+            &mut |_| {},
+        )?;
         Ok(report.into())
     })
     .await
@@ -106,12 +121,18 @@ pub async fn run_cleanup_now(
 pub async fn leave_workspace(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    note: Option<String>,
 ) -> CmdResult<LeaveReport> {
     let path = state.paths.db.clone();
     let cfg = state.config();
     blocking(move || {
         let mut db = open(&path)?;
-        let out = cf_app::session::leave_active_workspace(&mut db, Some(&cfg), &mut |_| {})?;
+        let out = cf_app::session::leave_active_workspace(
+            &mut db,
+            Some(&cfg),
+            note.as_deref(),
+            &mut |_| {},
+        )?;
         if let (true, Some(v), Some(from)) =
             (out.saved.notify, out.saved.saved_version, &out.saved.from)
         {

@@ -7,6 +7,7 @@ import { Empty, ErrorBanner, SkeletonText, ToastProvider } from "./components/ui
 import { useCommand } from "./hooks";
 import { api, type RestoreReport, type WorkspaceSummary } from "./ipc/client";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { ResumeDialog } from "./components/ResumeDialog";
 import { SettingsView } from "./views/SettingsView";
 import { Sidebar } from "./views/Sidebar";
 import { WorkspaceView } from "./views/WorkspaceView";
@@ -35,6 +36,9 @@ function Shell() {
   const [creating, setCreating] = useState(false);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
+  /** After a restart: the workspace to offer to bring back. */
+  const [recoverId, setRecoverId] = useState<string>();
+  const recovering = recoverId ? workspaces.data?.find((w) => w.id === recoverId) : undefined;
 
   // Default to the most recently used workspace.
   const current =
@@ -72,6 +76,8 @@ function Shell() {
             setSelectedId(a.workspaceId);
             setPending({ kind: "report", workspaceId: a.workspaceId, key: Date.now(), report: a.report });
             latest.current.reload();
+          } else if (a.kind === "recover") {
+            setRecoverId(a.workspaceId);
           } else if (a.kind === "capture" || a.kind === "restore") {
             ask(a.kind, a.workspaceId);
           }
@@ -213,6 +219,16 @@ function Shell() {
       {creating && <NewWorkspaceDialog onCreated={created} onClose={() => setCreating(false)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
       {help && <ShortcutsDialog onClose={() => setHelp(false)} />}
+      {recovering && (
+        <ResumeDialog
+          workspace={recovering}
+          onResume={() => {
+            setRecoverId(undefined);
+            ask("restore", recovering.id);
+          }}
+          onClose={() => setRecoverId(undefined)}
+        />
+      )}
     </div>
   );
 }

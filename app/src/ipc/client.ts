@@ -30,6 +30,7 @@ import type { DeleteOutcome } from "../bindings/DeleteOutcome";
 import type { LeaveReport } from "../bindings/LeaveReport";
 import type { SaveMode } from "../bindings/SaveMode";
 import type { UiAction } from "../bindings/UiAction";
+import type { HealthCheck } from "../bindings/HealthCheck";
 import type { HotkeyStatusDto } from "../bindings/HotkeyStatusDto";
 import type { RestoreRunEntry } from "../bindings/RestoreRunEntry";
 import type { WorkspaceUpdate } from "../bindings/WorkspaceUpdate";
@@ -165,7 +166,7 @@ export const api = {
     call<CleanupReport>("run_cleanup_now", { workspace, phase }),
 
   /** Leave the active workspace, running its "when leaving" cleanup. */
-  leaveWorkspace: () => call<LeaveReport>("leave_workspace"),
+  leaveWorkspace: (note?: string) => call<LeaveReport>("leave_workspace", { note: note?.trim() || null }),
 
   // --- capture review and compare
   discoverCapture: (workspace: string) => call<CaptureDiscovery>("discover_capture", { workspace }),
@@ -189,6 +190,10 @@ export const api = {
     call<FileResult | null>("export_workspaces", { workspaces: workspaces ?? null }),
   importWorkspaces: () => call<ImportedWorkspace[] | null>("import_workspaces"),
   verifyData: () => call<VerifyResult>("verify_data"),
+  /** What commonly stops ContextFlow from working, and how to fix it. */
+  healthCheck: () => call<HealthCheck[]>("health_check"),
+  /** Write a plain-text report for a bug report; `null` = cancelled. */
+  saveDiagnostics: () => call<FileResult | null>("save_diagnostics"),
   previewRetention: () => call<RetentionResult>("preview_retention"),
   applyRetention: () => call<RetentionResult>("apply_retention"),
   refreshTrayMenu: () => call<void>("refresh_tray_menu"),

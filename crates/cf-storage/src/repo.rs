@@ -203,6 +203,28 @@ pub(crate) fn is_unique_violation(e: &rusqlite::Error) -> bool {
     )
 }
 
+/// Before a newer ContextFlow changes the schema of an existing database, keep
+/// a consistent copy next to it (`contextflow.db.before-schema-8.bak`), so an
+/// update can always be undone. A new, empty database needs none.
+fn backup_before_migrating(conn: &Connection, path: &Path) -> Result<()> {
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let latest = migrations::latest_version();
+    if current == 0 || current >= latest {
+        return Ok(());
+    }
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "contextflow.db".into());
+    let dest = path.with_file_name(format!("{name}.before-schema-{latest}.bak"));
+    if dest.exists() {
+        return Ok(());
+    }
+    conn.execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])?;
+    tracing::info!(from = current, to = latest, backup = %dest.display(), "database copied before updating its schema");
+    Ok(())
+}
+
 impl Database {
     /// Open (creating if necessary) the database at `path` and apply migrations.
     pub fn open(path: &Path) -> Result<Self> {
@@ -211,7 +233,9 @@ impl Database {
                 std::fs::create_dir_all(parent)?;
             }
         }
-        Self::init(Connection::open(path)?)
+        let conn = Connection::open(path)?;
+        backup_before_migrating(&conn, path)?;
+        Self::init(conn)
     }
 
     /// Private in-memory database, for tests and dry runs.
@@ -549,6 +573,31 @@ impl Database {
             )
             .optional()?;
         Ok(id.and_then(|s| s.parse::<ContextId>().ok()))
+    }
+
+    /// A small piece of app state (`app_state` table), if set.
+    pub fn state_value(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM app_state WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Set (`Some`) or clear (`None`) a piece of app state.
+    pub fn set_state_value(&self, key: &str, value: Option<&str>) -> Result<()> {
+        match value {
+            Some(v) => self.conn.execute(
+                "INSERT INTO app_state (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, v],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM app_state WHERE key = ?1", [key])?,
+        };
+        Ok(())
     }
 
     /// Record which workspace is active, or none.

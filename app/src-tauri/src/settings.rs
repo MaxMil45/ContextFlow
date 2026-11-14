@@ -33,6 +33,7 @@ fn settings_from(cfg: &Config, start_with_windows: bool) -> Settings {
             include_windows: cfg.capture.include_windows,
             excluded_processes: cfg.capture.excluded_processes.clone(),
             excluded_title_patterns: cfg.capture.excluded_title_patterns.clone(),
+            always_on: cfg.capture.always_on.clone(),
         },
         browser: BrowserSettings {
             capture_tabs: cfg.browser.capture_tabs,
@@ -55,6 +56,9 @@ fn settings_from(cfg: &Config, start_with_windows: bool) -> Settings {
             capture_hotkey: cfg.app.capture_hotkey.clone(),
             switcher_hotkey: cfg.app.switcher_hotkey.clone(),
             auto_save_on_switch: cfg.app.auto_save_on_switch,
+            offer_resume: cfg.app.offer_resume,
+            checkpoint_minutes: cfg.app.checkpoint_minutes,
+            match_display_setup: cfg.app.match_display_setup,
         },
         log_level: cfg.logging.level.clone(),
     }
@@ -73,6 +77,7 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
     cfg.capture.include_windows = s.capture.include_windows;
     cfg.capture.excluded_processes = clean(&s.capture.excluded_processes);
     cfg.capture.excluded_title_patterns = clean(&s.capture.excluded_title_patterns);
+    cfg.capture.always_on = clean(&s.capture.always_on);
     cfg.browser.capture_tabs = s.browser.capture_tabs;
     cfg.browser.excluded_url_patterns = clean(&s.browser.excluded_url_patterns);
     cfg.browser.max_tabs_per_window = s.browser.max_tabs_per_window as usize;
@@ -86,6 +91,9 @@ fn apply_settings(base: &Config, s: &Settings) -> Config {
     cfg.app.capture_hotkey = s.app.capture_hotkey.trim().to_string();
     cfg.app.switcher_hotkey = s.app.switcher_hotkey.trim().to_string();
     cfg.app.auto_save_on_switch = s.app.auto_save_on_switch;
+    cfg.app.offer_resume = s.app.offer_resume;
+    cfg.app.checkpoint_minutes = s.app.checkpoint_minutes;
+    cfg.app.match_display_setup = s.app.match_display_setup;
     cfg.logging.level = s.log_level.clone();
     cfg
 }

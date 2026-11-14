@@ -125,10 +125,14 @@ pub fn decide(previous: Option<&SnapshotPayload>, captured: &SnapshotPayload) ->
 
 /// Save the active workspace before leaving it for `target` (or just leaving
 /// it, with `None`). Never fails: problems are reported in [`AutoSave::note`].
+/// `leave_note` is a line the user wrote as they left ("finish the migration
+/// test"): it replaces the carried-over note, and a new note is a reason to save
+/// even when the layout hasn't changed.
 pub fn save_active(
     db: &mut Database,
     cfg: &Config,
     target: Option<ContextId>,
+    leave_note: Option<&str>,
     log: &mut dyn FnMut(&str),
 ) -> AutoSave {
     let mut out = AutoSave::default();
@@ -165,12 +169,17 @@ pub fn save_active(
         .flat_map(|s| s.payload.git.iter())
         .map(|g| PathBuf::from(&g.repository_path))
         .collect();
-    // Keep the last note, so "where you left off" still says what you were doing.
-    let notes: Vec<String> = previous
+    // A note written as you leave wins; otherwise keep the last one, so "where
+    // you left off" still says what you were doing.
+    let previous_note = previous
         .as_ref()
-        .and_then(|s| s.payload.notes.last().cloned())
-        .into_iter()
-        .collect();
+        .and_then(|s| s.payload.notes.last().cloned());
+    let new_note = leave_note
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| n.chars().take(500).collect::<String>());
+    let note_changed = new_note.is_some() && new_note != previous_note;
+    let notes: Vec<String> = new_note.or(previous_note).into_iter().collect();
 
     log(&format!("Saving “{}”", prev.name));
     let result = capture::capture(capture::CaptureOptions {
@@ -185,9 +194,14 @@ pub fn save_active(
         browser_state_dir: cf_browser::default_state_dir(),
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
+        explorer_folders: true,
     });
 
-    match decide(previous.as_ref().map(|s| &s.payload), &result.payload) {
+    let decision = match decide(previous.as_ref().map(|s| &s.payload), &result.payload) {
+        Decision::Unchanged if note_changed => Decision::Save,
+        d => d,
+    };
+    match decision {
         Decision::NothingOpen => {
             out.note = Some("None of its programs were open, so the last save was kept.".into());
         }
@@ -305,7 +319,13 @@ mod tests {
         let focus = db.create_context("Focus", None).unwrap();
         db.set_active_context(Some(chess.id)).unwrap();
         db.set_save_mode(chess.id, SaveMode::Fixed).unwrap();
-        let out = save_active(&mut db, &Config::default(), Some(focus.id), &mut |_| {});
+        let out = save_active(
+            &mut db,
+            &Config::default(),
+            Some(focus.id),
+            Some("note"),
+            &mut |_| {},
+        );
         assert_eq!(out.from.as_deref(), Some("Chess"));
         assert_eq!(out.saved_version, None);
         assert!(out.note.unwrap().contains("always restore"));
@@ -318,7 +338,7 @@ mod tests {
         let a = db.create_context("A", None).unwrap();
         db.set_active_context(Some(a.id)).unwrap();
         assert_eq!(
-            save_active(&mut db, &Config::default(), Some(a.id), &mut |_| {}),
+            save_active(&mut db, &Config::default(), Some(a.id), None, &mut |_| {}),
             AutoSave::default()
         );
     }

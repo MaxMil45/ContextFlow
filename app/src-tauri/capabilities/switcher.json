@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "switcher-window",
+  "description": "The switcher: it lists workspaces and switches to one, nothing else.",
+  "windows": [
+    "switcher"
+  ],
+  "permissions": [
+    "core:event:default",
+    "allow-list-workspaces",
+    "allow-quick-switch",
+    "allow-hide-switcher"
+  ]
+}

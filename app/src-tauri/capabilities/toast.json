@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "toast-window",
+  "description": "The corner card: it only reads the card it should show.",
+  "windows": [
+    "toast"
+  ],
+  "permissions": [
+    "core:event:default",
+    "allow-current-toast"
+  ]
+}

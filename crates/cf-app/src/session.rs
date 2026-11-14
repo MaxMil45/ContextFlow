@@ -90,6 +90,13 @@ pub struct RestoreArgs {
     pub cancel: Option<Arc<AtomicBool>>,
     /// Don't close any programs (the workspaces' cleanup rules are ignored).
     pub skip_cleanup: bool,
+    /// Programs that belong to every workspace: cleanup never closes them.
+    pub always_on: Vec<String>,
+    /// A note for the workspace being left, saved with it.
+    pub leave_note: Option<String>,
+    /// With no version chosen, prefer the newest snapshot saved with the screens
+    /// connected now (see [`crate::display`]).
+    pub match_display: bool,
     /// Save the workspace being left first, with these settings (`None` = don't).
     /// Every way of switching passes the loaded config, so they all behave the
     /// same; `auto_save_on_switch` in it can still turn saving off.
@@ -136,6 +143,8 @@ pub struct RestoreOutcome {
     pub cleanups: Vec<CleanupReport>,
     /// What happened to the workspace that was left.
     pub left: crate::autosave::AutoSave,
+    /// Set when a layout saved for the current screens was chosen over the newest.
+    pub layout_note: Option<String>,
 }
 
 /// The result of leaving a workspace without entering another.
@@ -233,6 +242,7 @@ fn cleanup_inputs(
     db: &Database,
     workspace: &str,
     phase: CleanupPhase,
+    always_on: &[String],
 ) -> Result<(Context, Vec<CleanupTarget>, HashSet<String>)> {
     let ctx = db.find_context(workspace)?;
     let config = db.cleanup_config(ctx.id)?;
@@ -247,12 +257,19 @@ fn cleanup_inputs(
         }
         CleanupPhase::Leaving => (config.on_exit, HashSet::new()),
     };
+    let mut keep = keep;
+    keep.extend(always_on.iter().cloned());
     Ok((ctx, targets, keep))
 }
 
 /// What a workspace's cleanup would do right now, without doing it.
-pub fn preview_cleanup(db: &Database, workspace: &str, phase: CleanupPhase) -> Result<CleanupPlan> {
-    preview_cleanup_sampled(db, workspace, phase, false)
+pub fn preview_cleanup(
+    db: &Database,
+    workspace: &str,
+    phase: CleanupPhase,
+    always_on: &[String],
+) -> Result<CleanupPlan> {
+    preview_cleanup_sampled(db, workspace, phase, always_on, false)
 }
 
 /// [`preview_cleanup`], measuring again when `fresh`.
@@ -260,9 +277,10 @@ pub fn preview_cleanup_sampled(
     db: &Database,
     workspace: &str,
     phase: CleanupPhase,
+    always_on: &[String],
     fresh: bool,
 ) -> Result<CleanupPlan> {
-    let (_, targets, keep) = cleanup_inputs(db, workspace, phase)?;
+    let (_, targets, keep) = cleanup_inputs(db, workspace, phase, always_on)?;
     let apps = running_apps_sampled(fresh);
     Ok(cf_cleanup::plan(&targets, &keep, &apps))
 }
@@ -273,9 +291,10 @@ pub fn run_cleanup_now(
     db: &Database,
     workspace: &str,
     phase: CleanupPhase,
+    always_on: &[String],
     log: &mut dyn FnMut(&str),
 ) -> Result<CleanupReport> {
-    let (ctx, targets, keep) = cleanup_inputs(db, workspace, phase)?;
+    let (ctx, targets, keep) = cleanup_inputs(db, workspace, phase, always_on)?;
     Ok(
         run_cleanup(phase, &ctx.name, &targets, &keep, log).unwrap_or(CleanupReport {
             phase,
@@ -290,6 +309,7 @@ pub fn run_cleanup_now(
 pub fn leave_active_workspace(
     db: &mut Database,
     save: Option<&Config>,
+    note: Option<&str>,
     log: &mut dyn FnMut(&str),
 ) -> Result<LeaveOutcome> {
     let Some(active) = db.active_context()? else {
@@ -301,7 +321,7 @@ pub fn leave_active_workspace(
     };
     // Save where you are before anything closes.
     let saved = match save {
-        Some(cfg) => crate::autosave::save_active(db, cfg, None, log),
+        Some(cfg) => crate::autosave::save_active(db, cfg, None, note, log),
         None => Default::default(),
     };
     let ctx = db.find_context(&active.to_string())?;
@@ -310,7 +330,9 @@ pub fn leave_active_workspace(
         CleanupPhase::Leaving,
         &ctx.name,
         &config.on_exit,
-        &HashSet::new(),
+        &save
+            .map(|c| c.capture.normalized_always_on().into_iter().collect())
+            .unwrap_or_default(),
         log,
     );
     db.set_active_context(None)?;
@@ -338,10 +360,35 @@ pub fn restore_workspace(
             name = ctx.name
         );
     }
-    // Which snapshot: an explicit --version, else the pinned one, else the latest.
+    // Which snapshot: an explicit --version, else the pinned one, else the
+    // newest one saved with these screens, else the latest.
+    let mut layout_note = None;
     let version = match args.version {
         Some(v) => Some(v),
-        None => db.pinned_version(ctx.id)?,
+        None => match db.pinned_version(ctx.id)? {
+            Some(p) => Some(p),
+            None if args.match_display => {
+                let current = cf_windows::enumerate_monitors().unwrap_or_default();
+                let candidates: Vec<(u32, Vec<cf_core::MonitorInfo>)> = db
+                    .list_snapshots(ctx.id)?
+                    .iter()
+                    .take(crate::display::LOOKBACK)
+                    .filter_map(|s| {
+                        db.get_snapshot(ctx.id, Some(s.version))
+                            .ok()
+                            .map(|full| (s.version, full.payload.monitors))
+                    })
+                    .collect();
+                let chosen = crate::display::pick(&candidates, &current);
+                if let Some(v) = chosen {
+                    let msg = format!("using v{v}, the newest layout saved with these screens");
+                    log(&msg);
+                    layout_note = Some(msg);
+                }
+                chosen
+            }
+            None => None,
+        },
     };
     let snapshot = db.get_snapshot(ctx.id, version)?;
 
@@ -371,7 +418,7 @@ pub fn restore_workspace(
     // dry run or a retry of a few programs isn't a switch.
     let left = match &args.save_before_leaving {
         Some(cfg) if !args.dry_run && args.only.is_empty() => {
-            crate::autosave::save_active(db, cfg, Some(ctx.id), log)
+            crate::autosave::save_active(db, cfg, Some(ctx.id), args.leave_note.as_deref(), log)
         }
         _ => Default::default(),
     };
@@ -382,7 +429,8 @@ pub fn restore_workspace(
     let mut cleanups = Vec::new();
     let mut left_previous = false;
     if !args.dry_run && !args.skip_cleanup && args.only.is_empty() {
-        let keep = snapshot_app_ids(&snapshot);
+        let mut keep = snapshot_app_ids(&snapshot);
+        keep.extend(args.always_on.iter().cloned());
         let previous: Option<ContextId> = db.active_context()?.filter(|p| *p != ctx.id);
         if let Some(previous) = previous {
             if let Ok(prev_ctx) = db.find_context(&previous.to_string()) {
@@ -466,5 +514,6 @@ pub fn restore_workspace(
         run,
         cleanups,
         left,
+        layout_note,
     })
 }

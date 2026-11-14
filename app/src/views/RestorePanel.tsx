@@ -152,6 +152,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
               <>
                 <Badge tone={restoreStatusTone[report.overall]}>{restoreStatusLabel[report.overall]}</Badge>
                 <span className="muted num"> Ready in {formatDuration(report.durationMs)}</span>
+                {report.layoutNote && <span className="muted"> · {report.layoutNote}</span>}
               </>
             )}
             {report.cancelled && <span className="muted"> Cancelled: apps not yet started were skipped.</span>}

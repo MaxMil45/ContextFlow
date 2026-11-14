@@ -36,4 +36,8 @@ autoSavedVersion: number | null,
 /**
  * Why the workspace that was left was not saved, when it wasn't.
  */
-autoSaveNote: string | null, };
+autoSaveNote: string | null, 
+/**
+ * Set when the layout saved for the current screens was used instead of the newest.
+ */
+layoutNote: string | null, };

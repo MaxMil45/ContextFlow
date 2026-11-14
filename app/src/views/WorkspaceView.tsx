@@ -812,16 +812,27 @@ function LeaveDialog({
   onClose: () => void;
 }) {
   const plan = useCommand(() => api.previewCleanup(workspace, "leaving"), [workspace]);
+  const [note, setNote] = useState("");
   const closing = plan.data?.items.filter((i) => i.action.kind === "close") ?? [];
   return (
     <ConfirmDialog
       title={`Leave “${name}”?`}
       confirmLabel={closing.length ? `Leave and close ${closing.length === 1 ? "1 program" : `${closing.length} programs`}` : "Leave"}
       danger={closing.some((i) => i.mode === "force")}
-      action={async () => onLeft(await api.leaveWorkspace())}
+      action={async () => onLeft(await api.leaveWorkspace(note))}
       onClose={onClose}
     >
       <p>Its layout is saved first (unless nothing has changed), so you can come back to it later.</p>
+      <label className="field">
+        <span className="field-label">Note for when you come back (optional)</span>
+        <input
+          className="wide"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="What were you doing?"
+          maxLength={500}
+        />
+      </label>
       {plan.loading && !plan.data && <SkeletonText lines={2} />}
       {closing.length > 0 && plan.data && (
         <>

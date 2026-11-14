@@ -32,6 +32,7 @@ pub(crate) fn capture_now(
         browser_state_dir: cf_browser::default_state_dir(),
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
+        explorer_folders: true,
     })
 }
 
@@ -74,6 +75,10 @@ pub async fn discover_capture(
                         .map(|v| v.folder_count() as u32)
                         .or_else(|| {
                             cf_vstudio::VisualStudioState::from_value(&a.adapter_state)
+                                .map(|v| v.path_count() as u32)
+                        })
+                        .or_else(|| {
+                            cf_explorer::ExplorerState::from_value(&a.adapter_state)
                                 .map(|v| v.path_count() as u32)
                         })
                         .unwrap_or(0),

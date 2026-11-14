@@ -95,3 +95,46 @@ fn unsafe_saved_paths_are_never_put_on_a_command_line() {
     run(&d, &payload, &fast());
     assert!(d.app_window_opens.borrow().is_empty());
 }
+
+// File Explorer folders use the same restore path. Explorer is always running
+// (it is also the Windows shell), so only folders without a window are opened.
+#[test]
+fn explorer_opens_only_the_folders_that_are_not_open() {
+    use cf_explorer::{ExplorerState, FolderWindow};
+    let folder = |title: &str, name: &str, path: &str| FolderWindow {
+        window_title: title.into(),
+        name: Some(name.into()),
+        path: Some(path.into()),
+    };
+    let mut a = app("explorer");
+    a.adapter_id = Some("explorer".into());
+    a.adapter_state = ExplorerState {
+        schema_version: 1,
+        windows: vec![
+            folder("Local - File Explorer", "Local", r"C:\Users\me\AppData\Local"),
+            folder("Downloads - File Explorer", "Downloads", r"C:\Users\me\Downloads"),
+        ],
+    }
+    .to_value();
+    let payload = SnapshotPayload {
+        applications: vec![a],
+        windows: vec![
+            saved_window("explorer", "Local - File Explorer", r(0, 0, 900, 700), "M1"),
+            saved_window("explorer", "Downloads - File Explorer", r(900, 0, 900, 700), "M1"),
+        ],
+        ..Default::default()
+    };
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(1, "explorer", "Local - File Explorer")]),
+        browser_windows: RefCell::new(vec![open_window(2, "explorer", "Downloads")]),
+        ..Default::default()
+    };
+    run(&d, &payload, &fast());
+    assert_eq!(
+        *d.app_window_opens.borrow(),
+        vec![vec![r"C:\Users\me\Downloads".to_string()]]
+    );
+    let placed = d.placed.borrow();
+    assert!(placed.contains(&(2, r(900, 0, 900, 700), DisplayState::Normal)));
+}

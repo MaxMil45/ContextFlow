@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-take-ui-action"
+description = "Enables the take_ui_action command without any pre-configured scope."
+commands.allow = ["take_ui_action"]
+
+[[permission]]
+identifier = "deny-take-ui-action"
+description = "Denies the take_ui_action command without any pre-configured scope."
+commands.deny = ["take_ui_action"]

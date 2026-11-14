@@ -445,6 +445,14 @@ button.primary kbd { background: transparent; color: inherit; border-color: rgb(
 .shortcut-list > div { display: grid; grid-template-columns: 150px 1fr; gap: var(--s3); align-items: baseline; }
 .shortcut-list dd { margin: 0; color: var(--muted); }
 
+/* Health check */
+.health-list { list-style: none; margin: var(--s2) 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.health-list li { display: flex; gap: var(--s2); align-items: baseline; }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; transform: translateY(-1px); }
+.health-ok .health-dot { background: var(--ok); }
+.health-warn .health-dot { background: var(--warn); }
+.health-bad .health-dot { background: var(--bad); }
+
 /* Save mode choice */
 .choice-list { display: flex; flex-direction: column; gap: var(--s2); }
 .choice { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s3); border: 1px solid var(--border); border-radius: var(--radius); transition: border-color 120ms var(--ease), background 120ms var(--ease); }

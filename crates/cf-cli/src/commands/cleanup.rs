@@ -51,17 +51,19 @@ pub(crate) fn print_plan(heading: &str, plan: &cf_cleanup::CleanupPlan) {
 }
 
 /// For `restore --dry-run`: what the cleanups of this restore would do.
-pub(crate) fn print_restore_previews(db: &Database, ctx: &Context) {
+pub(crate) fn print_restore_previews(db: &Database, ctx: &Context, always_on: &[String]) {
     if let Ok(Some(previous)) = db.active_context().map(|a| a.filter(|p| *p != ctx.id)) {
         if let Ok(prev) = db.find_context(&previous.to_string()) {
-            if let Ok(plan) = session::preview_cleanup(db, &prev.name, CleanupPhase::Leaving) {
+            if let Ok(plan) =
+                session::preview_cleanup(db, &prev.name, CleanupPhase::Leaving, always_on)
+            {
                 if !plan.items.is_empty() {
                     print_plan(&format!("Cleanup on leaving '{}':", prev.name), &plan);
                 }
             }
         }
     }
-    if let Ok(plan) = session::preview_cleanup(db, &ctx.name, CleanupPhase::Entering) {
+    if let Ok(plan) = session::preview_cleanup(db, &ctx.name, CleanupPhase::Entering, always_on) {
         if !plan.items.is_empty() {
             print_plan(&format!("Cleanup on entering '{}':", ctx.name), &plan);
         }
@@ -85,8 +87,8 @@ pub(crate) fn print_report(report: &CleanupReport) {
     }
 }
 
-pub(crate) fn leave(db: &mut Database, cfg: &cf_config::Config) -> Result<()> {
-    let out = session::leave_active_workspace(db, Some(cfg), &mut |m| println!("  {m}..."))?;
+pub(crate) fn leave(db: &mut Database, cfg: &cf_config::Config, note: Option<&str>) -> Result<()> {
+    let out = session::leave_active_workspace(db, Some(cfg), note, &mut |m| println!("  {m}..."))?;
     let Some(name) = out.workspace else {
         println!("No workspace is active.");
         return Ok(());
@@ -103,7 +105,7 @@ pub(crate) fn leave(db: &mut Database, cfg: &cf_config::Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cleanup_cmd(db: &Database, cmd: CleanupCmd) -> Result<()> {
+pub(crate) fn cleanup_cmd(db: &Database, cmd: CleanupCmd, always_on: &[String]) -> Result<()> {
     match cmd {
         CleanupCmd::Show { workspace } => {
             let ctx = db.find_context(&workspace)?;
@@ -120,7 +122,7 @@ pub(crate) fn cleanup_cmd(db: &Database, cmd: CleanupCmd) -> Result<()> {
                 (CleanupPhase::Entering, "When entering"),
                 (CleanupPhase::Leaving, "When leaving"),
             ] {
-                let plan = session::preview_cleanup(db, &ctx.name, phase)?;
+                let plan = session::preview_cleanup(db, &ctx.name, phase, always_on)?;
                 if !plan.items.is_empty() {
                     print_plan(&format!("{heading} '{}':", ctx.name), &plan);
                 }

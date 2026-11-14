@@ -24,6 +24,12 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+/// `Spotify.exe ` -> `spotify`.
+fn normalize_process(p: &str) -> String {
+    let p = p.trim().to_lowercase();
+    p.strip_suffix(".exe").map(str::to_string).unwrap_or(p)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -52,6 +58,14 @@ pub struct AppConfig {
     pub switcher_hotkey: String,
     /// Save the workspace you are leaving before switching to another one.
     pub auto_save_on_switch: bool,
+    /// After Windows restarts (or ContextFlow ends without Quit), offer to bring
+    /// back the workspace you were in.
+    pub offer_resume: bool,
+    /// Save the workspace you're in every this many minutes while you work, so a
+    /// restart or crash loses little. 0 switches it off.
+    pub checkpoint_minutes: u32,
+    /// Restore the layout saved for the screens connected now (docked, laptop...).
+    pub match_display_setup: bool,
 }
 
 impl Default for AppConfig {
@@ -62,6 +76,9 @@ impl Default for AppConfig {
             capture_hotkey: "Ctrl+Alt+X".into(),
             switcher_hotkey: "Ctrl+Alt+W".into(),
             auto_save_on_switch: true,
+            offer_resume: true,
+            checkpoint_minutes: 20,
+            match_display_setup: true,
         }
     }
 }
@@ -83,6 +100,9 @@ pub struct CaptureConfig {
     pub excluded_processes: Vec<String>,
     /// Windows whose title contains any of these (case-insensitive) are skipped.
     pub excluded_title_patterns: Vec<String>,
+    /// Programs that belong to every workspace (music, chat): never saved into
+    /// one, so a restore never moves them, and never closed by Focus rules.
+    pub always_on: Vec<String>,
 }
 
 impl Default for CaptureConfig {
@@ -91,19 +111,27 @@ impl Default for CaptureConfig {
             include_windows: true,
             excluded_processes: Vec::new(),
             excluded_title_patterns: Vec::new(),
+            always_on: Vec::new(),
         }
     }
 }
 
 impl CaptureConfig {
     /// Excluded process names normalised to lower-case stems (`Code.exe` -> `code`).
+    /// Programs never captured: the excluded ones and the always-on ones.
     pub fn normalized_excluded_processes(&self) -> Vec<String> {
         self.excluded_processes
             .iter()
-            .map(|p| {
-                let p = p.trim().to_lowercase();
-                p.strip_suffix(".exe").map(str::to_string).unwrap_or(p)
-            })
+            .chain(&self.always_on)
+            .map(|p| normalize_process(p))
+            .collect()
+    }
+
+    /// The always-on programs, as Focus rules name them (`spotify`).
+    pub fn normalized_always_on(&self) -> Vec<String> {
+        self.always_on
+            .iter()
+            .map(|p| normalize_process(p))
             .collect()
     }
 
@@ -298,6 +326,9 @@ impl Config {
         {
             return invalid("app.capture_hotkey and app.switcher_hotkey must be different".into());
         }
+        if self.app.checkpoint_minutes > 240 {
+            return invalid("app.checkpoint_minutes must be between 0 (off) and 240".into());
+        }
         if !(1..=365).contains(&self.logging.max_files) {
             return invalid("logging.max_files must be between 1 and 365".into());
         }
@@ -365,6 +396,12 @@ capture_hotkey = "Ctrl+Alt+X"
 switcher_hotkey = "Ctrl+Alt+W"
 # Save the workspace you are leaving before switching to another one.
 auto_save_on_switch = true
+# After a restart, offer to bring back the workspace you were in.
+offer_resume = true
+# Save the workspace you're in every N minutes while you work (0 = off).
+checkpoint_minutes = 20
+# Restore the layout saved for the screens connected now (docked, laptop only...).
+match_display_setup = true
 
 [logging]
 level = "info"
@@ -423,6 +460,24 @@ capture_hotkey = \"\"
         let mut bad = Config::default();
         bad.app.switcher_hotkey = "x".repeat(65);
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn always_on_apps_are_never_captured_and_checkpoints_are_bounded() {
+        let mut cfg = Config::default();
+        cfg.capture.always_on = vec![" Spotify.exe ".into()];
+        assert_eq!(
+            cfg.capture.normalized_always_on(),
+            vec!["spotify".to_string()]
+        );
+        assert!(cfg
+            .capture
+            .normalized_excluded_processes()
+            .contains(&"spotify".to_string()));
+        assert_eq!(cfg.app.checkpoint_minutes, 20);
+        assert!(cfg.app.offer_resume && cfg.app.match_display_setup);
+        cfg.app.checkpoint_minutes = 241;
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

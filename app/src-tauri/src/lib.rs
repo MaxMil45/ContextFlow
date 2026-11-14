@@ -6,10 +6,12 @@
 
 mod cleanup_commands;
 mod commands;
+mod diagnostics;
 mod dto;
 mod error;
 mod hotkey;
 mod overlay;
+mod recovery;
 mod review;
 mod settings;
 mod shell;
@@ -69,6 +71,10 @@ pub fn run() {
             if !std::env::args().any(|a| a == "--hidden") {
                 show_main_window(app.handle());
             }
+            // After a restart, offer to bring back the workspace you were in; and keep
+            // that restore point fresh while you work.
+            recovery::on_start(app.handle());
+            recovery::start_checkpoints(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -87,7 +93,6 @@ pub fn run() {
             commands::get_workspace_icon,
             commands::set_workspace_icon,
             commands::reset_workspace_icon,
-            commands::rename_workspace,
             commands::update_workspace,
             commands::list_restore_runs,
             commands::set_save_mode,
@@ -121,6 +126,8 @@ pub fn run() {
             settings::apply_retention,
             shell::refresh_tray_menu,
             ui::take_ui_action,
+            diagnostics::health_check,
+            diagnostics::save_diagnostics,
             overlay::current_toast,
         ])
         .build(tauri::generate_context!())

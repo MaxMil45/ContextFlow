@@ -94,8 +94,15 @@ pub(crate) enum Command {
     #[command(subcommand)]
     Cleanup(CleanupCmd),
 
-    /// Leave the active workspace: run its "when leaving" cleanup.
-    Leave,
+    /// Check what commonly stops ContextFlow from working, and how to fix it.
+    Doctor,
+
+    /// Leave the active workspace: save it, then run its "when leaving" cleanup.
+    Leave {
+        /// A note for the workspace, shown first when you come back.
+        #[arg(long)]
+        note: Option<String>,
+    },
 
     /// Make restore (and the desktop icon) always use one snapshot version
     /// (default: the latest).
@@ -394,8 +401,10 @@ fn run(
         } => commands::capture_cmd::capture_cmd(
             db, cfg, &workspace, only, repos, note, no_windows, unminimize, dry_run,
         ),
-        Command::Cleanup(cmd) => commands::cleanup::cleanup_cmd(db, cmd),
-        Command::Leave => commands::cleanup::leave(db, cfg),
+        Command::Cleanup(cmd) => {
+            commands::cleanup::cleanup_cmd(db, cmd, &cfg.capture.normalized_always_on())
+        }
+        Command::Leave { note } => commands::cleanup::leave(db, cfg, note.as_deref()),
         Command::Pin { workspace, version } => commands::history::pin(db, &workspace, version),
         Command::Unpin { workspace } => commands::history::unpin(db, &workspace),
         Command::Restore {
@@ -478,6 +487,24 @@ fn run(
             commands::maintenance::verify(db, workspace.as_deref(), version)
         }
         Command::Info => commands::maintenance::info(db, paths),
+        Command::Doctor => {
+            let checks = cf_app::health::run(&paths.db, &paths.backups, cfg);
+            for c in &checks {
+                let mark = match c.status {
+                    cf_app::health::Status::Ok => "ok  ",
+                    cf_app::health::Status::Warn => "WARN",
+                    cf_app::health::Status::Bad => "BAD ",
+                };
+                println!("{mark} {:<24} {}", c.name, c.message);
+            }
+            if checks
+                .iter()
+                .any(|c| c.status == cf_app::health::Status::Bad)
+            {
+                anyhow::bail!("ContextFlow found a problem it can't work around (see above)");
+            }
+            Ok(())
+        }
         Command::Config(_) | Command::Windows { .. } | Command::Browser(_) => {
             unreachable!("handled in main")
         }

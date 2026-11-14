@@ -24,6 +24,11 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta { color: var(--muted); font-size: 12px; }
 .none { padding: 28px; text-align: center; color: var(--muted); }
+#note-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 16px; border-top: 1px solid var(--border); }
+#note-row[hidden] { display: none; }
+#note-label { color: var(--muted); font-size: 11px; }
+#note { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: inherit; outline: none; }
+#note:focus { border-color: var(--accent); }
 #foot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 @keyframes in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #panel { animation: none; } }

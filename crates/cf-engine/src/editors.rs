@@ -1,5 +1,5 @@
-//! Reopening what an editor had open: VS Code's folders and Visual Studio's
-//! solutions and folders.
+//! Reopening what an app had open: VS Code's folders, Visual Studio's
+//! solutions and folders, and File Explorer's folders.
 //!
 //! Each saved window that had something open is started on its own command
 //! line (`Code.exe --new-window --folder-uri <file:///...>`, or
@@ -105,6 +105,32 @@ pub(crate) fn editor_work(app: &ApplicationState) -> Option<EditorWork> {
                 title_name: cf_vstudio::name_from_title,
                 wording: &crate::browser::SOLUTIONS,
                 label: "Visual Studio",
+            }
+        }
+        Some(cf_explorer::ADAPTER_ID) => {
+            let state = cf_explorer::ExplorerState::from_value(&app.adapter_state)?;
+            let mut items = Vec::new();
+            for w in &state.windows {
+                let Some(path) = w.path.as_deref() else {
+                    continue;
+                };
+                if !cf_explorer::is_safe_path(path) {
+                    notes.push("a saved folder path was not safe to open and was skipped".into());
+                    continue;
+                }
+                items.push(OpenItem {
+                    // `explorer.exe <folder>` opens it in a new window.
+                    args: vec![path.to_string()],
+                    name: w.name.clone(),
+                    window_title: w.window_title.clone(),
+                });
+            }
+            EditorWork {
+                items,
+                notes,
+                title_name: cf_explorer::name_from_title,
+                wording: &crate::browser::FOLDERS,
+                label: "File Explorer",
             }
         }
         _ => return None,

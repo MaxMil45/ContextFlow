@@ -15,6 +15,8 @@ pub struct CaptureSettings {
     pub excluded_processes: Vec<String>,
     /// Windows whose title contains one of these are skipped.
     pub excluded_title_patterns: Vec<String>,
+    /// Programs that belong to every workspace: never saved in one, never closed by Focus rules.
+    pub always_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -68,6 +70,12 @@ pub struct AppSettings {
     pub switcher_hotkey: String,
     /// Save the workspace you are leaving before switching to another one.
     pub auto_save_on_switch: bool,
+    /// After a restart, offer to bring back the workspace you were in.
+    pub offer_resume: bool,
+    /// Save the workspace you're in every this many minutes (0 = off).
+    pub checkpoint_minutes: u32,
+    /// Restore the layout saved for the screens connected now.
+    pub match_display_setup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

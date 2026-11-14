@@ -13,6 +13,9 @@ type Workspace = {
 
 const q = document.getElementById("q") as HTMLInputElement;
 const list = document.getElementById("list")!;
+const note = document.getElementById("note") as HTMLInputElement;
+const noteRow = document.getElementById("note-row")!;
+const noteLabel = document.getElementById("note-label")!;
 let all: Workspace[] = [];
 let shown: Workspace[] = [];
 let index = 0;
@@ -96,7 +99,8 @@ function filter() {
 
 function choose(w: Workspace | undefined) {
   if (!w || !switchable(w)) return;
-  void invoke("quick_switch", { target: w.id });
+  // A note for the workspace you're leaving, shown first when you come back.
+  void invoke("quick_switch", { target: w.id, note: note.value.trim() || null });
 }
 
 async function open() {
@@ -106,6 +110,10 @@ async function open() {
   } catch {
     all = [];
   }
+  note.value = "";
+  const here = all.find((w) => w.isActive);
+  noteRow.hidden = !here;
+  if (here) noteLabel.textContent = `Note for “${here.name}” (optional)`;
   filter();
   q.focus();
 }

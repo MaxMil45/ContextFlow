@@ -169,3 +169,33 @@ fn newer_schema_is_refused() {
         Err(StorageError::UnsupportedSchema { found: 999, .. })
     ));
 }
+
+#[test]
+fn an_older_database_is_copied_before_its_schema_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cf.db");
+    {
+        let db = Database::open(&path).unwrap();
+        db.create_context("Kept", None).unwrap();
+        // Make it look like the previous release's database.
+        let latest = Database::latest_schema_version();
+        db.raw_connection()
+            .execute_batch(&format!(
+                "ALTER TABLE contexts DROP COLUMN save_mode; PRAGMA user_version = {};",
+                latest - 1
+            ))
+            .unwrap();
+    }
+    let db = Database::open(&path).unwrap();
+    assert_eq!(
+        db.schema_version().unwrap(),
+        Database::latest_schema_version()
+    );
+    let backup = dir.path().join(format!(
+        "cf.db.before-schema-{}.bak",
+        Database::latest_schema_version()
+    ));
+    assert!(backup.is_file(), "the old database was kept");
+    let old = Database::open(&backup).unwrap();
+    assert!(old.find_context("Kept").is_ok(), "and it has the data");
+}

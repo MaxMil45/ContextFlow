@@ -106,7 +106,11 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         None => crate::show_main_window(app),
                     }
                 }
-                "quit" => app.exit(0),
+                "quit" => {
+                    // A clean end: no "pick up where you left off" next time.
+                    crate::recovery::on_quit(app);
+                    app.exit(0);
+                }
                 _ => {
                     if let Some(workspace_id) = id.strip_prefix(RESTORE_PREFIX) {
                         crate::ui::send(

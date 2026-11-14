@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discover-capture"
+description = "Enables the discover_capture command without any pre-configured scope."
+commands.allow = ["discover_capture"]
+
+[[permission]]
+identifier = "deny-discover-capture"
+description = "Denies the discover_capture command without any pre-configured scope."
+commands.deny = ["discover_capture"]

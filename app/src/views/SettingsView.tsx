@@ -15,6 +15,7 @@ import {
   type Settings,
   type VerifyResult,
 } from "../ipc/client";
+import type { HealthCheck } from "../bindings/HealthCheck";
 
 /** A list of text values (program names, patterns) with add and remove. */
 function ListEditor({
@@ -228,6 +229,7 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
   const [retention, setRetention] = useState<RetentionResult>();
   const [verify, setVerify] = useState<VerifyResult>();
   const [busy, setBusy] = useState<string>();
+  const [health, setHealth] = useState<HealthCheck[]>();
   const [tab, setTab] = useState<"general" | "capture" | "restore" | "data" | "advanced">("general");
 
   useEffect(() => {
@@ -344,6 +346,31 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
         >
           Save the workspace I'm leaving
         </Toggle>
+        <Toggle
+          checked={draft.app.offerResume}
+          onChange={(v) => set((s) => ({ ...s, app: { ...s.app, offerResume: v } }))}
+          hint="If Windows restarts or ContextFlow closes without Quit, it offers to bring back the workspace you were in."
+        >
+          Offer to pick up where I left off after a restart
+        </Toggle>
+        <label className="field number-field">
+          <span>
+            <span className="field-label block">Save the workspace I'm in while I work</span>
+            <span className="muted small">
+              A quiet checkpoint, so a restart or crash loses little. Skipped when nothing changed.
+            </span>
+          </span>
+          <select
+            value={draft.app.checkpointMinutes}
+            onChange={(e) => set((s) => ({ ...s, app: { ...s.app, checkpointMinutes: Number(e.target.value) } }))}
+          >
+            {[0, 10, 20, 30, 60].map((m) => (
+              <option key={m} value={m}>
+                {m === 0 ? "Never" : `Every ${m} minutes`}
+              </option>
+            ))}
+          </select>
+        </label>
       </section>
 
       <section className="card" hidden={tab !== "general"}>
@@ -385,6 +412,13 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
           values={draft.capture.excludedTitlePatterns}
           placeholder="Incognito"
           onChange={(v) => set((s) => ({ ...s, capture: { ...s.capture, excludedTitlePatterns: v } }))}
+        />
+        <ListEditor
+          label="Always-on apps"
+          hint="Apps you use everywhere, like music or chat. They're never saved into a workspace, so switching never moves them, and Focus rules never close them."
+          values={draft.capture.alwaysOn}
+          placeholder="spotify"
+          onChange={(v) => set((s) => ({ ...s, capture: { ...s.capture, alwaysOn: v } }))}
         />
       </section>
 
@@ -470,6 +504,13 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
 
       <section className="card" hidden={tab !== "restore"}>
         <h3>Restore</h3>
+        <Toggle
+          checked={draft.app.matchDisplaySetup}
+          onChange={(v) => set((s) => ({ ...s, app: { ...s.app, matchDisplaySetup: v } }))}
+          hint="Capture a workspace once docked and once on the laptop screen: each restore uses the layout made for the screens connected now. A pinned version always wins."
+        >
+          Use the layout saved for the screens I have now
+        </Toggle>
         <NumberField
           label="Longest a whole restore may take"
           value={draft.timeouts.restoreOverallSecs}
@@ -603,6 +644,44 @@ export function SettingsView({ info }: { info: AppInfo | undefined }) {
             </div>
           </div>
         )}
+      </section>
+
+      <section className="card" hidden={tab !== "advanced"}>
+        <h3>Health check</h3>
+        <p className="muted small">
+          Looks for the things that most often stop ContextFlow working: the database, backups, the browser
+          extension, shortcuts and more. Nothing is sent anywhere.
+        </p>
+        {health && (
+          <ul className="health-list">
+            {health.map((c) => (
+              <li key={c.name} className={`health-${c.status}`}>
+                <span className="health-dot" aria-label={c.status} />
+                <span>
+                  <strong>{c.name}</strong> <span className="muted">{c.message}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="actions left">
+          <button
+            disabled={busy === "health"}
+            onClick={() => action("health", api.healthCheck, (r) => {
+              setHealth(r);
+              const issues = r.filter((c) => c.status !== "ok").length;
+              return issues ? `${issues} thing(s) to look at.` : "Everything looks fine.";
+            })}
+          >
+            {busy === "health" ? "Checking…" : health ? "Check again" : "Run health check"}
+          </button>
+          <button
+            disabled={busy === "diagnostics"}
+            onClick={() => action("diagnostics", api.saveDiagnostics, (r) => `${r.message} ${r.path}`)}
+          >
+            Save diagnostics report…
+          </button>
+        </div>
       </section>
 
       <section className="card" hidden={tab !== "advanced"}>

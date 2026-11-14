@@ -4,6 +4,8 @@
 
 pub mod autosave;
 pub mod capture;
+pub mod display;
+pub mod health;
 pub mod icons;
 pub mod logging;
 pub mod maintenance;

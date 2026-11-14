@@ -82,6 +82,10 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
                     cf_vstudio::VisualStudioState::from_value(&a.adapter_state)
                         .map(|v| v.path_count() as u32)
                 })
+                .or_else(|| {
+                    cf_explorer::ExplorerState::from_value(&a.adapter_state)
+                        .map(|v| v.path_count() as u32)
+                })
                 .unwrap_or(0),
         })
         .collect();
@@ -287,6 +291,7 @@ pub(crate) fn do_capture(
         browser_state_dir: cf_browser::default_state_dir(),
         vscode_storage: cf_vscode::default_storage_json(),
         visual_studio_settings: cf_vstudio::default_settings_files(),
+        explorer_folders: true,
     });
 
     let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
@@ -417,6 +422,9 @@ pub(crate) async fn run_restore(
             overall_timeout: cfg.timeouts.restore_overall(),
             cancel: Some(cancel.clone()),
             skip_cleanup: false,
+            always_on: cfg.capture.normalized_always_on(),
+            leave_note: request.leave_note.clone(),
+            match_display: cfg.app.match_display_setup,
             // Every real restore of another workspace is a switch, wherever it starts.
             save_before_leaving: Some(cfg.clone()),
         };
@@ -458,6 +466,7 @@ pub(crate) async fn run_restore(
             switched_from: left.from,
             auto_saved_version: left.saved_version,
             auto_save_note: left.note,
+            layout_note: outcome.layout_note,
         })
     })
     .await;
@@ -528,25 +537,6 @@ pub async fn create_shortcut(
     .await
 }
 
-#[tauri::command]
-pub async fn rename_workspace(
-    state: State<'_, AppState>,
-    workspace: String,
-    new_name: String,
-) -> CmdResult<WorkspaceSummary> {
-    let path = state.paths.db.clone();
-    blocking(move || {
-        let db = open(&path)?;
-        let ctx = db.find_context(&workspace)?;
-        let renamed = db.rename_context(ctx.id, &new_name)?;
-        tracing::info!("workspace renamed from the app");
-        summarize(&db, &renamed)
-    })
-    .await
-}
-
-/// Change a workspace's name and description together. Its desktop icons that
-/// still carry the old name are renamed to match.
 #[tauri::command]
 pub async fn update_workspace(
     state: State<'_, AppState>,

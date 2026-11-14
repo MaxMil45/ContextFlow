@@ -92,6 +92,9 @@ fn run() -> Result<Option<String>> {
         overall_timeout: cfg.timeouts.restore_overall(),
         cancel: None,
         skip_cleanup: false,
+        always_on: cfg.capture.normalized_always_on(),
+        leave_note: None,
+        match_display: cfg.app.match_display_setup,
         // A desktop icon is a switch like any other: save where you are first.
         save_before_leaving: Some(cfg.clone()),
     };

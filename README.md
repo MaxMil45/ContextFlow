@@ -79,6 +79,12 @@ The database lives in `%APPDATA%\ContextFlow\ContextFlow\data\contextflow.db`, a
 The app (see [app/README.md](app/README.md)) does everything the command line does, and more:
 
 * **Switch with one keystroke:** press **Ctrl+Alt+W** (change it in Settings) from anywhere, type a few letters and press Enter. ContextFlow saves the workspace you're in (skipped if none of its programs are open, so an emptied desktop never overwrites it), runs its leave rules, restores the other one and runs its enter rules. A card in the corner says how long it took ("“Focus” is ready · 6.2 s"). In the app, the main button on any workspace you're not in is **Switch to this**, and the restore ends with a "Welcome back" card: your note, how long ago it was saved and the Git branch with changed files. Turn auto-save off in Settings → General.
+* **Pick up after a restart:** if Windows restarts (or ContextFlow stops without Quit), the next start offers to bring back the workspace you were in. A quiet checkpoint every 20 minutes keeps that restore point fresh (Settings → General).
+* **Leave a note:** the switcher and Leave have an optional note box; the note is saved with the workspace you leave and shown first when you come back (`contextflow leave --note "..."`).
+* **Always-on apps:** apps you use everywhere (music, chat) are never saved into a workspace and never closed by Focus rules (Settings → Capture).
+* **A layout per display setup:** capture once docked and once on the laptop screen; restore uses the newest layout saved with the screens connected now. A pinned version always wins.
+* **File Explorer folders** reopen where they were, like VS Code folders and Visual Studio solutions.
+* **Health check:** Settings → Advanced (or `contextflow doctor`) checks the database, backups, the browser extension, shortcuts and more, and can save a diagnostics report for bug reports. The database is copied next to itself before any update changes its schema.
 * **Keyboard first:** **Ctrl+K** finds any workspace or action, **Ctrl+N** creates one, **Ctrl+1…9** jumps between them, **Ctrl+Enter** restores, **F2** renames, **Ctrl+,** opens Settings.
 * **Dashboard and restore:** your workspaces with their last version, a Preview restore (preflight), live progress, Cancel, and Retry for anything that didn't come back. A Windows notification tells you when it finishes.
 * **Quick capture:** press **Ctrl+Alt+X** (change it in Settings, or turn it off) from anywhere and the workspace you're in is saved in the background, with no window in the way. A small card in the corner of the screen confirms it at once ("Saving…", then "Saved “Focus” v3 · 7 programs") and fades away; it never takes focus or blocks clicks. The tray's **Capture now** does the same. With no active workspace it saves into the one you used last.
@@ -120,6 +126,7 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `cf-browser` | Browser extension protocol, native-messaging host, tab matching and install |
 | `cf-vscode` | Works out which folder each VS Code window has open |
 | `cf-vstudio` | Works out which solution or folder each Visual Studio window has open |
+| `cf-explorer` | Works out which folder each File Explorer window shows |
 | `cf-git` | Read-only Git inspection (`status --porcelain=v2`, `--no-optional-locks`) |
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |

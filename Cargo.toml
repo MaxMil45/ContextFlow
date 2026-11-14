@@ -25,6 +25,8 @@ cf-engine = { path = "crates/cf-engine" }
 cf-cli = { path = "crates/cf-cli" }
 cf-cleanup = { path = "crates/cf-cleanup" }
 cf-app = { path = "crates/cf-app" }
+cf-ipc = { path = "crates/cf-ipc" }
+cf-agent = { path = "crates/cf-agent" }
 
 anyhow = "1"
 toml = "0.8"

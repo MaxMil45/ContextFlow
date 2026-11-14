@@ -3,17 +3,22 @@
 //! It is built for the Windows GUI subsystem, so double-clicking it shows no
 //! console window. It restores the workspace and stays silent on success; if
 //! anything went wrong it shows one message box explaining what.
+//!
+//! If the ContextFlow agent is running, the restore is sent to it over the
+//! per-user pipe; otherwise it runs in this process, exactly as the agent
+//! would (see `docs/AGENT.md`).
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{bail, Result};
 
+use cf_agent::Via;
 use cf_cli::logging;
-use cf_cli::session::{self, RestoreArgs, RestoreBusy, RestoreOutcome};
+use cf_cli::session::{self, RestoreBusy};
 use cf_config::Config;
+use cf_ipc::{RequestBody, ResponseBody, RestoreRequest, RestoreSummary};
 use cf_storage::Database;
 
 const TITLE: &str = "ContextFlow";
@@ -47,32 +52,25 @@ fn parse_args() -> Result<Args> {
     }
 }
 
-fn report(outcome: &RestoreOutcome) -> Option<String> {
-    let mut problems: Vec<String> = outcome
-        .run
-        .problems()
-        .map(|s| format!("• {}: {}", s.application_id, s.message))
-        .collect();
-    // Programs the workspace asked to close but that stayed open or couldn't be ended.
-    for cleanup in &outcome.cleanups {
-        problems.extend(
-            cleanup
-                .problems()
-                .map(|r| format!("• {} (cleanup): {}", r.process, r.message)),
-        );
-    }
-    if problems.is_empty() {
+fn report(summary: &RestoreSummary) -> Option<String> {
+    if summary.problems.is_empty() {
         return None;
     }
+    let problems: Vec<String> = summary
+        .problems
+        .iter()
+        .map(|p| format!("• {}: {}", p.subject, p.message))
+        .collect();
     Some(format!(
         "'{}' was restored, but some things need your attention:\n\n{}",
-        outcome.context.name,
+        summary.workspace,
         problems.join("\n")
     ))
 }
 
 fn run() -> Result<Option<String>> {
     let args = parse_args()?;
+    let custom_paths = args.db.is_some() || args.config.is_some();
     let config_path = match args.config.clone() {
         Some(p) => p,
         None => session::default_config_path()?,
@@ -81,27 +79,33 @@ fn run() -> Result<Option<String>> {
     let paths = session::resolve_paths(args.db.clone(), config_path, &cfg)?;
     let _guard = logging::init(&cfg.logging, &paths.logs);
 
-    cf_windows::init_dpi_awareness();
-    let mut db = Database::open(&paths.db)?;
-    let restore_args = RestoreArgs {
-        version: None,
-        only: Vec::new(),
-        dry_run: false,
-        timeout: Duration::from_secs(30),
-        max_tabs_per_window: cfg.browser.max_tabs_per_window,
-        overall_timeout: cfg.timeouts.restore_overall(),
-        cancel: None,
-        skip_cleanup: false,
-        always_on: cfg.capture.normalized_always_on(),
-        leave_note: None,
-        match_display: cfg.app.match_display_setup,
-        // A desktop icon is a switch like any other: save where you are first.
-        save_before_leaving: Some(cfg.clone()),
-    };
-    let outcome = session::restore_workspace(&mut db, &args.workspace, &restore_args, &mut |m| {
-        tracing::info!("{m}")
+    // Ask the running agent first; with none, restore here exactly as before.
+    // The agent only knows the per-user database, so custom paths stay local.
+    let pipe = cf_agent::pipe_for(custom_paths);
+    let request = RequestBody::Restore(RestoreRequest::switch_to(&args.workspace));
+    let (reply, via) = cf_agent::call_or_fallback(pipe.as_deref(), request, |request| {
+        cf_windows::init_dpi_awareness();
+        let mut db = Database::open(&paths.db)?;
+        Ok(cf_agent::handle(
+            &mut db,
+            &paths.config,
+            request,
+            &mut |m| tracing::info!("{m}"),
+        ))
     })?;
-    Ok(report(&outcome))
+    tracing::info!(
+        "restore handled {}",
+        match &via {
+            Via::Agent => "by the agent".to_string(),
+            Via::InProcess(why) => format!("in-process ({why})"),
+        }
+    );
+    match reply {
+        ResponseBody::Restored(summary) => Ok(report(&summary)),
+        ResponseBody::Busy => Err(RestoreBusy.into()),
+        ResponseBody::Error(e) => bail!("{}", e.message),
+        other => bail!("unexpected reply from the agent: {other:?}"),
+    }
 }
 
 fn main() {

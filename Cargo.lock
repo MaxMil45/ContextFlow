@@ -593,6 +593,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
+name = "cf-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cf-app",
+ "cf-cleanup",
+ "cf-config",
+ "cf-ipc",
+ "cf-storage",
+ "cf-windows",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "cf-app"
 version = "0.1.0"
 dependencies = [
@@ -653,6 +668,7 @@ name = "cf-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cf-agent",
  "cf-app",
  "cf-browser",
  "cf-cleanup",
@@ -662,6 +678,7 @@ dependencies = [
  "cf-engine",
  "cf-explorer",
  "cf-git",
+ "cf-ipc",
  "cf-jetbrains",
  "cf-storage",
  "cf-vscode",
@@ -744,6 +761,17 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "cf-ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -53,3 +53,10 @@ pub(crate) fn fmt_versions(vs: &[u32]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// Progress lines from work the agent did, shown as they would have been live.
+pub(crate) fn print_log(lines: &[String]) {
+    for line in lines {
+        println!("  {line}...");
+    }
+}

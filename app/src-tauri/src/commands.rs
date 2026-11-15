@@ -5,7 +5,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, State};
@@ -21,9 +20,6 @@ use crate::state::AppState;
 
 /// Event name for restore progress lines.
 pub const RESTORE_PROGRESS: &str = "restore://progress";
-
-/// Per-application wait for windows after launch (same as the desktop icon).
-const APP_WINDOW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run blocking work off the async runtime and flatten the join error.
 pub(crate) async fn blocking<T, F>(f: F) -> CmdResult<T>
@@ -76,21 +72,8 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
                 .count() as u32,
             tab_count: cf_browser::BrowserAppState::from_value(&a.adapter_state)
                 .map_or(0, |b| b.tab_count() as u32),
-            folder_count: cf_vscode::VsCodeState::from_value(&a.adapter_state)
-                .map(|v| v.folder_count() as u32)
-                .or_else(|| {
-                    cf_vstudio::VisualStudioState::from_value(&a.adapter_state)
-                        .map(|v| v.path_count() as u32)
-                })
-                .or_else(|| {
-                    cf_explorer::ExplorerState::from_value(&a.adapter_state)
-                        .map(|v| v.path_count() as u32)
-                })
-                .or_else(|| {
-                    cf_jetbrains::JetBrainsState::from_value(&a.adapter_state)
-                        .map(|v| v.path_count() as u32)
-                })
-                .unwrap_or(0),
+            folder_count: cf_detect::saved(a.adapter_id.as_deref(), &a.adapter_state)
+                .map_or(0, |(_, s)| s.path_count() as u32),
         })
         .collect();
     SnapshotDetail {
@@ -293,14 +276,16 @@ pub(crate) fn do_capture(
         git_timeout: cfg.timeouts.git(),
         browser: &cfg.browser,
         browser_state_dir: cf_browser::default_state_dir(),
-        vscode_storage: cf_vscode::default_storage_json(),
-        visual_studio_settings: cf_vstudio::default_settings_files(),
-        explorer_folders: true,
-        jetbrains_recent: cf_jetbrains::default_recent_files(),
+        detect: cf_detect::Sources::installed(),
     });
 
     let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;
     let identical = previous.as_ref().is_some_and(|p| p.hash == snap.hash);
+    // Saving what is open while you are in no workspace puts you in this one,
+    // so the next switch saves it before leaving (the first-run case).
+    if db.active_context()?.is_none() {
+        db.set_active_context(Some(ctx.id))?;
+    }
     tracing::info!(workspace = %ctx.name, version = snap.version, "snapshot saved from the app");
 
     let auto_pruned = if cfg.retention.auto_prune {
@@ -422,16 +407,9 @@ pub(crate) async fn run_restore(
             version: request.version,
             only: request.only.clone().unwrap_or_default(),
             dry_run,
-            timeout: APP_WINDOW_TIMEOUT,
-            max_tabs_per_window: cfg.browser.max_tabs_per_window,
-            overall_timeout: cfg.timeouts.restore_overall(),
             cancel: Some(cancel.clone()),
-            skip_cleanup: false,
-            always_on: cfg.capture.normalized_always_on(),
             leave_note: request.leave_note.clone(),
-            match_display: cfg.app.match_display_setup,
-            // Every real restore of another workspace is a switch, wherever it starts.
-            save_before_leaving: Some(cfg.clone()),
+            ..RestoreArgs::new(&cfg, None)
         };
         let outcome =
             cf_app::session::restore_workspace(&mut db, &request.workspace, &args, &mut log)?;

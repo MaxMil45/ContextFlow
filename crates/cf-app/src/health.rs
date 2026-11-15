@@ -80,6 +80,7 @@ pub fn run(db_path: &Path, backups: &Path, _cfg: &Config) -> Vec<Check> {
                 )),
             }
             out.push(recent_restores(&db));
+            out.push(last_switch(&db));
             out.push(untrusted(&db));
         }
     }
@@ -87,7 +88,8 @@ pub fn run(db_path: &Path, backups: &Path, _cfg: &Config) -> Vec<Check> {
     out.push(backups_check(backups));
     out.push(browser_check());
 
-    let vscode = cf_vscode::default_storage_json().is_some_and(|p| p.is_file());
+    let sources = cf_detect::Sources::installed();
+    let vscode = sources.vscode_storage.is_some_and(|p| p.is_file());
     out.push(check(
         "VS Code folders",
         Status::Ok,
@@ -97,7 +99,7 @@ pub fn run(db_path: &Path, backups: &Path, _cfg: &Config) -> Vec<Check> {
             "VS Code isn't set up on this computer (nothing to save)."
         },
     ));
-    let studio = !cf_vstudio::default_settings_files().is_empty();
+    let studio = !sources.visual_studio_settings.is_empty();
     out.push(check(
         "Visual Studio solutions",
         Status::Ok,
@@ -140,6 +142,23 @@ fn recent_restores(db: &Database) -> Check {
             ),
         )
     }
+}
+
+/// Where the time went in the most recent switch. Informational, never a warning.
+fn last_switch(db: &Database) -> Check {
+    let message = match db.last_restore_timing() {
+        Ok(Some(t)) => format!(
+            "“{}” on {}: {}",
+            t.workspace,
+            t.started_at
+                .with_timezone(&chrono::Local)
+                .format("%-d %b at %H:%M"),
+            crate::session::describe_phases(&t.phases, t.first_window_ms)
+        ),
+        Ok(None) => "no switch has been timed yet; the next one will be".into(),
+        Err(e) => format!("timings couldn't be read: {e}"),
+    };
+    check("Last switch", Status::Ok, message)
 }
 
 fn untrusted(db: &Database) -> Check {

@@ -192,10 +192,7 @@ pub fn save_active(
         git_timeout: cfg.timeouts.git(),
         browser: &cfg.browser,
         browser_state_dir: cf_browser::default_state_dir(),
-        vscode_storage: cf_vscode::default_storage_json(),
-        visual_studio_settings: cf_vstudio::default_settings_files(),
-        explorer_folders: true,
-        jetbrains_recent: cf_jetbrains::default_recent_files(),
+        detect: cf_detect::Sources::installed(),
     });
 
     let decision = match decide(previous.as_ref().map(|s| &s.payload), &result.payload) {

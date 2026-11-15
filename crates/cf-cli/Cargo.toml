@@ -25,7 +25,6 @@ name = "contextflow-launch"
 path = "src/launch.rs"
 
 [dependencies]
-cf-agent.workspace = true
 cf-app.workspace = true
 cf-browser.workspace = true
 cf-cleanup.workspace = true
@@ -36,10 +35,7 @@ cf-engine.workspace = true
 cf-git.workspace = true
 cf-ipc.workspace = true
 cf-storage.workspace = true
-cf-vscode.workspace = true
-cf-vstudio.workspace = true
-cf-explorer.workspace = true
-cf-jetbrains.workspace = true
+cf-detect.workspace = true
 cf-windows.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

@@ -26,9 +26,10 @@ const WIDTH: f64 = 520.0;
 const HEIGHT: f64 = 400.0;
 
 fn window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    if let Some(w) = app.get_webview_window(LABEL) {
-        return Ok(w);
-    }
+    crate::ui::find_or_build(app, LABEL, build)
+}
+
+fn build(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("switcher.html".into()))
         .title("ContextFlow switcher")
         .inner_size(WIDTH, HEIGHT)

@@ -17,16 +17,12 @@ cf-diff = { path = "crates/cf-diff" }
 cf-windows = { path = "crates/cf-windows" }
 cf-config = { path = "crates/cf-config" }
 cf-browser = { path = "crates/cf-browser" }
-cf-vscode = { path = "crates/cf-vscode" }
-cf-vstudio = { path = "crates/cf-vstudio" }
-cf-explorer = { path = "crates/cf-explorer" }
-cf-jetbrains = { path = "crates/cf-jetbrains" }
+cf-detect = { path = "crates/cf-detect" }
 cf-engine = { path = "crates/cf-engine" }
 cf-cli = { path = "crates/cf-cli" }
 cf-cleanup = { path = "crates/cf-cleanup" }
 cf-app = { path = "crates/cf-app" }
 cf-ipc = { path = "crates/cf-ipc" }
-cf-agent = { path = "crates/cf-agent" }
 
 anyhow = "1"
 toml = "0.8"

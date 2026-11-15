@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use chrono::Utc;
@@ -64,6 +64,13 @@ pub fn resolve_paths(
 /// Name of the lock that lets only one restore run at a time.
 pub const RESTORE_LOCK: &str = r"Local\ContextFlow.Restore";
 
+/// Whether a restore is running right now, started by anything: the app, the
+/// desktop icon, the CLI. Checked by taking [`RESTORE_LOCK`] and letting it go
+/// at once, so it never makes a restore wait.
+pub fn restore_running() -> bool {
+    matches!(cf_windows::try_lock_instance(RESTORE_LOCK), Ok(None))
+}
+
 /// Returned when another restore already holds [`RESTORE_LOCK`].
 #[derive(Debug)]
 pub struct RestoreBusy;
@@ -101,6 +108,31 @@ pub struct RestoreArgs {
     /// Every way of switching passes the loaded config, so they all behave the
     /// same; `auto_save_on_switch` in it can still turn saving off.
     pub save_before_leaving: Option<Config>,
+}
+
+impl RestoreArgs {
+    /// The settings of an ordinary switch to a workspace's usual snapshot,
+    /// with everything the config decides filled in. Every front end starts
+    /// from this and changes only what was asked for, so they cannot drift
+    /// apart. `app_timeout_secs` is the longest wait for one application's
+    /// windows (30 seconds unless given).
+    pub fn new(cfg: &Config, app_timeout_secs: Option<u64>) -> Self {
+        Self {
+            version: None,
+            only: Vec::new(),
+            dry_run: false,
+            timeout: Duration::from_secs(app_timeout_secs.unwrap_or(30).clamp(1, 600)),
+            max_tabs_per_window: cfg.browser.max_tabs_per_window,
+            overall_timeout: cfg.timeouts.restore_overall(),
+            cancel: None,
+            skip_cleanup: false,
+            always_on: cfg.capture.normalized_always_on(),
+            leave_note: None,
+            match_display: cfg.app.match_display_setup,
+            // A switch saves where you are first, however it was started.
+            save_before_leaving: Some(cfg.clone()),
+        }
+    }
 }
 
 /// Which side of a workspace a cleanup belongs to.
@@ -363,6 +395,34 @@ pub fn leave_active_workspace(
     })
 }
 
+/// End the phase that began at `mark` and start timing the next one.
+fn lap(phases: &mut Vec<(&'static str, u64)>, mark: &mut Instant, name: &'static str) {
+    phases.push((name, mark.elapsed().as_millis() as u64));
+    *mark = Instant::now();
+}
+
+/// Where the time of a switch went, for the log and the health check:
+/// "ready in 6.2 s, first window after 0.4 s: prepare 12 ms, save 310 ms, ...".
+/// `first_window_ms` counts from the start of the switch.
+pub fn describe_phases<S: AsRef<str>>(phases: &[(S, u64)], first_window_ms: Option<u64>) -> String {
+    let time = |ms: u64| match ms {
+        0..=999 => format!("{ms} ms"),
+        _ => format!("{:.1} s", ms as f64 / 1000.0),
+    };
+    let parts: Vec<String> = phases
+        .iter()
+        .map(|(name, ms)| format!("{} {}", name.as_ref(), time(*ms)))
+        .collect();
+    let first = first_window_ms
+        .map(|ms| format!(", first window after {}", time(ms)))
+        .unwrap_or_default();
+    format!(
+        "ready in {}{first}: {}",
+        time(phases.iter().map(|(_, ms)| ms).sum()),
+        parts.join(", ")
+    )
+}
+
 /// Restore a workspace's snapshot onto the real desktop and record the run.
 pub fn restore_workspace(
     db: &mut Database,
@@ -370,6 +430,9 @@ pub fn restore_workspace(
     args: &RestoreArgs,
     log: &mut dyn FnMut(&str),
 ) -> Result<RestoreOutcome> {
+    // Per-phase timings: prepare, save, close, then the engine's own phases.
+    let mut phases = Vec::new();
+    let mut mark = Instant::now();
     let ctx = db.find_context(workspace)?;
 
     // Imported workspaces can name any program to start, so they must be
@@ -434,6 +497,8 @@ pub fn restore_workspace(
         }
     };
 
+    lap(&mut phases, &mut mark, "prepare");
+
     let was_in = db.active_context()?.filter(|p| *p != ctx.id);
     let switching = !args.dry_run && args.only.is_empty();
     let mut commands = Vec::new();
@@ -446,6 +511,7 @@ pub fn restore_workspace(
         }
         _ => Default::default(),
     };
+    lap(&mut phases, &mut mark, "save");
 
     // The stop commands of the workspace we're leaving, before anything closes.
     if switching {
@@ -493,6 +559,8 @@ pub fn restore_workspace(
         }
     }
 
+    lap(&mut phases, &mut mark, "close");
+
     let started = Utc::now();
     let opts = RestoreOptions {
         timeout: args.timeout,
@@ -504,15 +572,38 @@ pub fn restore_workspace(
         ..Default::default()
     };
     let run = cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log);
+    // The engine counts from its own start; the switch began earlier.
+    let before_engine: u64 = phases.iter().map(|(_, ms)| ms).sum();
+    let first_window_ms = run.first_window_ms.map(|ms| before_engine + ms);
+    phases.extend(run.phases.iter().copied());
+    let timing = describe_phases(&phases, first_window_ms);
 
     tracing::info!(
         workspace = %ctx.name,
         version = snapshot.version,
         overall = run.overall.as_str(),
         dry_run = args.dry_run,
+        timing = %timing,
         "restore finished"
     );
     if !args.dry_run {
+        log(&timing);
+        let phase_records = phases.iter().map(|(name, ms)| RestoreStepRecord {
+            component_type: "phase".into(),
+            component_identifier: (*name).into(),
+            status: "success".into(),
+            error_code: None,
+            error_message: None,
+            duration_ms: *ms,
+        });
+        let first_window = first_window_ms.map(|ms| RestoreStepRecord {
+            component_type: "milestone".into(),
+            component_identifier: "first_window".into(),
+            status: "success".into(),
+            error_code: None,
+            error_message: None,
+            duration_ms: ms,
+        });
         let records: Vec<RestoreStepRecord> = run
             .steps
             .iter()
@@ -524,6 +615,8 @@ pub fn restore_workspace(
                 error_message: (!s.message.is_empty()).then(|| s.message.clone()),
                 duration_ms: s.duration_ms,
             })
+            .chain(phase_records)
+            .chain(first_window)
             .collect();
         db.record_restore_run(
             snapshot.id,
@@ -566,4 +659,39 @@ pub fn restore_workspace(
         layout_note,
         commands,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    /// A checkpoint must see a restore held by anyone, and checking must not
+    /// keep the lock.
+    #[cfg(windows)]
+    #[test]
+    fn a_running_restore_is_seen_and_checking_leaves_the_lock_free() {
+        let Some(held) = cf_windows::try_lock_instance(super::RESTORE_LOCK).unwrap() else {
+            return; // a real restore is running on this machine; nothing to test
+        };
+        assert!(super::restore_running());
+        drop(held);
+        assert!(!super::restore_running());
+        assert!(
+            cf_windows::try_lock_instance(super::RESTORE_LOCK)
+                .unwrap()
+                .is_some(),
+            "checking released the lock again"
+        );
+    }
+
+    #[test]
+    fn phases_are_described_with_their_total() {
+        let phases = [("save", 310), ("wait", 5100), ("place", 0)];
+        assert_eq!(
+            super::describe_phases(&phases, None),
+            "ready in 5.4 s: save 310 ms, wait 5.1 s, place 0 ms"
+        );
+        assert_eq!(
+            super::describe_phases(&phases, Some(420)),
+            "ready in 5.4 s, first window after 420 ms: save 310 ms, wait 5.1 s, place 0 ms"
+        );
+    }
 }

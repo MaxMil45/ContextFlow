@@ -42,15 +42,9 @@ pub struct CaptureOptions<'a> {
     pub browser: &'a BrowserConfig,
     /// Where the browser host keeps live tab state (`None` = don't save tabs).
     pub browser_state_dir: Option<PathBuf>,
-    /// VS Code's `storage.json` (`None` = do not save VS Code folders).
-    pub vscode_storage: Option<PathBuf>,
-    /// Visual Studio's settings files with its recent solutions (empty = do not
-    /// save Visual Studio solutions).
-    pub visual_studio_settings: Vec<PathBuf>,
-    /// Save which folder each File Explorer window shows.
-    pub explorer_folders: bool,
-    /// JetBrains IDEs' recent-project lists (empty = don't save their projects).
-    pub jetbrains_recent: Vec<PathBuf>,
+    /// Where editors and File Explorer keep the lists their windows' folders,
+    /// solutions and projects are looked up in (the default saves none).
+    pub detect: cf_detect::Sources,
 }
 
 pub struct CaptureResult {
@@ -184,18 +178,7 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     }
 
     if opts.include_windows {
-        if let Some(storage) = &opts.vscode_storage {
-            attach_vscode_folders(&mut payload, storage, &mut warnings);
-        }
-        if !opts.visual_studio_settings.is_empty() {
-            attach_visual_studio(&mut payload, &opts.visual_studio_settings, &mut warnings);
-        }
-        if opts.explorer_folders {
-            attach_explorer_folders(&mut payload, &mut warnings);
-        }
-        if !opts.jetbrains_recent.is_empty() {
-            attach_jetbrains(&mut payload, &opts.jetbrains_recent, &mut warnings);
-        }
+        attach_open_paths(&mut payload, &opts.detect, &mut warnings);
     }
 
     for repo in opts.repos {
@@ -237,13 +220,12 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
         }
     }
 
+    // Only facts about the content go in the payload: it is hashed, and the
+    // same desk must give the same hash. How long the capture took differs
+    // every time, so it goes to the log below, not into the snapshot.
     payload.metadata.insert(
         "contextflow_version".into(),
         env!("CARGO_PKG_VERSION").into(),
-    );
-    payload.metadata.insert(
-        "capture_duration_ms".into(),
-        (started.elapsed().as_millis() as u64).into(),
     );
 
     let status = if component_failed {
@@ -271,150 +253,34 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     }
 }
 
-/// Work out which folder each captured VS Code window has open, so restore can
-/// reopen it. Windows whose folder is unknown or ambiguous are saved without
-/// one (and reported), never guessed.
-fn attach_vscode_folders(
+/// Work out what each captured editor or File Explorer window has open (a
+/// folder, solution or project), so restore can reopen it. Windows that can't
+/// be matched with confidence are saved without one (and reported), never
+/// guessed. Each JetBrains IDE is its own application, saved separately.
+fn attach_open_paths(
     payload: &mut SnapshotPayload,
-    storage: &std::path::Path,
+    sources: &cf_detect::Sources,
     warnings: &mut Vec<String>,
 ) {
-    let Some(i) = payload
-        .applications
-        .iter()
-        .position(|a| cf_vscode::is_vscode(&a.application_id))
-    else {
-        return;
-    };
-    let titles: Vec<String> = payload
-        .windows
-        .iter()
-        .filter(|w| cf_vscode::is_vscode(&w.application_id))
-        .map(|w| w.title.clone())
-        .collect();
-    let known = cf_vscode::read_known_folders(storage);
-    let state = cf_vscode::build_state(&titles, &known, &cf_vscode::folder_exists);
-
-    let unresolved = state.windows.len() - state.folder_count();
-    if unresolved > 0 {
-        warnings.push(format!(
-            "VS Code: the folder for {unresolved} window(s) could not be worked out; they will reopen without one"
-        ));
-    }
-    if state.folder_count() > 0 {
-        let app = &mut payload.applications[i];
-        app.adapter_id = Some(cf_vscode::ADAPTER_ID.to_string());
-        app.adapter_state = state.to_value();
-    }
-}
-
-/// Work out which solution or folder each captured Visual Studio window has
-/// open, from Visual Studio's own list of recent ones. Windows that can't be
-/// matched with confidence are saved without one (and reported), never guessed.
-fn attach_visual_studio(
-    payload: &mut SnapshotPayload,
-    settings: &[PathBuf],
-    warnings: &mut Vec<String>,
-) {
-    let Some(i) = payload
-        .applications
-        .iter()
-        .position(|a| cf_vstudio::is_visual_studio(&a.application_id))
-    else {
-        return;
-    };
-    let titles: Vec<String> = payload
-        .windows
-        .iter()
-        .filter(|w| cf_vstudio::is_visual_studio(&w.application_id))
-        .map(|w| w.title.clone())
-        .collect();
-    let recent = cf_vstudio::read_recent(settings);
-    let state = cf_vstudio::build_state(&titles, &recent, &cf_vstudio::path_exists);
-
-    // The start window has no solution; only count windows that showed a name.
-    let unresolved = state
-        .windows
-        .iter()
-        .filter(|w| w.name.is_some() && w.path.is_none())
-        .count();
-    if unresolved > 0 {
-        warnings.push(format!(
-            "Visual Studio: the solution or folder for {unresolved} window(s) could not be worked out; they will reopen without one"
-        ));
-    }
-    if state.path_count() > 0 {
-        let app = &mut payload.applications[i];
-        app.adapter_id = Some(cf_vstudio::ADAPTER_ID.to_string());
-        app.adapter_state = state.to_value();
-    }
-}
-
-/// Work out which folder each captured File Explorer window shows, from
-/// Windows' own list of open folders. Special places (This PC, a search) have
-/// no folder and come back as an ordinary Explorer window.
-fn attach_explorer_folders(payload: &mut SnapshotPayload, warnings: &mut Vec<String>) {
-    let Some(i) = payload
-        .applications
-        .iter()
-        .position(|a| cf_explorer::is_explorer(&a.application_id))
-    else {
-        return;
-    };
-    let titles: Vec<String> = payload
-        .windows
-        .iter()
-        .filter(|w| cf_explorer::is_explorer(&w.application_id))
-        .map(|w| w.title.clone())
-        .collect();
-    let open = cf_explorer::open_folders();
-    let state = cf_explorer::build_state(&titles, &open, &cf_explorer::folder_exists);
-    let unresolved = state.windows.len() - state.path_count();
-    if unresolved > 0 && state.path_count() > 0 {
-        warnings.push(format!(
-            "File Explorer: {unresolved} window(s) show a place that isn't a folder on disk; they will reopen as ordinary Explorer windows"
-        ));
-    }
-    if state.path_count() > 0 {
-        let app = &mut payload.applications[i];
-        app.adapter_id = Some(cf_explorer::ADAPTER_ID.to_string());
-        app.adapter_state = state.to_value();
-    }
-}
-
-/// Work out which project each JetBrains IDE window has open (each IDE is its
-/// own application: PyCharm and CLion are saved separately).
-fn attach_jetbrains(payload: &mut SnapshotPayload, files: &[PathBuf], warnings: &mut Vec<String>) {
-    let ides: Vec<usize> = payload
-        .applications
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| cf_jetbrains::is_jetbrains(&a.application_id))
-        .map(|(i, _)| i)
-        .collect();
-    if ides.is_empty() {
-        return;
-    }
-    let recent = cf_jetbrains::read_recent(files);
-    for i in ides {
+    for i in 0..payload.applications.len() {
         let id = payload.applications[i].application_id.clone();
+        let Some(app) = cf_detect::APPS.iter().find(|a| (a.is_app)(&id)) else {
+            continue;
+        };
         let titles: Vec<String> = payload
             .windows
             .iter()
             .filter(|w| w.application_id == id)
             .map(|w| w.title.clone())
             .collect();
-        let state = cf_jetbrains::build_state(&titles, &recent, &cf_jetbrains::folder_exists);
-        let unresolved = state.windows.len() - state.path_count();
-        if unresolved > 0 && state.path_count() > 0 {
-            warnings.push(format!(
-                "{id}: the project for {unresolved} window(s) could not be worked out; they will reopen without one"
-            ));
-        }
+        let Some(state) = app.detect(&titles, sources) else {
+            continue;
+        };
+        warnings.extend(app.unmatched_warning(&state));
         if state.path_count() > 0 {
-            let app = &mut payload.applications[i];
-            app.adapter_id = Some(cf_jetbrains::ADAPTER_ID.to_string());
-            app.adapter_state = state.to_value();
+            let saved = &mut payload.applications[i];
+            saved.adapter_id = Some(app.adapter_id.to_string());
+            saved.adapter_state = state.to_value();
         }
     }
 }
@@ -573,12 +439,43 @@ mod tests {
             git_timeout: Duration::from_secs(5),
             browser: &BrowserConfig::default(),
             browser_state_dir: None,
-            vscode_storage: None,
-            visual_studio_settings: Vec::new(),
-            explorer_folders: false,
-            jetbrains_recent: Vec::new(),
+            detect: cf_detect::Sources::default(),
         });
         assert!(r.payload.windows.is_empty());
         assert!(r.payload.applications.is_empty());
+    }
+
+    /// The same desk captured twice must give the same hash, so "identical
+    /// to the previous version" means what it says.
+    #[test]
+    fn the_same_desk_hashes_the_same() {
+        let rules = CaptureConfig::default();
+        let browser = BrowserConfig::default();
+        let once = || {
+            capture(CaptureOptions {
+                only: &[],
+                repos: &[],
+                notes: vec!["same note".into()],
+                include_windows: false,
+                unminimize: false,
+                rules: &rules,
+                git_timeout: Duration::from_secs(5),
+                browser: &browser,
+                browser_state_dir: None,
+                detect: cf_detect::Sources::default(),
+            })
+            .payload
+        };
+        let (a, b) = (once(), once());
+        // Nothing that changes from one capture to the next (such as how long
+        // it took) may be saved alongside the content.
+        assert_eq!(
+            a.metadata.keys().collect::<Vec<_>>(),
+            ["contextflow_version"]
+        );
+        assert_eq!(
+            cf_core::hash::content_hash(&a).unwrap(),
+            cf_core::hash::content_hash(&b).unwrap()
+        );
     }
 }

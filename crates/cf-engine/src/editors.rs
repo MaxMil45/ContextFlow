@@ -38,7 +38,7 @@ pub(crate) struct EditorWork {
     /// Saved items that were refused (not safe to put on a command line).
     pub notes: Vec<String>,
     /// The name an open window of this editor shows in its title.
-    pub title_name: fn(&str) -> Option<String>,
+    pub title_name: fn(&str) -> (Option<String>, Option<String>),
     pub wording: &'static Wording,
     /// The editor's name, for messages.
     pub label: &'static str,
@@ -50,118 +50,41 @@ impl EditorWork {
     }
 }
 
-/// The saved folders or solutions to reopen for `app`, if it carries any.
+/// The saved folders, solutions or projects to reopen for `app`, if it carries any.
 pub(crate) fn editor_work(app: &ApplicationState) -> Option<EditorWork> {
-    let mut notes: Vec<String> = Vec::new();
-    let work = match app.adapter_id.as_deref() {
-        Some(cf_vscode::ADAPTER_ID) => {
-            let state = cf_vscode::VsCodeState::from_value(&app.adapter_state)?;
-            let mut items = Vec::new();
-            for w in &state.windows {
-                let Some(uri) = w.folder_uri.as_deref() else {
-                    continue;
-                };
-                // Never pass anything but a plain folder address on the command line.
-                if !cf_vscode::is_safe_folder_uri(uri) {
-                    notes
-                        .push("a saved folder address was not safe to open and was skipped".into());
-                    continue;
-                }
-                items.push(OpenItem {
-                    args: vec!["--new-window".into(), "--folder-uri".into(), uri.into()],
-                    name: w.root_name.clone(),
-                    window_title: w.window_title.clone(),
-                });
-            }
-            EditorWork {
-                items,
-                notes,
-                title_name: cf_vscode::root_name_from_title,
-                wording: &crate::browser::FOLDERS,
-                label: "VS Code",
-            }
-        }
-        Some(cf_vstudio::ADAPTER_ID) => {
-            let state = cf_vstudio::VisualStudioState::from_value(&app.adapter_state)?;
-            let mut items = Vec::new();
-            for w in &state.windows {
-                let Some(path) = w.path.as_deref() else {
-                    continue;
-                };
-                if !cf_vstudio::is_safe_path(path) {
-                    notes.push("a saved solution path was not safe to open and was skipped".into());
-                    continue;
-                }
-                items.push(OpenItem {
-                    // Each `devenv.exe <path>` starts its own Visual Studio window.
-                    args: vec![path.to_string()],
-                    name: w.name.clone(),
-                    window_title: w.window_title.clone(),
-                });
-            }
-            EditorWork {
-                items,
-                notes,
-                title_name: cf_vstudio::name_from_title,
-                wording: &crate::browser::SOLUTIONS,
-                label: "Visual Studio",
-            }
-        }
-        Some(cf_explorer::ADAPTER_ID) => {
-            let state = cf_explorer::ExplorerState::from_value(&app.adapter_state)?;
-            let mut items = Vec::new();
-            for w in &state.windows {
-                let Some(path) = w.path.as_deref() else {
-                    continue;
-                };
-                if !cf_explorer::is_safe_path(path) {
-                    notes.push("a saved folder path was not safe to open and was skipped".into());
-                    continue;
-                }
-                items.push(OpenItem {
-                    // `explorer.exe <folder>` opens it in a new window.
-                    args: vec![path.to_string()],
-                    name: w.name.clone(),
-                    window_title: w.window_title.clone(),
-                });
-            }
-            EditorWork {
-                items,
-                notes,
-                title_name: cf_explorer::name_from_title,
-                wording: &crate::browser::FOLDERS,
-                label: "File Explorer",
-            }
-        }
-        Some(cf_jetbrains::ADAPTER_ID) => {
-            let state = cf_jetbrains::JetBrainsState::from_value(&app.adapter_state)?;
-            let mut items = Vec::new();
-            for w in &state.windows {
-                let Some(path) = w.path.as_deref() else {
-                    continue;
-                };
-                if !cf_jetbrains::is_safe_path(path) {
-                    notes.push("a saved project path was not safe to open and was skipped".into());
-                    continue;
-                }
-                items.push(OpenItem {
-                    // `<ide>64.exe <project folder>` opens it (in the running IDE if there is one).
-                    args: vec![path.to_string()],
-                    name: w.name.clone(),
-                    window_title: w.window_title.clone(),
-                });
-            }
-            EditorWork {
-                items,
-                notes,
-                title_name: cf_jetbrains::name_from_title,
-                wording: &crate::browser::PROJECTS,
-                label: "the IDE",
-            }
-        }
-        _ => return None,
+    let (editor, state) = cf_detect::saved(app.adapter_id.as_deref(), &app.adapter_state)?;
+    let wording = match editor.adapter_id {
+        cf_detect::VISUAL_STUDIO => &crate::browser::SOLUTIONS,
+        cf_detect::JETBRAINS => &crate::browser::PROJECTS,
+        _ => &crate::browser::FOLDERS,
     };
-    (!work.items.is_empty() || !work.notes.is_empty()).then_some(work)
+    let mut items = Vec::new();
+    let mut notes = Vec::new();
+    for w in &state.windows {
+        let Some(path) = w.path.as_deref() else {
+            continue;
+        };
+        // Never pass anything but a plain path or folder address on the command line.
+        if !(editor.is_safe)(path) {
+            notes.push(format!(
+                "a saved {} was not safe to open and was skipped",
+                wording.singular
+            ));
+            continue;
+        }
+        items.push(OpenItem {
+            args: (editor.open_args)(path),
+            name: w.name.clone(),
+            window_title: w.window_title.clone(),
+        });
+    }
+    (!items.is_empty() || !notes.is_empty()).then_some(EditorWork {
+        items,
+        notes,
+        title_name: editor.parse_title,
+        wording,
+        label: editor.label,
+    })
 }
 
 /// Open a window for every saved item that is not already open.
@@ -181,13 +104,15 @@ pub(crate) fn restore_windows(
     opts: &RestoreOptions,
     budget: &Budget,
     log: &mut dyn FnMut(&str),
+    // Runs while waiting for a window, with `log` (see `wait_for_new_window`).
+    meanwhile: &mut crate::Meanwhile<'_>,
 ) -> TabRestore {
     let mut out = TabRestore::default();
     out.notes.extend(work.notes.iter().cloned());
 
     let open_names: Vec<String> = current_titles
         .iter()
-        .filter_map(|t| (work.title_name)(t))
+        .filter_map(|t| (work.title_name)(t).0)
         .map(|n| n.to_lowercase())
         .collect();
     let mut known: HashSet<isize> = desktop
@@ -241,7 +166,14 @@ pub(crate) fn restore_windows(
         };
         opened += 1;
         let wait = wait.min(budget.remaining());
-        match wait_for_new_window(desktop, &app.application_id, &known, wait, opts.settle) {
+        match wait_for_new_window(
+            desktop,
+            &app.application_id,
+            &known,
+            wait,
+            opts.settle,
+            &mut || meanwhile(&mut *log),
+        ) {
             None => out.failures.push(format!(
                 "a window for a saved {} did not appear within {} seconds",
                 work.wording.singular,

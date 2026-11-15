@@ -47,19 +47,36 @@ fn build_main(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .build()
 }
 
-/// Bring the main window to the front, creating it if it was closed. Building
-/// a window waits for the event loop, so it happens on its own thread and this
+/// The window called `label`, built with `build` if there is none.
+///
+/// Only one window is found or built at a time. Tauri checks that a label is
+/// free when a build starts but records the window only once it exists, so two
+/// callers at once (at start-up: opening the window, and the offer to resume)
+/// would each build one with the same label. Closing either then leaves the
+/// other unable to reach the app ("failed to acquire webview reference").
+///
+/// Building waits for the event loop: never call this on the event loop's
+/// own thread (tray, shortcut and setup handlers); use a thread of its own.
+pub(crate) fn find_or_build(
+    app: &AppHandle,
+    label: &str,
+    build: impl FnOnce(&AppHandle) -> tauri::Result<WebviewWindow>,
+) -> tauri::Result<WebviewWindow> {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    match app.get_webview_window(label) {
+        Some(w) => Ok(w),
+        None => build(app),
+    }
+}
+
+/// Bring the main window to the front, creating it if it was closed. This
 /// returns at once (safe to call from tray and shortcut handlers).
 pub fn show_main(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(MAIN) {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
     let app = app.clone();
-    std::thread::spawn(move || match build_main(&app) {
+    std::thread::spawn(move || match find_or_build(&app, MAIN, build_main) {
         Ok(w) => {
+            let _ = w.unminimize();
             let _ = w.show();
             let _ = w.set_focus();
         }

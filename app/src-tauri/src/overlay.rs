@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, LogicalSize, PhysicalPosition, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -102,18 +102,17 @@ pub fn show(app: &AppHandle, kind: &'static str, title: &str, body: &str) -> boo
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     std::thread::spawn(move || {
-        let window = match app.get_webview_window(LABEL) {
-            Some(w) => w,
-            None => match build(&app) {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!("could not show the on-screen card: {e}");
-                    if kind != "saving" {
-                        crate::shell::toast(&app, &message.title, &message.body);
-                    }
-                    return;
+        // Progress lines arrive close together, each on its own thread: only
+        // one of them may build the card.
+        let window = match crate::ui::find_or_build(&app, LABEL, build) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("could not show the on-screen card: {e}");
+                if kind != "saving" {
+                    crate::shell::toast(&app, &message.title, &message.body);
                 }
-            },
+                return;
+            }
         };
         place(&app, &window);
         let _ = window.show();

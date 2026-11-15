@@ -1,6 +1,8 @@
-# Extensions (Phase 3)
+# Extensions
 
-- `vscode/`: VS Code extension reporting folders and open editors over a per-user named pipe.
-- `browser/`: Manifest V3 extension for Chrome/Edge using Native Messaging. Never reads cookies or incognito tabs.
+- `browser/`: Manifest V3 extension for Chrome and Edge. It tells the ContextFlow
+  helper (`contextflow-browser-host`, over Native Messaging) which tabs are open.
+  It never reads cookies, history or page content, and ignores private windows.
 
-See docs/PLAN.md, WP 3.4, 3.6 and 3.7.
+VS Code, Visual Studio, JetBrains IDEs and File Explorer need no extension:
+`crates/cf-detect` works out their folders from window titles.

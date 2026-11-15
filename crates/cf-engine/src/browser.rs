@@ -98,6 +98,8 @@ pub(crate) fn restore_tabs(
     opts: &RestoreOptions,
     budget: &Budget,
     log: &mut dyn FnMut(&str),
+    // Runs while waiting for a window, with `log` (see `wait_for_new_window`).
+    meanwhile: &mut crate::Meanwhile<'_>,
 ) -> TabRestore {
     let mut out = TabRestore::default();
 
@@ -188,8 +190,14 @@ pub(crate) fn restore_tabs(
         };
         // Never wait past the overall budget.
         let wait = wait.min(budget.remaining());
-        let new_window =
-            wait_for_new_window(desktop, &app.application_id, &known, wait, opts.settle);
+        let new_window = wait_for_new_window(
+            desktop,
+            &app.application_id,
+            &known,
+            wait,
+            opts.settle,
+            &mut || meanwhile(&mut *log),
+        );
 
         match new_window {
             None => out.failures.push(format!(

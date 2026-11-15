@@ -47,10 +47,7 @@ pub(crate) fn capture_cmd(
         git_timeout: cfg.timeouts.git(),
         browser: &cfg.browser,
         browser_state_dir: cf_browser::default_state_dir(),
-        vscode_storage: cf_vscode::default_storage_json(),
-        visual_studio_settings: cf_vstudio::default_settings_files(),
-        explorer_folders: true,
-        jetbrains_recent: cf_jetbrains::default_recent_files(),
+        detect: cf_detect::Sources::installed(),
     });
 
     let p = &result.payload;
@@ -71,8 +68,8 @@ pub(crate) fn capture_cmd(
         let tabs = cf_browser::BrowserAppState::from_value(&a.adapter_state)
             .map(|s| format!(", {} tab(s) saved", s.tab_count()))
             .unwrap_or_default();
-        let folders = cf_vscode::VsCodeState::from_value(&a.adapter_state)
-            .map(|s| format!(", {} folder(s) saved", s.folder_count()))
+        let folders = cf_detect::saved(a.adapter_id.as_deref(), &a.adapter_state)
+            .map(|(_, s)| format!(", {} folder(s) saved", s.path_count()))
             .unwrap_or_default();
         println!("  {:<24} {} window(s){tabs}{folders}", a.application_id, n);
     }

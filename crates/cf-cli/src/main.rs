@@ -236,10 +236,6 @@ pub(crate) enum Command {
     #[command(subcommand)]
     Browser(BrowserCmd),
 
-    /// The background agent that keeps ContextFlow ready between commands.
-    #[command(subcommand)]
-    Agent(AgentCmd),
-
     /// Show where ContextFlow keeps its database, config and logs.
     Info,
 
@@ -327,16 +323,6 @@ pub(crate) enum WorkspaceCmd {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum AgentCmd {
-    /// Start the agent in the background (does nothing if it is running).
-    Start,
-    /// Show whether the agent is running and which version it is.
-    Status,
-    /// Ask the agent to stop once it has finished what it is doing.
-    Stop,
-}
-
-#[derive(Subcommand)]
 pub(crate) enum BrowserCmd {
     /// Register ContextFlow with Chrome and Edge and unpack the extension.
     Install,
@@ -387,12 +373,9 @@ fn main() -> Result<()> {
     if let Command::Browser(cmd) = &cli.command {
         return commands::browser::browser_cmd(cmd);
     }
-    if let Command::Agent(cmd) = &cli.command {
-        return commands::agent::agent_cmd(cmd);
-    }
-    // The agent only knows the per-user database and config; with --db or
-    // --config (or their environment variables) the work stays in this process.
-    let pipe = cf_agent::pipe_for(cli.db.is_some() || cli.config.is_some());
+    // The running app serves only the per-user database and config; with --db
+    // or --config (or their environment variables) the work stays in this process.
+    let pipe = cf_app::service::pipe_for(cli.db.is_some() || cli.config.is_some());
 
     let mut db = Database::open(&paths.db)
         .with_context(|| format!("opening database {}", paths.db.display()))?;
@@ -532,7 +515,7 @@ fn run(
             }
             Ok(())
         }
-        Command::Config(_) | Command::Windows { .. } | Command::Browser(_) | Command::Agent(_) => {
+        Command::Config(_) | Command::Windows { .. } | Command::Browser(_) => {
             unreachable!("handled in main")
         }
     }

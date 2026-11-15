@@ -271,9 +271,27 @@ fn restore_runs_are_recorded_and_deleted_with_their_snapshot() {
         now,
         now,
         "partial_success",
-        &[step("code", "success"), step("chrome", "failed")],
+        &[
+            step("code", "success"),
+            step("chrome", "failed"),
+            RestoreStepRecord {
+                component_type: "phase".into(),
+                component_identifier: "wait".into(),
+                ..step("", "success")
+            },
+            RestoreStepRecord {
+                component_type: "milestone".into(),
+                component_identifier: "first_window".into(),
+                status: "failed".into(),
+                ..step("", "success")
+            },
+        ],
     )
     .unwrap();
+    // Phase timings are read back on their own and are not counted as programs.
+    let timing = db.last_restore_timing().unwrap().unwrap();
+    assert_eq!(timing.phases, vec![("wait".to_string(), 12)]);
+    assert_eq!(timing.first_window_ms, Some(12));
     let runs = db.restore_runs(snap.id).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].overall_status, "partial_success");

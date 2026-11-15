@@ -1,7 +1,6 @@
 //! `contextflow restore` and `contextflow shortcut`
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
 
@@ -22,7 +21,7 @@ pub(crate) struct RestoreOpts {
     pub no_save: bool,
 }
 
-/// Restore a workspace. A real restore goes to the running agent when there
+/// Restore a workspace. A real restore goes to the running ContextFlow app when there
 /// is one (`pipe`), and otherwise runs here; a dry run only reads, so it
 /// always runs here.
 pub(crate) fn restore_cmd(
@@ -39,19 +38,12 @@ pub(crate) fn restore_cmd(
             version: opts.version,
             only,
             dry_run: true,
-            timeout: Duration::from_secs(opts.timeout.clamp(1, 600)),
-            max_tabs_per_window: cfg.browser.max_tabs_per_window,
-            overall_timeout: cfg.timeouts.restore_overall(),
-            cancel: None,
             skip_cleanup: opts.no_cleanup,
-            always_on: cfg.capture.normalized_always_on(),
-            leave_note: None,
-            match_display: cfg.app.match_display_setup,
-            save_before_leaving: None,
+            ..RestoreArgs::new(cfg, Some(opts.timeout))
         };
         let outcome =
             session::restore_workspace(db, workspace, &args, &mut |m| println!("  {m}..."))?;
-        let summary = cf_agent::summarize(&outcome);
+        let summary = cf_app::service::summarize(&outcome);
         println!("Dry run for '{}' v{}", summary.workspace, summary.version);
         if !opts.no_cleanup {
             super::cleanup::print_restore_previews(
@@ -71,10 +63,13 @@ pub(crate) fn restore_cmd(
         no_cleanup: opts.no_cleanup,
         no_save: opts.no_save,
     });
-    let (reply, _via) = cf_agent::call_or_fallback(pipe, request, |request| {
-        Ok(cf_agent::handle(db, &paths.config, request, &mut |m| {
-            println!("  {m}...")
-        }))
+    let (reply, _via) = cf_app::service::call_or_fallback(pipe, request, |request| {
+        Ok(cf_app::service::handle(
+            db,
+            &paths.config,
+            request,
+            &mut |m| println!("  {m}..."),
+        ))
     })?;
     match reply {
         ResponseBody::Restored(summary) => {
@@ -84,7 +79,7 @@ pub(crate) fn restore_cmd(
         }
         ResponseBody::Busy => Err(RestoreBusy.into()),
         ResponseBody::Error(e) => bail!("{}", e.message),
-        other => bail!("unexpected reply from the agent: {other:?}"),
+        other => bail!("unexpected reply from the ContextFlow app: {other:?}"),
     }
 }
 

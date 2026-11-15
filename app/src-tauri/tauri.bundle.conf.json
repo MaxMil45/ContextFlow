@@ -6,7 +6,6 @@
     "externalBin": [
       "binaries/contextflow",
       "binaries/contextflow-launch",
-      "binaries/contextflow-agent",
       "binaries/contextflow-browser-host"
     ],
     "windows": {

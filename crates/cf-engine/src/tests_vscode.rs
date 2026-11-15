@@ -1,7 +1,7 @@
 // VS Code folder restore tests. Included at the end of tests.rs, so they share
 // its helpers (`Fake`, `app`, `r`, `monitor`, `open_window`, ...).
 
-use cf_vscode::{VsCodeState, VsCodeWindow};
+use cf_detect::{State as VsCodeState, Window as VsCodeWindow};
 
 const ALPHA: &str = "file:///c%3A/work/Alpha";
 const BETA: &str = "file:///c%3A/work/Beta";
@@ -11,8 +11,8 @@ const BETA_TITLE: &str = "Beta - Visual Studio Code";
 fn vs_window(title: &str, root: &str, uri: Option<&str>) -> VsCodeWindow {
     VsCodeWindow {
         window_title: title.into(),
-        root_name: Some(root.into()),
-        folder_uri: uri.map(String::from),
+        name: Some(root.into()),
+        path: uri.map(String::from),
     }
 }
 

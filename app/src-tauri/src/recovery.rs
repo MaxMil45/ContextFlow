@@ -80,13 +80,10 @@ pub fn start_checkpoints(app: &AppHandle) {
 
 fn checkpoint(app: &AppHandle) {
     let state = app.state::<AppState>();
-    // Never capture a desktop that is half way through a restore.
-    if state
-        .restore_cancel
-        .lock()
-        .map(|s| s.is_some())
-        .unwrap_or(true)
-    {
+    // Never capture a desktop that is half way through a restore, whoever
+    // started it: the window and switcher here, or the desktop icon or CLI
+    // (served by this app over the pipe, or running on their own).
+    if cf_app::session::restore_running() {
         return;
     }
     let cfg = state.config();

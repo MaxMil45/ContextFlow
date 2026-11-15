@@ -593,21 +593,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d43a04d8753f35258c91f8ec639f792891f748a1edbd759cf1dcea3382ad83c"
 
 [[package]]
-name = "cf-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cf-app",
- "cf-cleanup",
- "cf-config",
- "cf-ipc",
- "cf-storage",
- "cf-windows",
- "tempfile",
- "tracing",
-]
-
-[[package]]
 name = "cf-app"
 version = "0.1.0"
 dependencies = [
@@ -618,14 +603,12 @@ dependencies = [
  "cf-cleanup",
  "cf-config",
  "cf-core",
+ "cf-detect",
  "cf-diff",
  "cf-engine",
- "cf-explorer",
  "cf-git",
- "cf-jetbrains",
+ "cf-ipc",
  "cf-storage",
- "cf-vscode",
- "cf-vstudio",
  "cf-windows",
  "chrono",
  "hex",
@@ -668,21 +651,17 @@ name = "cf-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cf-agent",
  "cf-app",
  "cf-browser",
  "cf-cleanup",
  "cf-config",
  "cf-core",
+ "cf-detect",
  "cf-diff",
  "cf-engine",
- "cf-explorer",
  "cf-git",
  "cf-ipc",
- "cf-jetbrains",
  "cf-storage",
- "cf-vscode",
- "cf-vstudio",
  "cf-windows",
  "chrono",
  "clap",
@@ -721,6 +700,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cf-detect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cf-diff"
 version = "0.1.0"
 dependencies = [
@@ -735,22 +723,11 @@ version = "0.1.0"
 dependencies = [
  "cf-browser",
  "cf-core",
- "cf-explorer",
- "cf-jetbrains",
- "cf-vscode",
- "cf-vstudio",
+ "cf-detect",
  "cf-windows",
  "serde",
  "serde_json",
  "tracing",
-]
-
-[[package]]
-name = "cf-explorer"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -775,14 +752,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cf-jetbrains"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "cf-storage"
 version = "0.1.0"
 dependencies = [
@@ -795,23 +764,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "cf-vscode"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cf-vstudio"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -966,12 +918,10 @@ dependencies = [
  "cf-cleanup",
  "cf-config",
  "cf-core",
+ "cf-detect",
  "cf-diff",
- "cf-explorer",
- "cf-jetbrains",
+ "cf-ipc",
  "cf-storage",
- "cf-vscode",
- "cf-vstudio",
  "cf-windows",
  "chrono",
  "serde",

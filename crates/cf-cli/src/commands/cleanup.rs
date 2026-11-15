@@ -88,7 +88,7 @@ pub(crate) fn print_cleanup(report: &cf_ipc::Cleanup) {
     }
 }
 
-/// Leave the active workspace: through the running agent when there is one
+/// Leave the active workspace: through the running ContextFlow app when there is one
 /// (`pipe`), otherwise here.
 pub(crate) fn leave(
     db: &mut Database,
@@ -100,15 +100,18 @@ pub(crate) fn leave(
     let request = RequestBody::Leave(LeaveRequest {
         note: note.map(str::to_owned),
     });
-    let (reply, _via) = cf_agent::call_or_fallback(pipe, request, |request| {
-        Ok(cf_agent::handle(db, &paths.config, request, &mut |m| {
-            println!("  {m}...")
-        }))
+    let (reply, _via) = cf_app::service::call_or_fallback(pipe, request, |request| {
+        Ok(cf_app::service::handle(
+            db,
+            &paths.config,
+            request,
+            &mut |m| println!("  {m}..."),
+        ))
     })?;
     let out = match reply {
         ResponseBody::Left(out) => out,
         ResponseBody::Error(e) => anyhow::bail!("{}", e.message),
-        other => anyhow::bail!("unexpected reply from the agent: {other:?}"),
+        other => anyhow::bail!("unexpected reply from the ContextFlow app: {other:?}"),
     };
     super::util::print_log(&out.log);
     let Some(name) = out.workspace else {

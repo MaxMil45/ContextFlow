@@ -33,30 +33,11 @@ pub fn items(p: &SnapshotPayload) -> Vec<(&'static str, String, Option<String>)>
                 out.push(("tab", t.title.clone(), Some(t.url.clone())));
             }
         }
-        if let Some(v) = cf_vscode::VsCodeState::from_value(&a.adapter_state) {
-            for w in &v.windows {
-                if let Some(path) = w.folder_uri.as_deref().and_then(cf_vscode::folder_path) {
-                    out.push((
-                        "folder",
-                        w.root_name.clone().unwrap_or_default(),
-                        Some(path),
-                    ));
+        if let Some((app, state)) = cf_detect::saved(a.adapter_id.as_deref(), &a.adapter_state) {
+            for w in &state.windows {
+                if let Some(path) = w.path.as_deref().and_then(|p| app.local_path(p)) {
+                    out.push(("folder", w.name.clone().unwrap_or_default(), Some(path)));
                 }
-            }
-        }
-        if let Some(v) = cf_vstudio::VisualStudioState::from_value(&a.adapter_state) {
-            for w in v.windows.iter().filter(|w| w.path.is_some()) {
-                out.push(("folder", w.name.clone().unwrap_or_default(), w.path.clone()));
-            }
-        }
-        if let Some(j) = cf_jetbrains::JetBrainsState::from_value(&a.adapter_state) {
-            for w in j.windows.iter().filter(|w| w.path.is_some()) {
-                out.push(("folder", w.name.clone().unwrap_or_default(), w.path.clone()));
-            }
-        }
-        if let Some(e) = cf_explorer::ExplorerState::from_value(&a.adapter_state) {
-            for w in e.windows.iter().filter(|w| w.path.is_some()) {
-                out.push(("folder", w.name.clone().unwrap_or_default(), w.path.clone()));
             }
         }
     }

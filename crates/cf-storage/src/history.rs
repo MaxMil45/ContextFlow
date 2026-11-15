@@ -33,6 +33,17 @@ pub struct RestoreRunRecord {
     pub problems: Vec<(String, String, Option<String>)>,
 }
 
+/// How long each phase of one restore took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreTiming {
+    pub workspace: String,
+    pub started_at: DateTime<Utc>,
+    /// (phase, milliseconds), in the order they ran.
+    pub phases: Vec<(String, u64)>,
+    /// Milliseconds from the start until the first window was in place.
+    pub first_window_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreRunSummary {
     pub started_at: DateTime<Utc>,
@@ -126,7 +137,8 @@ impl Database {
     ) -> Result<Vec<RestoreRunRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT r.id, r.started_at, s.version_number, r.overall_status,
-                    (SELECT COUNT(*) FROM restore_steps t WHERE t.restore_run_id = r.id)
+                    (SELECT COUNT(*) FROM restore_steps t
+                     WHERE t.restore_run_id = r.id AND t.component_type = 'application')
              FROM restore_runs r JOIN context_snapshots s ON s.id = r.snapshot_id
              WHERE s.context_id = ?1 ORDER BY r.started_at DESC LIMIT ?2",
         )?;
@@ -143,7 +155,8 @@ impl Database {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut problems = self.conn.prepare(
             "SELECT component_identifier, status, error_message FROM restore_steps
-             WHERE restore_run_id = ?1 AND status NOT IN ('success', 'skipped') ORDER BY id",
+             WHERE restore_run_id = ?1 AND component_type = 'application'
+               AND status NOT IN ('success', 'skipped') ORDER BY id",
         )?;
         let mut out = Vec::new();
         for (id, started, version, overall, steps) in runs {
@@ -162,5 +175,62 @@ impl Database {
             });
         }
         Ok(out)
+    }
+
+    /// Where the time went in the most recent restore that recorded it. The
+    /// phases are the run's steps with `component_type` "phase"; the first
+    /// window is the "milestone" step `first_window`.
+    pub fn last_restore_timing(&self) -> Result<Option<RestoreTiming>> {
+        use rusqlite::OptionalExtension as _;
+        let run = self
+            .conn
+            .query_row(
+                "SELECT r.id, r.started_at, c.name
+                 FROM restore_runs r
+                 JOIN context_snapshots s ON s.id = r.snapshot_id
+                 JOIN contexts c ON c.id = s.context_id
+                 WHERE EXISTS (SELECT 1 FROM restore_steps t
+                               WHERE t.restore_run_id = r.id AND t.component_type = 'phase')
+                 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, started, workspace)) = run else {
+            return Ok(None);
+        };
+        let started_at = DateTime::parse_from_rfc3339(&started)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| crate::StorageError::Integrity(format!("restore run time: {e}")))?;
+        let phases = self
+            .conn
+            .prepare(
+                "SELECT component_identifier, COALESCE(duration_ms, 0) FROM restore_steps
+                 WHERE restore_run_id = ?1 AND component_type = 'phase' ORDER BY id",
+            )?
+            .query_map([&id], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let first_window_ms = self
+            .conn
+            .query_row(
+                "SELECT duration_ms FROM restore_steps WHERE restore_run_id = ?1
+                 AND component_type = 'milestone' AND component_identifier = 'first_window'",
+                [&id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(|ms| ms as u64);
+        Ok(Some(RestoreTiming {
+            workspace,
+            started_at,
+            phases,
+            first_window_ms,
+        }))
     }
 }

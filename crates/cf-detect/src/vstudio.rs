@@ -1,67 +1,23 @@
-//! Visual Studio (`devenv.exe`) integration: work out which solution or folder
-//! each Visual Studio window has open, without needing a Visual Studio extension.
-//!
-//! A Visual Studio window's title starts with the solution or folder name:
-//! `CorpusAudit - README.md - Microsoft Visual Studio`. Visual Studio records
-//! the solutions and folders it has opened, with their full paths and when they
-//! were last opened, in `ApplicationPrivateSettings.xml` (the list behind its
-//! start window). We look the name up there and keep the path, so restore can
-//! reopen it with `devenv.exe <path>`.
+//! Visual Studio (`devenv.exe`): a window's title starts with the solution or
+//! folder name: `CorpusAudit - README.md - Microsoft Visual Studio`. Visual
+//! Studio records the solutions and folders it has opened, with their full
+//! paths and when they were last opened, in `ApplicationPrivateSettings.xml`
+//! (the list behind its start window). Restore reopens one with
+//! `devenv.exe <path>`.
 //!
 //! Several entries can share a name (two copies of a project). Visual Studio
 //! updates an entry when it opens it, so the most recently opened one is the
-//! one on screen; if two are equally recent, no path is saved rather than a guess.
+//! one on screen.
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// `ApplicationState::adapter_id` for applications carrying [`VisualStudioState`].
-pub const ADAPTER_ID: &str = "visualstudio";
-pub const STATE_SCHEMA: u32 = 1;
+use crate::{Candidate, Sources};
 
 /// Largest settings file we are willing to read.
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024 * 1024;
 const TITLE_MARKER: &str = " - Microsoft Visual Studio";
-const MAX_PATH_LEN: usize = 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VsWindow {
-    pub window_title: String,
-    /// The solution or folder name taken from the title, if there was one.
-    pub name: Option<String>,
-    /// Full path of the `.sln`/`.slnx` file or the folder, if it could be worked out.
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VisualStudioState {
-    pub schema_version: u32,
-    pub windows: Vec<VsWindow>,
-}
-
-impl VisualStudioState {
-    pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
-    }
-
-    /// `None` for anything that isn't this schema.
-    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value::<Self>(v.clone())
-            .ok()
-            .filter(|s| s.schema_version == STATE_SCHEMA)
-    }
-
-    /// Windows that have a path to reopen.
-    pub fn path_count(&self) -> usize {
-        self.windows.iter().filter(|w| w.path.is_some()).count()
-    }
-}
-
-/// The application id of Visual Studio (`devenv.exe`).
-pub fn is_visual_studio(application_id: &str) -> bool {
-    application_id == "devenv"
-}
 
 /// The solution or folder name from a window title.
 ///
@@ -82,22 +38,6 @@ pub fn name_from_title(title: &str) -> Option<String> {
         name = name.strip_suffix(suffix).unwrap_or(name).trim();
     }
     (!name.is_empty()).then(|| name.to_string())
-}
-
-/// Only plain, absolute local or network paths are ever saved or reopened:
-/// nothing that could be read as a command-line switch.
-pub fn is_safe_path(path: &str) -> bool {
-    let p = path.trim();
-    let bytes = p.as_bytes();
-    let drive = bytes.len() > 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/');
-    let unc = p.starts_with("\\\\") && p.len() > 4;
-    (drive || unc)
-        && p.len() <= MAX_PATH_LEN
-        && !p.contains('"')
-        && !p.chars().any(char::is_control)
 }
 
 /// One solution or folder Visual Studio has opened.
@@ -269,56 +209,44 @@ pub fn read_recent(files: &[PathBuf]) -> Vec<RecentEntry> {
     all
 }
 
-/// Whether a saved path still exists on disk.
-pub fn path_exists(path: &str) -> bool {
-    Path::new(path).exists()
+/// The recent entries as candidates, ranked by when each was last opened.
+/// The times are text in one format, so their order is their rank.
+fn to_candidates(recent: &[RecentEntry]) -> Vec<Candidate> {
+    let mut times: Vec<&str> = recent.iter().map(|e| e.last_accessed.as_str()).collect();
+    times.sort_unstable();
+    times.dedup();
+    recent
+        .iter()
+        .map(|e| Candidate {
+            names: vec![e.name()],
+            path: e.path.clone(),
+            rank: times.binary_search(&e.last_accessed.as_str()).unwrap_or(0) as u64,
+        })
+        .collect()
 }
 
-/// Work out each window's solution or folder from its title. Windows whose
-/// name matches nothing, or matches two equally recent entries, get no path.
-pub fn build_state(
-    titles: &[String],
-    recent: &[RecentEntry],
-    exists: &dyn Fn(&str) -> bool,
-) -> VisualStudioState {
-    let mut taken: Vec<String> = Vec::new();
-    let windows = titles
-        .iter()
-        .map(|title| {
-            let name = name_from_title(title);
-            let path = name.as_deref().and_then(|n| {
-                let mut candidates: Vec<&RecentEntry> = recent
-                    .iter()
-                    .filter(|e| e.name().eq_ignore_ascii_case(n))
-                    .filter(|e| is_safe_path(&e.path) && exists(&e.path))
-                    .filter(|e| !taken.iter().any(|t| t.eq_ignore_ascii_case(&e.path)))
-                    .collect();
-                candidates.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
-                match candidates.as_slice() {
-                    [] => None,
-                    [a, b, ..] if a.last_accessed == b.last_accessed => None,
-                    [a, ..] => Some(a.path.clone()),
-                }
-            });
-            if let Some(p) = &path {
-                taken.push(p.clone());
-            }
-            VsWindow {
-                window_title: title.clone(),
-                name,
-                path,
-            }
-        })
-        .collect();
-    VisualStudioState {
-        schema_version: STATE_SCHEMA,
-        windows,
-    }
+pub(crate) fn candidates(sources: &Sources) -> Option<Vec<Candidate>> {
+    let files = &sources.visual_studio_settings;
+    (!files.is_empty()).then(|| to_candidates(&read_recent(files)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::State;
+
+    fn build_state(
+        titles: &[String],
+        list: &[RecentEntry],
+        exists: &dyn Fn(&str) -> bool,
+    ) -> State {
+        crate::build_state(
+            crate::app(crate::VISUAL_STUDIO),
+            titles,
+            &to_candidates(list),
+            exists,
+        )
+    }
 
     const XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <content>
@@ -410,19 +338,5 @@ mod tests {
             0,
             "equally recent"
         );
-
-        assert!(!is_safe_path("--help"));
-        assert!(!is_safe_path(r#"C:\a" /run"#));
-        assert!(!is_safe_path("relative\\path"));
-        assert!(is_safe_path(r"C:\Users\me\App.sln"));
-        assert!(is_safe_path(r"\\server\share\App.sln"));
-    }
-
-    #[test]
-    fn state_round_trips() {
-        let recent = parse_recent(XML);
-        let t = vec!["CheatSheet - Program.cs - Microsoft Visual Studio".to_string()];
-        let s = build_state(&t, &recent, &|_| true);
-        assert_eq!(VisualStudioState::from_value(&s.to_value()), Some(s));
     }
 }

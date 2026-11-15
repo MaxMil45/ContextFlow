@@ -77,7 +77,8 @@ struct Fake {
     existing_paths: Option<HashSet<String>>,
     /// Full path of every executable launched.
     launched_paths: RefCell<Vec<String>>,
-    /// Everything done, in order: "launch:<app>" and "open:<number of urls>".
+    /// Everything done, in order: "launch:<app>", "open:<number of urls>"
+    /// and "place:<window>".
     events: RefCell<Vec<String>>,
     launch_fails: HashSet<String>,
     /// Store apps the fake knows: (application id, package id).
@@ -181,6 +182,7 @@ impl Desktop for Fake {
             return Err(PlaceError::AccessDenied);
         }
         self.placed.borrow_mut().push((hwnd, rect, state));
+        self.events.borrow_mut().push(format!("place:{hwnd}"));
         Ok(())
     }
 }
@@ -236,6 +238,14 @@ fn launches_apps_and_places_windows() {
     let placed = d.placed.borrow();
     assert!(placed.contains(&(1, r(0, 0, 1000, 800), DisplayState::Normal)));
     assert!(placed.contains(&(3, r(100, 100, 400, 300), DisplayState::Normal)));
+    // The run says where its time went, phase by phase.
+    let names: Vec<&str> = result.phases.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, ["scan", "start", "wait", "place"]);
+    let wait = result.phases[2].1;
+    assert!(
+        wait >= 20,
+        "waiting for windows to settle is counted: {wait}"
+    );
 }
 
 #[test]
@@ -708,4 +718,98 @@ fn helper_process_is_started_through_its_app() {
     assert!(launched[0].eq_ignore_ascii_case(steam), "{launched:?}");
     assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
     assert_eq!(d.placed.borrow()[0].0, 7);
+}
+
+/// Collects the progress lines a restore logs.
+fn run_logged(d: &Fake, p: &SnapshotPayload, o: &RestoreOptions) -> (RestoreRun, Vec<String>) {
+    let mut lines = Vec::new();
+    let run = restore(d, p, o, &mut |m| lines.push(m.to_string()));
+    (run, lines)
+}
+
+#[test]
+fn running_apps_are_in_place_before_anything_starts() {
+    // "notes" is already open; "code" and "chrome" have to be started.
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(3, "notes", "Todo")]),
+        on_launch: vec![
+            ("code".into(), vec![open_window(1, "code", "main.rs")]),
+            ("chrome".into(), vec![open_window(2, "chrome", "Docs")]),
+        ],
+        ..Default::default()
+    };
+    let result = run(&d, &payload(), &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    let events = d.events.borrow();
+    assert_eq!(events[0], "place:3", "order was {events:?}");
+    assert!(result.first_window_ms.is_some());
+}
+
+#[test]
+fn apps_come_back_in_the_order_their_windows_were_stacked() {
+    // Saved top to bottom: notes, then chrome, then code.
+    let mut p = payload();
+    p.windows.reverse();
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        ..Default::default()
+    };
+    run(&d, &p, &fast());
+    assert_eq!(*d.launched.borrow(), ["notes", "chrome", "code"]);
+}
+
+#[test]
+fn a_started_app_is_placed_while_a_browser_is_still_opening() {
+    // Chrome's window never appears, so opening it waits the full timeout;
+    // "code" must be in place long before that wait ends.
+    let mut p = chrome_payload();
+    p.applications.push(app("code"));
+    p.windows
+        .push(saved_window("code", "main.rs", r(0, 0, 500, 500), "M1"));
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        on_launch: vec![("code".into(), vec![open_window(1, "code", "main.rs")])],
+        ..Default::default()
+    };
+    let (result, lines) = run_logged(&d, &p, &fast());
+    let code = lines.iter().position(|l| l.starts_with("code is back"));
+    let chrome = lines
+        .iter()
+        .position(|l| l.starts_with("chrome didn't come back"));
+    assert!(
+        matches!((code, chrome), (Some(c), Some(b)) if c < b),
+        "lines were {lines:?}"
+    );
+    assert_eq!(step(&result, "code").status, RestoreStatus::Success);
+}
+
+#[test]
+fn progress_counts_what_is_back() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        missing_exes: ["chrome".to_string()].into(),
+        on_launch: vec![
+            ("code".into(), vec![open_window(1, "code", "main.rs")]),
+            ("notes".into(), vec![open_window(3, "notes", "Todo")]),
+        ],
+        ..Default::default()
+    };
+    let (_, lines) = run_logged(&d, &payload(), &fast());
+    let progress: Vec<&String> = lines.iter().filter(|l| l.contains(" of 3)")).collect();
+    assert_eq!(progress.len(), 3, "lines were {lines:?}");
+    assert!(progress[0].starts_with("chrome didn't come back (1 of 3)"));
+    assert!(progress.iter().any(|l| l.ends_with("(3 of 3)")));
+
+    // A dry run says what it would do, not what came back.
+    let (run, lines) = run_logged(
+        &d,
+        &payload(),
+        &RestoreOptions {
+            dry_run: true,
+            ..fast()
+        },
+    );
+    assert!(lines.iter().all(|l| !l.contains(" of 3)")), "{lines:?}");
+    assert_eq!(run.first_window_ms, None, "nothing was placed");
 }

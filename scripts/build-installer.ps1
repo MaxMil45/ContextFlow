@@ -12,13 +12,13 @@ function Step($name, [scriptblock]$cmd) {
 
 $triple = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '').Trim()
 
-Step 'Build the command-line programs' { cargo build --release -p cf-cli -p cf-agent }
+Step 'Build the command-line programs' { cargo build --release -p cf-cli }
 
 # Tauri ships "sidecar" programs named <name>-<target triple>.exe and installs
 # them next to the app without the suffix.
 $bin = 'app\src-tauri\binaries'
 New-Item -ItemType Directory -Force $bin | Out-Null
-foreach ($name in 'contextflow', 'contextflow-launch', 'contextflow-agent', 'contextflow-browser-host') {
+foreach ($name in 'contextflow', 'contextflow-launch', 'contextflow-browser-host') {
     Copy-Item "target\release\$name.exe" "$bin\$name-$triple.exe" -Force
 }
 

@@ -1,7 +1,7 @@
 // Visual Studio solution restore tests. Included at the end of tests.rs, so they
 // share its helpers (`Fake`, `app`, `r`, `monitor`, `open_window`, ...).
 
-use cf_vstudio::{VisualStudioState, VsWindow};
+use cf_detect::{State as VisualStudioState, Window as VsWindow};
 
 const SLN: &str = r"C:\work\CorpusAudit\CorpusAudit.sln";
 const FOLDER: &str = r"C:\work\Notes";
@@ -100,7 +100,7 @@ fn unsafe_saved_paths_are_never_put_on_a_command_line() {
 // (it is also the Windows shell), so only folders without a window are opened.
 #[test]
 fn explorer_opens_only_the_folders_that_are_not_open() {
-    use cf_explorer::{ExplorerState, FolderWindow};
+    use cf_detect::{State as ExplorerState, Window as FolderWindow};
     let folder = |title: &str, name: &str, path: &str| FolderWindow {
         window_title: title.into(),
         name: Some(name.into()),

@@ -1,6 +1,5 @@
 //! One module per group of commands. `main.rs` only parses arguments and dispatches.
 
-pub(crate) mod agent;
 pub(crate) mod browser;
 pub(crate) mod capture_cmd;
 pub(crate) mod cleanup;

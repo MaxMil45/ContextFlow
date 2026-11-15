@@ -54,7 +54,7 @@ pub(crate) fn fmt_versions(vs: &[u32]) -> String {
         .join(", ")
 }
 
-/// Progress lines from work the agent did, shown as they would have been live.
+/// Progress lines from work the ContextFlow app did, shown as they would have been live.
 pub(crate) fn print_log(lines: &[String]) {
     for line in lines {
         println!("  {line}...");

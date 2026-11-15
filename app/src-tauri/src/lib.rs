@@ -12,6 +12,7 @@ mod error;
 mod flow_commands;
 mod hotkey;
 mod overlay;
+mod pipe;
 mod recovery;
 mod review;
 mod settings;
@@ -59,6 +60,8 @@ pub fn run() {
         .manage(state)
         .setup(|app| {
             shell::build_tray(app.handle())?;
+            // The desktop icon and the CLI hand their restores to this process.
+            pipe::serve(app.handle(), &app.state::<state::AppState>().paths);
             // The quick-capture shortcut. If another program already owns it, say so
             // instead of failing silently.
             let keys = app.state::<state::AppState>().config().app;

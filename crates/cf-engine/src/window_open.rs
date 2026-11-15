@@ -34,12 +34,16 @@ const NEW_WINDOW_SETTLE_MAX: Duration = Duration::from_millis(750);
 /// Once found, pause for `settle` (at most [`NEW_WINDOW_SETTLE_MAX`]):
 /// browsers and VS Code size and position a new window themselves just after
 /// creating it, which would undo a placement made the instant it appeared.
+///
+/// `meanwhile` runs between looks, so other applications that have finished
+/// opening are put in place while this one is still on its way.
 pub(crate) fn wait_for_new_window(
     desktop: &dyn Desktop,
     app_id: &str,
     known: &HashSet<isize>,
     wait: Duration,
     settle: Duration,
+    meanwhile: &mut dyn FnMut(),
 ) -> Option<isize> {
     let deadline = Instant::now() + wait;
     let mut poll = Duration::from_millis(100);
@@ -56,6 +60,7 @@ pub(crate) fn wait_for_new_window(
         if Instant::now() >= deadline {
             return None;
         }
+        meanwhile();
         std::thread::sleep(poll);
         poll = (poll * 2).min(Duration::from_millis(500));
     }

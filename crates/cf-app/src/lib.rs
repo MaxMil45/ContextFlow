@@ -13,5 +13,6 @@ pub mod maintenance;
 pub mod park;
 pub mod seal;
 pub mod search;
+pub mod service;
 pub mod session;
 pub mod shortcut;

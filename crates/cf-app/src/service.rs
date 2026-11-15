@@ -1,7 +1,9 @@
-//! The ContextFlow agent: the request handler both the background agent and
-//! the in-process fallback run, and the client helper that picks between them.
+//! Requests over this user's pipe: the handler the desktop app serves them
+//! with, and the client helper the desktop icon and `contextflow` use to hand
+//! their work to the running app, or do it themselves when it isn't running.
+//! Both paths end in [`handle`], so they behave the same.
 //!
-//! See `docs/AGENT.md`.
+//! See `docs/AGENT.md` for the protocol and its security.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -9,9 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use cf_app::session::{
-    self, CleanupReport, LeaveOutcome, RestoreArgs, RestoreBusy, RestoreOutcome,
-};
+use crate::session::{self, CleanupReport, LeaveOutcome, RestoreArgs, RestoreBusy, RestoreOutcome};
 use cf_config::Config;
 use cf_ipc::{
     CallError, Cleanup, CleanupOutcome, CleanupPhase, CleanupResult, ErrorCode, LeaveRequest,
@@ -20,33 +20,39 @@ use cf_ipc::{
 };
 use cf_storage::Database;
 
-pub mod lifecycle;
-
 /// How long a client waits for a free pipe instance before working in-process.
 pub const CONNECT_WAIT: Duration = Duration::from_secs(2);
 
-/// Seconds to wait for each application's window unless the request says.
-const DEFAULT_APP_TIMEOUT: u64 = 30;
-
-/// Answers requests over the pipe, with the agent's own database connection.
+/// Answers requests over the pipe, with its own database connection.
 pub struct Service {
     config_path: PathBuf,
     db: Mutex<Database>,
+    /// Also told each progress line as it happens (the app shows them on screen).
+    on_progress: Option<Box<Progress>>,
 }
+
+/// Something told each progress line of a request as it happens.
+type Progress = dyn Fn(&str) + Send + Sync;
 
 impl Service {
     pub fn new(config_path: PathBuf, db: Database) -> Self {
         Self {
             config_path,
             db: Mutex::new(db),
+            on_progress: None,
         }
     }
 
-    /// Answer one request. Progress lines go to the log file and come back in
-    /// the summary, since the client cannot watch them live yet.
+    /// Call `f` with each progress line as it happens.
+    pub fn with_progress(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.on_progress = Some(Box::new(f));
+        self
+    }
+
+    /// Answer one request. Progress lines go to the log file, to the progress
+    /// callback, and back in the summary (the client cannot watch them live).
     pub fn handle(&self, request: RequestBody) -> ResponseBody {
-        // These must answer at once even while a restore holds the database,
-        // or `agent status` and `agent stop` would hang behind it.
+        // These must answer at once even while a restore holds the database.
         if matches!(request, RequestBody::Hello { .. } | RequestBody::Shutdown) {
             return answer_without_db(request);
         }
@@ -56,6 +62,9 @@ impl Service {
         let mut lines = Vec::new();
         let mut reply = handle(&mut db, &self.config_path, request, &mut |m| {
             tracing::info!("{m}");
+            if let Some(f) = &self.on_progress {
+                f(m);
+            }
             lines.push(m.to_owned());
         });
         match &mut reply {
@@ -73,9 +82,9 @@ impl cf_ipc::Handler for Service {
     }
 }
 
-/// Answer one request against `db`. The agent and a front end working
-/// in-process both end up here, so the two paths behave the same. `log`
-/// receives progress lines as they happen.
+/// Answer one request against `db`. The app serving the pipe and a front end
+/// working in-process both end up here, so the two paths behave the same.
+/// `log` receives progress lines as they happen.
 pub fn handle(
     db: &mut Database,
     config_path: &Path,
@@ -141,25 +150,14 @@ fn leave(
 
 /// The restore a request asks for, with everything else from the config.
 pub fn restore_args(cfg: &Config, req: &RestoreRequest) -> RestoreArgs {
-    RestoreArgs {
-        version: req.version,
-        only: req.only.clone(),
-        dry_run: false,
-        timeout: Duration::from_secs(
-            req.timeout_secs
-                .unwrap_or(DEFAULT_APP_TIMEOUT)
-                .clamp(1, 600),
-        ),
-        max_tabs_per_window: cfg.browser.max_tabs_per_window,
-        overall_timeout: cfg.timeouts.restore_overall(),
-        cancel: None,
-        skip_cleanup: req.no_cleanup,
-        always_on: cfg.capture.normalized_always_on(),
-        leave_note: None,
-        match_display: cfg.app.match_display_setup,
-        // A switch saves where you are first, like every other way of switching.
-        save_before_leaving: (!req.no_save).then(|| cfg.clone()),
+    let mut args = RestoreArgs::new(cfg, req.timeout_secs);
+    args.version = req.version;
+    args.only = req.only.clone();
+    args.skip_cleanup = req.no_cleanup;
+    if req.no_save {
+        args.save_before_leaving = None;
     }
+    args
 }
 
 fn cleanup_summary(report: &CleanupReport) -> Cleanup {
@@ -244,9 +242,9 @@ fn summarize_leave(outcome: LeaveOutcome) -> LeaveSummary {
     }
 }
 
-/// The agent's pipe for a front end, or `None` when the front end was given
-/// its own database or config: the agent only knows the per-user ones, so
-/// that work stays in-process.
+/// The pipe a front end asks, or `None` when it was given its own database
+/// or config: the app serves only the per-user ones, so that work stays
+/// in-process.
 pub fn pipe_for(custom_paths: bool) -> Option<String> {
     if custom_paths {
         None
@@ -258,15 +256,17 @@ pub fn pipe_for(custom_paths: bool) -> Option<String> {
 /// Where a request was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Via {
+    /// By the running desktop app.
     Agent,
-    /// In this process, and why the agent was not used.
+    /// In this process, and why the app was not used.
     InProcess(String),
 }
 
-/// Send `request` to the agent on `pipe`; if no agent can take it, run
-/// `local` instead. `pipe: None` skips the agent (see [`pipe_for`]).
+/// Send `request` to the app on `pipe`; if it can't take it (not running,
+/// or an older build), run `local` instead. `pipe: None` skips the app (see
+/// [`pipe_for`]).
 ///
-/// Once a side-effecting request may have reached the agent, a lost reply is
+/// Once a side-effecting request may have reached the app, a lost reply is
 /// an error, never a reason to run it again here.
 pub fn call_or_fallback(
     pipe: Option<&str>,
@@ -281,6 +281,6 @@ pub fn call_or_fallback(
             Err(e @ CallError::Failed(_)) => return Err(e.into()),
         },
     };
-    tracing::debug!("agent not used ({reason}); working in-process");
+    tracing::debug!("the app did not take it ({reason}); working in-process");
     Ok((local(request)?, Via::InProcess(reason)))
 }

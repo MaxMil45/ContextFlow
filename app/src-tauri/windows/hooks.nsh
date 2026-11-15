@@ -14,24 +14,10 @@
   Pop $0
 !macroend
 
-; The background agent (`contextflow-agent.exe`) keeps running between
-; commands, so its file is locked too, and after an upgrade an old agent would
-; go on answering with the old code. Ask it to stop first: it finishes a
-; restore in progress before it exits (`agent stop` waits up to 10 seconds).
-; An install from before the agent existed has no such command; that just
-; fails and is ignored. Then end any copy still running from this install
-; folder, the same way as the browser host. It is safe: with no agent, every
-; program does its own work, and `contextflow agent start` brings it back.
-!macro CF_STOP_AGENT
-  nsExec::Exec '"$INSTDIR\contextflow.exe" agent stop'
-  Pop $0
-  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'contextflow-agent.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | Invoke-CimMethod -MethodName Terminate | Out-Null"`
-  Pop $0
-!macroend
-
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro CF_STOP_BROWSER_HOST
-  !insertmacro CF_STOP_AGENT
+  ; Older versions shipped a separate background agent; the app does its job now.
+  Delete "$INSTDIR\contextflow-agent.exe"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -46,5 +32,4 @@
   Pop $0
   ; Unregistered first, so the browser can't start it again while files go.
   !insertmacro CF_STOP_BROWSER_HOST
-  !insertmacro CF_STOP_AGENT
 !macroend

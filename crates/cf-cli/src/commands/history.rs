@@ -81,12 +81,10 @@ pub(crate) fn show(db: &Database, workspace: &str, version: Option<u32>, json: b
         println!("  {:<24} {}", a.application_id, a.executable_path);
     }
     for a in &p.applications {
-        if let Some(state) = cf_vscode::VsCodeState::from_value(&a.adapter_state) {
+        if let Some((_, state)) = cf_detect::saved(a.adapter_id.as_deref(), &a.adapter_state) {
             println!("\nFolders in {}:", a.application_id);
-            for w in &state.windows {
-                if let Some(uri) = &w.folder_uri {
-                    println!("  {uri}");
-                }
+            for path in state.windows.iter().filter_map(|w| w.path.as_ref()) {
+                println!("  {path}");
             }
         }
         if let Some(state) = cf_browser::BrowserAppState::from_value(&a.adapter_state) {
@@ -183,10 +181,7 @@ pub(crate) fn diff(
             git_timeout: cfg.timeouts.git(),
             browser: &cfg.browser,
             browser_state_dir: cf_browser::default_state_dir(),
-            vscode_storage: None,
-            visual_studio_settings: Vec::new(),
-            explorer_folders: false,
-            jetbrains_recent: Vec::new(),
+            detect: cf_detect::Sources::default(),
         });
         ("live environment".to_string(), r.payload)
     } else {

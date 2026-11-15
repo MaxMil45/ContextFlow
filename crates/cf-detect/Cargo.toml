@@ -1,6 +1,6 @@
 [package]
-name = "cf-vscode"
-description = "ContextFlow VS Code integration: which folder each window has open"
+name = "cf-detect"
+description = "ContextFlow: which folder, solution or project each editor or File Explorer window has open"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

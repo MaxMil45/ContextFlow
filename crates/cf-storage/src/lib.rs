@@ -19,7 +19,7 @@ pub use error::{Result, StorageError};
 pub use export::{
     ExportFile, ExportedSnapshot, ExportedWorkspace, EXPORT_FORMAT, EXPORT_FORMAT_VERSION,
 };
-pub use history::{RestoreRunRecord, RestoreRunSummary, RestoreStepRecord};
+pub use history::{RestoreRunRecord, RestoreRunSummary, RestoreStepRecord, RestoreTiming};
 pub use repo::{
     ContextOverview, Database, IntegrityReport, RetentionPolicy, SaveMode, SnapshotOrigin,
     AUTO_SAVES_KEPT,

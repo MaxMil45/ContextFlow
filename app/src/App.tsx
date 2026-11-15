@@ -1,11 +1,12 @@
-import { Layers, Plus } from "lucide-react";
+import { Camera, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NewWorkspaceDialog } from "./components/dialogs";
 import { Palette, type PaletteCommand } from "./components/Palette";
-import { Empty, ErrorBanner, SkeletonText, ToastProvider } from "./components/ui";
+import { Empty, ErrorBanner, SkeletonText, ToastProvider, useToast } from "./components/ui";
 import { useCommand } from "./hooks";
-import { api, type RestoreReport, type WorkspaceSummary } from "./ipc/client";
+import type { CommandError } from "./bindings/CommandError";
+import { api, toCommandError, type RestoreReport, type WorkspaceSummary } from "./ipc/client";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { ResumeDialog } from "./components/ResumeDialog";
 import { SettingsView } from "./views/SettingsView";
@@ -151,6 +152,32 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  // First run: one click saves the desk as it is into a first workspace.
+  const toast = useToast();
+  const [savingDesk, setSavingDesk] = useState(false);
+  const [deskError, setDeskError] = useState<CommandError>();
+  const saveDesk = async () => {
+    setSavingDesk(true);
+    setDeskError(undefined);
+    try {
+      const ws = await createFirstWorkspace();
+      const report = await api.capture({ workspace: ws.id });
+      workspaces.reload();
+      open(ws.id);
+      toast.show(
+        `Saved ${report.snapshot.applications.length} programs as “${ws.name}” (F2 renames it). ` +
+          "Next, set your desk up for something else and save that as a second workspace. " +
+          "Then Ctrl+Alt+W switches between them.",
+        { ms: 15000 },
+      );
+    } catch (e) {
+      setDeskError(toCommandError(e));
+      workspaces.reload();
+    } finally {
+      setSavingDesk(false);
+    }
+  };
+
   const created = (ws: WorkspaceSummary, captureNow: boolean) => {
     workspaces.reload();
     if (captureNow) ask("capture", ws.id);
@@ -236,16 +263,22 @@ function Shell() {
             ) : (
               <Empty
                 icon={Layers}
-                title="Make your first workspace"
+                title="Save your desk as it is"
                 actions={
-                  <button className="primary" onClick={() => setCreating(true)}>
-                    <Plus size={15} aria-hidden /> New workspace
-                  </button>
+                  <>
+                    <button className="primary" onClick={() => void saveDesk()} disabled={savingDesk}>
+                      <Camera size={15} aria-hidden /> {savingDesk ? "Saving…" : "Save what's open now"}
+                    </button>
+                    <button onClick={() => setCreating(true)} disabled={savingDesk}>
+                      <Plus size={15} aria-hidden /> New workspace
+                    </button>
+                  </>
                 }
               >
                 A workspace remembers your open apps, where their windows sit, your browser tabs and your
-                VS Code folders, so you can come back to them in one click. Open what you need first, then
-                create one and save it.
+                project folders. Save what is open now as your first one, and you can always come back to it
+                in one keystroke.
+                {deskError && <ErrorBanner error={deskError} />}
               </Empty>
             )}
           </main>
@@ -279,4 +312,15 @@ function Shell() {
       )}
     </div>
   );
+}
+
+/** A new workspace for the first-run save, named so it can't clash with an archived one. */
+async function createFirstWorkspace(): Promise<WorkspaceSummary> {
+  for (let n = 1; ; n++) {
+    try {
+      return await api.createWorkspace(n === 1 ? "My desk" : `My desk ${n}`);
+    } catch (e) {
+      if ((e as { code?: string }).code !== "conflict" || n >= 20) throw e;
+    }
+  }
 }

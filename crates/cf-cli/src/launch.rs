@@ -4,8 +4,8 @@
 //! console window. It restores the workspace and stays silent on success; if
 //! anything went wrong it shows one message box explaining what.
 //!
-//! If the ContextFlow agent is running, the restore is sent to it over the
-//! per-user pipe; otherwise it runs in this process, exactly as the agent
+//! If the ContextFlow app is running, the restore is handed to it over the
+//! per-user pipe; otherwise it runs in this process, exactly as the app
 //! would (see `docs/AGENT.md`).
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use cf_agent::Via;
+use cf_app::service::Via;
 use cf_cli::logging;
 use cf_cli::session::{self, RestoreBusy};
 use cf_config::Config;
@@ -79,14 +79,14 @@ fn run() -> Result<Option<String>> {
     let paths = session::resolve_paths(args.db.clone(), config_path, &cfg)?;
     let _guard = logging::init(&cfg.logging, &paths.logs);
 
-    // Ask the running agent first; with none, restore here exactly as before.
-    // The agent only knows the per-user database, so custom paths stay local.
-    let pipe = cf_agent::pipe_for(custom_paths);
+    // Hand it to the running app first; without one, restore here the same way.
+    // The app serves only the per-user database, so custom paths stay local.
+    let pipe = cf_app::service::pipe_for(custom_paths);
     let request = RequestBody::Restore(RestoreRequest::switch_to(&args.workspace));
-    let (reply, via) = cf_agent::call_or_fallback(pipe.as_deref(), request, |request| {
+    let (reply, via) = cf_app::service::call_or_fallback(pipe.as_deref(), request, |request| {
         cf_windows::init_dpi_awareness();
         let mut db = Database::open(&paths.db)?;
-        Ok(cf_agent::handle(
+        Ok(cf_app::service::handle(
             &mut db,
             &paths.config,
             request,
@@ -96,7 +96,7 @@ fn run() -> Result<Option<String>> {
     tracing::info!(
         "restore handled {}",
         match &via {
-            Via::Agent => "by the agent".to_string(),
+            Via::Agent => "by the ContextFlow app".to_string(),
             Via::InProcess(why) => format!("in-process ({why})"),
         }
     );
@@ -104,7 +104,7 @@ fn run() -> Result<Option<String>> {
         ResponseBody::Restored(summary) => Ok(report(&summary)),
         ResponseBody::Busy => Err(RestoreBusy.into()),
         ResponseBody::Error(e) => bail!("{}", e.message),
-        other => bail!("unexpected reply from the agent: {other:?}"),
+        other => bail!("unexpected reply from the ContextFlow app: {other:?}"),
     }
 }
 

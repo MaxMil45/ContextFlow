@@ -1,67 +1,16 @@
-//! VS Code integration: work out which folder each VS Code window has open,
-//! without needing a VS Code extension.
-//!
-//! A VS Code window's title ends with `<folder name> - Visual Studio Code`.
-//! VS Code records the folders it knows about in its own `storage.json`; we
-//! look the name up there and keep the matching `file:///` address so restore
-//! can reopen the folder with `code --folder-uri`.
-//!
-//! Resolution is deliberately cautious: if a name could mean more than one
-//! folder, we save no folder rather than guess.
+//! VS Code: a window's title ends with `<folder name> - Visual Studio Code`.
+//! VS Code records the folders it knows about in its own `storage.json`; the
+//! name is looked up there and the matching `file:///` address is kept, so
+//! restore can reopen the folder with `code --folder-uri`.
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-/// `ApplicationState::adapter_id` for applications carrying [`VsCodeState`].
-pub const ADAPTER_ID: &str = "vscode";
-pub const STATE_SCHEMA: u32 = 1;
+use crate::{Candidate, Sources};
 
 /// Largest `storage.json` we are willing to read.
 const MAX_STORAGE_BYTES: u64 = 8 * 1024 * 1024;
 const TITLE_SUFFIX: &str = " - Visual Studio Code";
 const MAX_URI_LEN: usize = 2048;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VsCodeWindow {
-    pub window_title: String,
-    /// The folder name taken from the title, if there was one.
-    pub root_name: Option<String>,
-    /// `file:///...` address of the folder, or `None` if it could not be worked out.
-    pub folder_uri: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VsCodeState {
-    pub schema_version: u32,
-    pub windows: Vec<VsCodeWindow>,
-}
-
-impl VsCodeState {
-    pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).expect("VS Code state always serialises")
-    }
-
-    /// Parse from `ApplicationState::adapter_state`; `None` if absent or from
-    /// a newer, unknown schema.
-    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        let s: Self = serde_json::from_value(v.clone()).ok()?;
-        (s.schema_version == STATE_SCHEMA).then_some(s)
-    }
-
-    /// Number of windows with a resolved folder.
-    pub fn folder_count(&self) -> usize {
-        self.windows
-            .iter()
-            .filter(|w| w.folder_uri.is_some())
-            .count()
-    }
-}
-
-/// The application id of VS Code (`Code.exe`).
-pub fn is_vscode(application_id: &str) -> bool {
-    application_id == "code"
-}
 
 /// The folder name from a window title.
 ///
@@ -208,63 +157,41 @@ pub fn read_known_folders(storage_json: &Path) -> KnownFolders {
         .unwrap_or_default()
 }
 
-fn names_match(uri: &str, root_name: &str) -> bool {
-    folder_base_name(uri).is_some_and(|b| b.eq_ignore_ascii_case(root_name))
-}
-
-/// Work out the folder for one folder name.
-///
-/// 1. The first matching folder among the open windows' folders.
-/// 2. Otherwise a matching folder among all others, but only if exactly one
-///    existing folder has that name. If several do, nothing is chosen.
-fn resolve(root_name: &str, known: &KnownFolders, exists: &dyn Fn(&str) -> bool) -> Option<String> {
-    if let Some(uri) = known
-        .open
-        .iter()
-        .find(|u| names_match(u, root_name) && exists(u))
-    {
-        return Some(uri.clone());
-    }
-    let mut matches = known
-        .others
-        .iter()
-        .filter(|u| names_match(u, root_name) && exists(u));
-    match (matches.next(), matches.next()) {
-        (Some(only), None) => Some(only.clone()),
-        _ => None,
-    }
-}
-
-/// One [`VsCodeWindow`] per window title, with its folder where it can be
-/// worked out. `exists` says whether a folder address is a real folder.
-pub fn build_state(
-    window_titles: &[String],
-    known: &KnownFolders,
-    exists: &dyn Fn(&str) -> bool,
-) -> VsCodeState {
-    let windows = window_titles
-        .iter()
-        .map(|title| {
-            let root_name = root_name_from_title(title);
-            let folder_uri = root_name
-                .as_deref()
-                .and_then(|name| resolve(name, known, exists));
-            VsCodeWindow {
-                window_title: title.clone(),
-                root_name,
-                folder_uri,
-            }
+/// The known folders as candidates. Folders of open windows come first, in
+/// their priority order. All the others rank equally, so a name that fits
+/// several of them is not guessed.
+fn to_candidates(known: &KnownFolders) -> Vec<Candidate> {
+    let open = known.open.iter().enumerate();
+    open.map(|(i, uri)| (uri, crate::rank_by_position(i)))
+        .chain(known.others.iter().map(|uri| (uri, 0)))
+        .filter_map(|(uri, rank)| {
+            Some(Candidate {
+                names: vec![folder_base_name(uri)?],
+                path: uri.clone(),
+                rank,
+            })
         })
-        .collect();
-    VsCodeState {
-        schema_version: STATE_SCHEMA,
-        windows,
-    }
+        .collect()
+}
+
+pub(crate) fn candidates(sources: &Sources) -> Option<Vec<Candidate>> {
+    let storage = sources.vscode_storage.as_deref()?;
+    Some(to_candidates(&read_known_folders(storage)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::State;
+
+    fn build_state(titles: &[String], list: &KnownFolders, exists: &dyn Fn(&str) -> bool) -> State {
+        crate::build_state(
+            crate::app(crate::VSCODE),
+            titles,
+            &to_candidates(list),
+            exists,
+        )
+    }
 
     fn s(v: &str) -> String {
         v.to_string()
@@ -388,16 +315,16 @@ mod tests {
         );
         // The open window's folder beats the older duplicate.
         assert_eq!(
-            st.windows[0].folder_uri.as_deref(),
+            st.windows[0].path.as_deref(),
             Some("file:///c%3A/work/ContextFlow")
         );
-        assert_eq!(st.windows[0].root_name.as_deref(), Some("contextflow"));
+        assert_eq!(st.windows[0].name.as_deref(), Some("contextflow"));
         // Unique among the others: resolved.
         assert_eq!(
-            st.windows[1].folder_uri.as_deref(),
+            st.windows[1].path.as_deref(),
             Some("file:///c%3A/old/Other")
         );
-        assert_eq!(st.folder_count(), 2);
+        assert_eq!(st.path_count(), 2);
     }
 
     #[test]
@@ -421,30 +348,17 @@ mod tests {
             &k,
             &exists,
         );
-        assert!(st.windows.iter().all(|w| w.folder_uri.is_none()), "{st:#?}");
+        assert!(st.windows.iter().all(|w| w.path.is_none()), "{st:#?}");
         assert_eq!(st.windows.len(), 4, "every window is still listed");
-        assert_eq!(st.folder_count(), 0);
+        assert_eq!(st.path_count(), 0);
 
         // Once only one of the two still exists, it is no longer ambiguous.
         let only_a = |u: &str| u.contains("/a/");
         let st = build_state(&[s("backend - Visual Studio Code")], &k, &only_a);
         assert_eq!(
-            st.windows[0].folder_uri.as_deref(),
+            st.windows[0].path.as_deref(),
             Some("file:///c%3A/a/backend")
         );
-    }
-
-    #[test]
-    fn state_round_trips_and_rejects_unknown_schema() {
-        let st = build_state(
-            &[s("x - Visual Studio Code")],
-            &KnownFolders::default(),
-            &|_| true,
-        );
-        assert_eq!(VsCodeState::from_value(&st.to_value()), Some(st));
-        assert_eq!(VsCodeState::from_value(&serde_json::Value::Null), None);
-        let future = serde_json::json!({"schema_version": 99, "windows": []});
-        assert_eq!(VsCodeState::from_value(&future), None);
     }
 
     #[test]
@@ -458,6 +372,5 @@ mod tests {
         std::fs::write(&file, STORAGE).unwrap();
         assert_eq!(read_known_folders(&file).open.len(), 3);
         assert!(!folder_exists("file:///definitely/not/a/real/folder"));
-        assert!(is_vscode("code") && !is_vscode("chrome"));
     }
 }

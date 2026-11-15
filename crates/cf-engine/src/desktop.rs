@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use cf_core::{DisplayState, MonitorInfo, Rect};
 use cf_windows::{DiscoveredWindow, PlatformError};
@@ -32,6 +34,101 @@ pub trait Desktop {
     /// when the extension isn't connected and so the answer is unknown.
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>>;
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError>;
+}
+
+/// A desktop that adds up how long the engine spends in each kind of call, so
+/// a restore can say where its time went.
+pub(crate) struct Timed<'a> {
+    inner: &'a dyn Desktop,
+    began: Instant,
+    /// When the first window was put in place, after `began`.
+    first_placed: Cell<Option<Duration>>,
+    scan: Cell<Duration>,
+    start: Cell<Duration>,
+    place: Cell<Duration>,
+}
+
+impl<'a> Timed<'a> {
+    pub(crate) fn new(inner: &'a dyn Desktop) -> Self {
+        Self {
+            inner,
+            began: Instant::now(),
+            first_placed: Cell::default(),
+            scan: Cell::default(),
+            start: Cell::default(),
+            place: Cell::default(),
+        }
+    }
+
+    /// Milliseconds until the first window was in place, if one was.
+    pub(crate) fn first_placed_ms(&self) -> Option<u64> {
+        self.first_placed.get().map(|d| d.as_millis() as u64)
+    }
+
+    /// `total` split into phases, in milliseconds: reading the desktop
+    /// (`scan`), starting programs (`start`), moving windows (`place`), and
+    /// everything else, which is waiting for windows to appear (`wait`).
+    pub(crate) fn phases(&self, total: Duration) -> Vec<(&'static str, u64)> {
+        let (scan, start, place) = (self.scan.get(), self.start.get(), self.place.get());
+        let wait = total.saturating_sub(scan + start + place);
+        [
+            ("scan", scan),
+            ("start", start),
+            ("wait", wait),
+            ("place", place),
+        ]
+        .map(|(name, d)| (name, d.as_millis() as u64))
+        .to_vec()
+    }
+}
+
+fn timed<T>(sum: &Cell<Duration>, f: impl FnOnce() -> T) -> T {
+    let began = Instant::now();
+    let out = f();
+    sum.set(sum.get() + began.elapsed());
+    out
+}
+
+impl Desktop for Timed<'_> {
+    fn windows(&self) -> Result<Vec<DiscoveredWindow>, String> {
+        timed(&self.scan, || self.inner.windows())
+    }
+    fn monitors(&self) -> Result<Vec<MonitorInfo>, String> {
+        timed(&self.scan, || self.inner.monitors())
+    }
+    fn exe_exists(&self, path: &str) -> bool {
+        self.inner.exe_exists(path)
+    }
+    fn list_dirs(&self, dir: &str) -> Vec<String> {
+        self.inner.list_dirs(dir)
+    }
+    fn launch(&self, exe: &str, args: &[String], cwd: Option<&str>) -> Result<u32, String> {
+        timed(&self.start, || self.inner.launch(exe, args, cwd))
+    }
+    fn packaged_app_id(&self, exe: &str) -> Option<String> {
+        self.inner.packaged_app_id(exe)
+    }
+    fn launch_packaged(&self, app_user_model_id: &str) -> Result<(), String> {
+        timed(&self.start, || {
+            self.inner.launch_packaged(app_user_model_id)
+        })
+    }
+    fn open_app_window(&self, exe: &str, args: &[String]) -> Result<(), String> {
+        timed(&self.start, || self.inner.open_app_window(exe, args))
+    }
+    fn open_browser_window(&self, exe: &str, urls: &[String]) -> Result<(), String> {
+        timed(&self.start, || self.inner.open_browser_window(exe, urls))
+    }
+    fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
+        self.inner.live_browser_urls(browser)
+    }
+    fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {
+        let placed = timed(&self.place, || self.inner.place(hwnd, rect, state));
+        if placed.is_ok() && self.first_placed.get().is_none() {
+            self.first_placed.set(Some(self.began.elapsed()));
+        }
+        placed
+    }
 }
 
 /// The real desktop.

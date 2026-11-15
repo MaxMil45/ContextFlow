@@ -11,13 +11,9 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-pub const ADAPTER_ID: &str = "jetbrains";
-pub const STATE_SCHEMA: u32 = 1;
+use crate::{Candidate, Sources};
 
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_PATH_LEN: usize = 1024;
 
 /// Executables of JetBrains IDEs, as application ids.
 const IDES: &[&str] = &[
@@ -46,35 +42,6 @@ const IDES: &[&str] = &[
     "studio64",
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProjectWindow {
-    pub window_title: String,
-    pub name: Option<String>,
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JetBrainsState {
-    pub schema_version: u32,
-    pub windows: Vec<ProjectWindow>,
-}
-
-impl JetBrainsState {
-    pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
-    }
-
-    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value::<Self>(v.clone())
-            .ok()
-            .filter(|s| s.schema_version == STATE_SCHEMA)
-    }
-
-    pub fn path_count(&self) -> usize {
-        self.windows.iter().filter(|w| w.path.is_some()).count()
-    }
-}
-
 /// Whether an application id is a JetBrains IDE (Android Studio included).
 pub fn is_jetbrains(application_id: &str) -> bool {
     IDES.contains(&application_id)
@@ -98,21 +65,6 @@ pub fn parse_title(title: &str) -> (Option<String>, Option<String>) {
 /// For restore: the project name of an open window.
 pub fn name_from_title(title: &str) -> Option<String> {
     parse_title(title).0
-}
-
-/// Only plain, absolute local or network folders are saved or reopened.
-pub fn is_safe_path(path: &str) -> bool {
-    let p = path.trim();
-    let b = p.as_bytes();
-    let drive = b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'\\' || b[2] == b'/');
-    let unc = p.starts_with("\\\\") && p.len() > 4;
-    (drive || unc)
-        && p.len() <= MAX_PATH_LEN
-        && !p.contains('"')
-        && !p.chars().any(char::is_control)
 }
 
 /// One project an IDE has opened.
@@ -223,59 +175,40 @@ pub fn read_recent(files: &[PathBuf]) -> Vec<RecentProject> {
     all
 }
 
-pub fn folder_exists(path: &str) -> bool {
-    Path::new(path).is_dir()
+/// The recent projects as candidates, ranked by when each was last active.
+fn to_candidates(recent: &[RecentProject]) -> Vec<Candidate> {
+    recent
+        .iter()
+        .map(|r| Candidate {
+            names: r.names(),
+            path: r.path.clone(),
+            rank: r.activated,
+        })
+        .collect()
 }
 
-/// Match each window title to a recent project: a path shown in the title wins;
-/// otherwise the most recently active project with that name. Equally recent
-/// matches save no path rather than a guess.
-pub fn build_state(
-    titles: &[String],
-    recent: &[RecentProject],
-    exists: &dyn Fn(&str) -> bool,
-) -> JetBrainsState {
-    let mut taken: Vec<String> = Vec::new();
-    let windows = titles
-        .iter()
-        .map(|title| {
-            let (name, shown_path) = parse_title(title);
-            let path = shown_path
-                .filter(|p| is_safe_path(p) && exists(p))
-                .or_else(|| {
-                    let n = name.as_deref()?;
-                    let mut c: Vec<&RecentProject> = recent
-                        .iter()
-                        .filter(|r| r.names().iter().any(|x| x.eq_ignore_ascii_case(n)))
-                        .filter(|r| is_safe_path(&r.path) && exists(&r.path))
-                        .filter(|r| !taken.iter().any(|t| t.eq_ignore_ascii_case(&r.path)))
-                        .collect();
-                    c.sort_by_key(|r| std::cmp::Reverse(r.activated));
-                    match c.as_slice() {
-                        [] => None,
-                        [a, b, ..] if a.activated == b.activated => None,
-                        [a, ..] => Some(a.path.clone()),
-                    }
-                });
-            if let Some(p) = &path {
-                taken.push(p.clone());
-            }
-            ProjectWindow {
-                window_title: title.clone(),
-                name,
-                path,
-            }
-        })
-        .collect();
-    JetBrainsState {
-        schema_version: STATE_SCHEMA,
-        windows,
-    }
+pub(crate) fn candidates(sources: &Sources) -> Option<Vec<Candidate>> {
+    let files = &sources.jetbrains_recent;
+    (!files.is_empty()).then(|| to_candidates(&read_recent(files)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::State;
+
+    fn build_state(
+        titles: &[String],
+        list: &[RecentProject],
+        exists: &dyn Fn(&str) -> bool,
+    ) -> State {
+        crate::build_state(
+            crate::app(crate::JETBRAINS),
+            titles,
+            &to_candidates(list),
+            exists,
+        )
+    }
 
     const XML: &str = r#"<application>
   <component name="RecentProjectsManager">

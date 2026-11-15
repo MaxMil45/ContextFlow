@@ -1,8 +1,8 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use cf_core::{DisplayState, MonitorInfo, Rect};
+use cf_core::{DisplayState, MonitorInfo, Rect, WindowState};
 use cf_windows::{DiscoveredWindow, PlatformError};
 
 #[derive(Debug)]
@@ -34,12 +34,24 @@ pub trait Desktop {
     /// when the extension isn't connected and so the answer is unknown.
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>>;
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError>;
+    /// Put a window above the others without activating it.
+    fn raise(&self, hwnd: isize);
+    /// Give a window the keyboard focus, if the system allows it.
+    fn focus(&self, hwnd: isize);
+    /// Told when `saved` (a window of the snapshot being restored) has been
+    /// put on `hwnd`, so the stacking order can be rebuilt at the end.
+    fn placed(&self, _saved: &WindowState, _hwnd: isize) {}
 }
 
 /// A desktop that adds up how long the engine spends in each kind of call, so
 /// a restore can say where its time went.
 pub(crate) struct Timed<'a> {
     inner: &'a dyn Desktop,
+    /// The snapshot's windows, top of the stack first: a window's place in
+    /// this list is its place in the stack.
+    stack_order: &'a [WindowState],
+    /// (place in the stack, window) for each window of the snapshot put on one.
+    stack: RefCell<Vec<(usize, isize)>>,
     began: Instant,
     /// When the first window was put in place, after `began`.
     first_placed: Cell<Option<Duration>>,
@@ -49,14 +61,32 @@ pub(crate) struct Timed<'a> {
 }
 
 impl<'a> Timed<'a> {
-    pub(crate) fn new(inner: &'a dyn Desktop) -> Self {
+    pub(crate) fn new(inner: &'a dyn Desktop, stack_order: &'a [WindowState]) -> Self {
         Self {
             inner,
+            stack_order,
+            stack: RefCell::default(),
             began: Instant::now(),
             first_placed: Cell::default(),
             scan: Cell::default(),
             start: Cell::default(),
             place: Cell::default(),
+        }
+    }
+
+    /// Put the windows that were placed back in their saved stacking order,
+    /// bottom to top, and give the top one the focus. Minimized windows are
+    /// left alone: raising one would bring it back up.
+    pub(crate) fn restore_stack(&self) {
+        let mut stack = self.stack.borrow().clone();
+        // Highest number = lowest in the stack = raised first.
+        stack.sort_by_key(|&(rank, _)| std::cmp::Reverse(rank));
+        stack.dedup_by_key(|&mut (_, hwnd)| hwnd);
+        for &(_, hwnd) in &stack {
+            self.raise(hwnd);
+        }
+        if let Some(&(_, top)) = stack.last() {
+            self.focus(top);
         }
     }
 
@@ -121,6 +151,21 @@ impl Desktop for Timed<'_> {
     }
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
         self.inner.live_browser_urls(browser)
+    }
+    fn raise(&self, hwnd: isize) {
+        timed(&self.place, || self.inner.raise(hwnd));
+    }
+    fn focus(&self, hwnd: isize) {
+        timed(&self.place, || self.inner.focus(hwnd));
+    }
+    fn placed(&self, saved: &WindowState, hwnd: isize) {
+        // Minimized windows stay minimized; they are not part of the stack.
+        if saved.display_state == DisplayState::Minimized {
+            return;
+        }
+        if let Some(rank) = self.stack_order.iter().position(|w| std::ptr::eq(w, saved)) {
+            self.stack.borrow_mut().push((rank, hwnd));
+        }
     }
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {
         let placed = timed(&self.place, || self.inner.place(hwnd, rect, state));
@@ -192,6 +237,18 @@ impl Desktop for WindowsDesktop {
 
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
         cf_browser::live_urls(&cf_browser::default_state_dir()?, browser)
+    }
+
+    fn raise(&self, hwnd: isize) {
+        if let Err(e) = cf_windows::raise_window(hwnd) {
+            tracing::debug!(hwnd, error = %e, "could not raise a window");
+        }
+    }
+
+    fn focus(&self, hwnd: isize) {
+        if !cf_windows::focus_window(hwnd) {
+            tracing::debug!(hwnd, "Windows did not allow giving a window the focus");
+        }
     }
 
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {

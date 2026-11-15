@@ -108,6 +108,23 @@ pub struct Candidate {
     pub rank: u64,
 }
 
+/// A window of an app, as capture saw it.
+#[derive(Debug, Clone, Copy)]
+pub struct OpenWindow<'a> {
+    pub title: &'a str,
+    /// The system's handle for it (`HWND`): valid only while the window lives,
+    /// and never saved.
+    pub handle: isize,
+}
+
+/// How an app's windows are told apart.
+enum Lookup {
+    /// The name in the window's title is looked up in a list the app keeps.
+    ByTitle(fn(&Sources) -> Option<Vec<Candidate>>),
+    /// The system says what each window shows (File Explorer does).
+    ByWindow(fn(&[OpenWindow<'_>], &Sources) -> Option<State>),
+}
+
 /// One supported app: how to read its titles, where its list is, how to reopen.
 pub struct App {
     pub adapter_id: &'static str,
@@ -123,8 +140,7 @@ pub struct App {
     pub exists: fn(&str) -> bool,
     /// The command-line arguments that reopen a saved path in its own window.
     pub open_args: fn(&str) -> Vec<String>,
-    /// The app's list; `None` when `Sources` has no list for it.
-    candidates: fn(&Sources) -> Option<Vec<Candidate>>,
+    lookup: Lookup,
     /// Several windows may show the same entry (otherwise each is used once).
     shared: bool,
     /// Report unmatched windows even when no window was matched.
@@ -142,7 +158,7 @@ pub static APPS: [App; 4] = [
         is_safe: vscode::is_safe_folder_uri,
         exists: vscode::folder_exists,
         open_args: |uri| vec!["--new-window".into(), "--folder-uri".into(), uri.into()],
-        candidates: vscode::candidates,
+        lookup: Lookup::ByTitle(vscode::candidates),
         shared: true,
         always_report: true,
         unmatched:
@@ -157,7 +173,7 @@ pub static APPS: [App; 4] = [
         exists: |p| Path::new(p).exists(),
         // Each `devenv.exe <path>` starts its own Visual Studio window.
         open_args: one_arg,
-        candidates: vstudio::candidates,
+        lookup: Lookup::ByTitle(vstudio::candidates),
         shared: false,
         always_report: true,
         unmatched: "the solution or folder for {n} window(s) could not be worked out; they will reopen without one",
@@ -171,7 +187,7 @@ pub static APPS: [App; 4] = [
         exists: is_dir,
         // `explorer.exe <folder>` opens it in a new window.
         open_args: one_arg,
-        candidates: explorer::candidates,
+        lookup: Lookup::ByWindow(explorer::detect),
         shared: false,
         always_report: false,
         unmatched: "{n} window(s) show a place that isn't a folder on disk; they will reopen as ordinary Explorer windows",
@@ -185,7 +201,7 @@ pub static APPS: [App; 4] = [
         exists: is_dir,
         // `<ide>64.exe <project folder>` opens it (in the running IDE if there is one).
         open_args: one_arg,
-        candidates: jetbrains::candidates,
+        lookup: Lookup::ByTitle(jetbrains::candidates),
         shared: false,
         always_report: false,
         unmatched:
@@ -197,7 +213,7 @@ fn one_arg(path: &str) -> Vec<String> {
     vec![path.to_string()]
 }
 
-fn is_dir(path: &str) -> bool {
+pub(crate) fn is_dir(path: &str) -> bool {
     Path::new(path).is_dir()
 }
 
@@ -231,11 +247,18 @@ impl App {
         }
     }
 
-    /// What the windows with these titles have open, looked up in the app's
-    /// own list. `None` when `sources` has no list for this app.
-    pub fn detect(&self, titles: &[String], sources: &Sources) -> Option<State> {
-        let candidates = (self.candidates)(sources)?;
-        Some(build_state(self, titles, &candidates, &self.exists))
+    /// What these windows have open: looked up in the app's own list by the
+    /// name in their titles, or, for File Explorer, asked of the system by
+    /// window. `None` when `sources` has no list for this app.
+    pub fn detect(&self, windows: &[OpenWindow<'_>], sources: &Sources) -> Option<State> {
+        match &self.lookup {
+            Lookup::ByTitle(candidates) => {
+                let candidates = candidates(sources)?;
+                let titles: Vec<String> = windows.iter().map(|w| w.title.to_string()).collect();
+                Some(build_state(self, &titles, &candidates, &self.exists))
+            }
+            Lookup::ByWindow(detect) => detect(windows, sources),
+        }
     }
 
     /// What to tell the user about windows that showed a name but could not

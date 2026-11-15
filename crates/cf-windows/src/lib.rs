@@ -177,6 +177,34 @@ pub fn place_window(hwnd: isize, rect: Rect, state: DisplayState) -> Result<()> 
     }
 }
 
+/// Put a window above the others without activating it (see
+/// `control::raise_window`).
+pub fn raise_window(hwnd: isize) -> Result<()> {
+    #[cfg(windows)]
+    {
+        control::raise_window(hwnd).map_err(Into::into)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        Err(PlatformError::Unsupported)
+    }
+}
+
+/// Give a window the keyboard focus; `false` if Windows would not allow it
+/// (see `control::focus_window`).
+pub fn focus_window(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        control::focus_window(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
+    }
+}
+
 /// Take a machine-wide (per login session) lock called `name`, e.g.
 /// `Local\ContextFlow.Restore`. `Ok(None)` means another process holds it. The
 /// lock is released when the returned guard is dropped or the process exits.
@@ -327,6 +355,15 @@ pub fn launch_process(
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    /// Only stale handles are used, so no real window is touched.
+    #[test]
+    fn raising_and_focusing_a_window_that_does_not_exist_fails_cleanly() {
+        assert!(raise_window(0).is_err());
+        assert!(raise_window(0x7FFF_FFF0).is_err());
+        assert!(!focus_window(0));
+        assert!(!focus_window(0x7FFF_FFF0));
+    }
 
     #[test]
     fn monitors_are_discoverable() {

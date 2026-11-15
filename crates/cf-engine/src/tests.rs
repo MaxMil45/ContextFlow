@@ -94,6 +94,9 @@ struct Fake {
     denied: HashSet<isize>,
     launched: RefCell<Vec<String>>,
     placed: RefCell<Vec<(isize, Rect, DisplayState)>>,
+    /// Windows raised, in order, and windows given the focus.
+    raised: RefCell<Vec<isize>>,
+    focused: RefCell<Vec<isize>>,
 }
 
 impl Desktop for Fake {
@@ -176,6 +179,12 @@ impl Desktop for Fake {
             }
         }
         Ok(1)
+    }
+    fn raise(&self, hwnd: isize) {
+        self.raised.borrow_mut().push(hwnd);
+    }
+    fn focus(&self, hwnd: isize) {
+        self.focused.borrow_mut().push(hwnd);
     }
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {
         if self.denied.contains(&hwnd) {
@@ -812,4 +821,159 @@ fn progress_counts_what_is_back() {
     );
     assert!(lines.iter().all(|l| !l.contains(" of 3)")), "{lines:?}");
     assert_eq!(run.first_window_ms, None, "nothing was placed");
+}
+
+/// A new browser window is placed the moment it appears, the next one is
+/// opened without a pause, and each is placed once more afterwards.
+#[test]
+fn new_browser_windows_are_placed_at_once_and_again_later() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![
+            open_window(11, "chrome", "Drive"),
+            open_window(12, "chrome", "Docs"),
+        ]),
+        ..Default::default()
+    };
+    // A long settle shows there is no pause: with the old pause the second
+    // window would only open after it.
+    let opts = RestoreOptions {
+        settle: Duration::from_millis(400),
+        ..fast()
+    };
+    let started = std::time::Instant::now();
+    let result = run(&d, &chrome_payload(), &opts);
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    let events = d.events.borrow();
+    assert_eq!(
+        *events,
+        ["open:2", "place:11", "open:1", "place:12", "place:11", "place:12"],
+        "placed at once, the next opened straight away, then each placed again"
+    );
+    // One recheck wait (400 ms), not one pause per window (2 x 400 ms).
+    assert!(
+        started.elapsed() < Duration::from_millis(750),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+/// A started app's window goes into place as soon as it shows, and again
+/// once its windows have settled.
+#[test]
+fn a_started_app_is_placed_when_it_shows_and_again_when_settled() {
+    let p = SnapshotPayload {
+        applications: vec![app("notes")],
+        windows: vec![saved_window("notes", "Todo", r(100, 100, 400, 300), "M1")],
+        ..Default::default()
+    };
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        on_launch: vec![("notes".into(), vec![open_window(3, "notes", "Todo")])],
+        ..Default::default()
+    };
+    let (result, _) = run_logged(&d, &p, &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    let placed = d.placed.borrow();
+    assert_eq!(placed.len(), 2, "{placed:?}");
+    assert!(placed
+        .iter()
+        .all(|(h, rect, _)| *h == 3 && *rect == r(100, 100, 400, 300)));
+}
+
+// ------------------------------------------------- stacking order and focus
+
+/// The saved stack, top first: notes, chrome, code. Whatever order the apps
+/// were placed in, they end up raised from the bottom to the top, and the top
+/// window has the focus.
+#[test]
+fn the_saved_stacking_order_is_rebuilt_and_the_top_window_gets_the_focus() {
+    let mut p = payload(); // windows: code, chrome, notes (top first)
+    p.windows.reverse(); // now notes, chrome, code
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        on_launch: vec![
+            ("code".into(), vec![open_window(1, "code", "main.rs")]),
+            ("chrome".into(), vec![open_window(2, "chrome", "Docs")]),
+            ("notes".into(), vec![open_window(3, "notes", "Todo")]),
+        ],
+        ..Default::default()
+    };
+    let result = run(&d, &p, &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    assert_eq!(
+        *d.raised.borrow(),
+        [1, 2, 3],
+        "bottom (code) first, top (notes) last"
+    );
+    assert_eq!(*d.focused.borrow(), [3]);
+}
+
+#[test]
+fn minimized_windows_are_not_raised_and_never_take_the_focus() {
+    let mut p = payload();
+    p.windows[0].display_state = DisplayState::Minimized; // code, the top window
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        on_launch: vec![
+            ("code".into(), vec![open_window(1, "code", "main.rs")]),
+            ("chrome".into(), vec![open_window(2, "chrome", "Docs")]),
+            ("notes".into(), vec![open_window(3, "notes", "Todo")]),
+        ],
+        ..Default::default()
+    };
+    run(&d, &p, &fast());
+    assert!(!d.raised.borrow().contains(&1), "{:?}", d.raised.borrow());
+    assert_eq!(
+        *d.focused.borrow(),
+        [2],
+        "the topmost window that is showing"
+    );
+}
+
+#[test]
+fn a_dry_run_or_a_cancelled_restore_changes_no_stacking() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(3, "notes", "Todo")]),
+        ..Default::default()
+    };
+    run(
+        &d,
+        &payload(),
+        &RestoreOptions {
+            dry_run: true,
+            ..fast()
+        },
+    );
+    assert!(d.raised.borrow().is_empty() && d.focused.borrow().is_empty());
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    run(
+        &d,
+        &payload(),
+        &RestoreOptions {
+            cancel: Some(cancel),
+            ..fast()
+        },
+    );
+    assert!(d.raised.borrow().is_empty() && d.focused.borrow().is_empty());
+}
+
+/// Windows that were reopened for tabs or folders are in the stack too, at the
+/// place of the saved window they took.
+#[test]
+fn reopened_browser_windows_take_their_place_in_the_stack() {
+    // chrome_payload windows: Drive (top), Docs. Reopened as 11 and 12.
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![
+            open_window(11, "chrome", "Drive"),
+            open_window(12, "chrome", "Docs"),
+        ]),
+        ..Default::default()
+    };
+    run(&d, &chrome_payload(), &fast());
+    assert_eq!(*d.raised.borrow(), [12, 11]);
+    assert_eq!(*d.focused.borrow(), [11]);
 }

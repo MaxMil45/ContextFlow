@@ -16,7 +16,7 @@ use cf_browser::{is_restorable_url, normalize_url, BrowserAppState};
 use cf_core::RestoreStatus;
 use cf_core::{ApplicationState, MonitorInfo, WindowState};
 
-use crate::window_open::{place_saved, wait_for_new_window};
+use crate::window_open::{place_new, wait_for_new_window, Recheck};
 use crate::{window_app_id, Budget, Desktop, PlaceError, RestoreOptions, StepReport};
 
 /// Windows limits a command line to 32,767 characters; stay well under.
@@ -33,6 +33,8 @@ pub(crate) struct TabRestore {
     pub used_saved: Vec<usize>,
     pub failures: Vec<String>,
     pub notes: Vec<String>,
+    /// Windows placed the moment they appeared, to be placed once more.
+    pub rechecks: Vec<Recheck>,
 }
 
 /// How step reports describe what was opened (shared with VS Code folders).
@@ -190,14 +192,10 @@ pub(crate) fn restore_tabs(
         };
         // Never wait past the overall budget.
         let wait = wait.min(budget.remaining());
-        let new_window = wait_for_new_window(
-            desktop,
-            &app.application_id,
-            &known,
-            wait,
-            opts.settle,
-            &mut || meanwhile(&mut *log),
-        );
+        let new_window =
+            wait_for_new_window(desktop, &app.application_id, &known, wait, &mut || {
+                meanwhile(&mut *log)
+            });
 
         match new_window {
             None => out.failures.push(format!(
@@ -210,7 +208,14 @@ pub(crate) fn restore_tabs(
                 out.claimed.insert(hwnd);
                 if let Some(i) = geometry {
                     out.used_saved.push(i);
-                    match place_saved(desktop, hwnd, saved[i], monitors) {
+                    match place_new(
+                        desktop,
+                        hwnd,
+                        saved[i],
+                        monitors,
+                        opts.settle,
+                        &mut out.rechecks,
+                    ) {
                         Ok(()) => out.placed += 1,
                         Err(PlaceError::AccessDenied) => out.failures.push(
                             "a browser window belongs to a program running as administrator and can't be moved"

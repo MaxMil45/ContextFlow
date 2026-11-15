@@ -469,13 +469,17 @@ restore_workspace(workspace, args):
   lock      ← try to take Local\ContextFlow.Restore; if taken → "busy"
   ── save (only a real switch) ────────────────────────────────────────
   left      ← auto-save the active workspace (section 6.3)
-  ── close ────────────────────────────────────────────────────────────
+  ── stop ─────────────────────────────────────────────────────────────
   run the stop commands of the workspace being left
   keep      ← apps in the target snapshot + "always-on" apps
-  cleanup: the leaving workspace's "when leaving" rules, except `keep`
-  cleanup: the target's "when entering" rules, except `keep`
-  ── restore ──────────────────────────────────────────────────────────
-  run       ← cf_engine::restore(snapshot)   (section 6.2)
+  jobs      ← the leaving workspace's "when leaving" rules, then the
+              target's "when entering" rules (each except `keep`)
+  ── restore, with the cleanup alongside ──────────────────────────────
+  on another thread: close the programs of each job, one job after the other
+                     (within a job, all are asked at once and waited for
+                     together; see the notes below)
+  meanwhile:  run  ← cf_engine::restore(snapshot)   (section 6.2)
+  wait for the cleanup thread (zero if it already finished)
   ── finish ───────────────────────────────────────────────────────────
   record the run (per-app steps + per-phase timings) in history
   if anything came back: mark target active, run its start commands
@@ -493,6 +497,38 @@ restore_workspace(workspace, args):
 > **Why `keep`.** Programs the target workspace needs are never closed by
 > cleanup, even if a rule names them, so a switch never closes something
 > only to start it again.
+>
+> **Why the cleanup runs alongside the restore.** Closing a program can take
+> up to 6 s when it hides to the tray or asks to save. Done before the
+> restore, the user would stare at the old desk for that long before
+> anything of the new one appeared. Run on its own thread at the same time,
+> the new desk starts immediately and the old programs close behind it. It
+> is safe because everything the cleanup may close was decided beforehand
+> (`keep` is fixed), the save and the stop commands have already happened,
+> and the restore only touches programs of the target snapshot, which are
+> never in the cleanup's reach. The report waits for the cleanup to finish,
+> so its results are still part of it; the time spent waiting after the desk
+> was ready is shown as the `cleanup` phase.
+>
+> **Trade-off.** Memory held by the old programs is not freed before the new
+> ones start, so on a very full machine the first moments of a switch can be
+> a little slower. Closing and starting also compete a little for the disk
+> and processor. For a switch with no cleanup rules, nothing changes.
+>
+> **Why cleanup asks everything at once.** Closing a program is "ask, then
+> wait up to 6 s for it to exit". Many apps (Discord, Steam, chat and game
+> launchers) answer by hiding to the tray, so they never exit and the wait
+> always runs out. Done one program at a time, three such rules cost 18 s.
+> Now every program is asked first and all are waited for together, so the
+> wait is 6 s however many there are. The outcomes, the order of the results
+> and every safety check are unchanged; programs that need ending by force
+> are ended together, too.
+>
+> **Trade-off.** The "leaving" and "entering" cleanups are still two separate
+> runs one after the other on that thread, so a workspace with stubborn
+> programs on both sides can keep it busy for two waits. That only delays the
+> report, not the desk. Merging them needs care when the same program is
+> named on both sides.
 >
 > **Why "only if anything came back".** A switch where every app failed
 > should not claim you are now in that workspace; the next switch would
@@ -512,15 +548,16 @@ cf_engine::restore(payload):
       if not running: plan how to start it, or record why it can't be
       classify into one of:
         A. running, nothing to add            → place now
-        B. not running, ordinary app          → start, place when settled
+        B. not running, ordinary app          → start, place when it shows, again when settled
         C. running browser/editor with tabs/folders → add what's missing, place
         D. not running browser/editor with tabs/folders → open each saved window
   stage 1: place every A                                   (instant)
   stage 2: start every B, without waiting
   stage 3: for each C: open missing tabs/folders, then place its windows
   stage 4: for each D: open its saved windows one by one
-           (while waiting for each window, place any B that has settled)
-  stage 5: until every B is placed or out of time: poll, place settled ones
+           (each window placed the moment it appears, then once more ~0.75 s later;
+            while waiting for a window, place any B that has shown or settled)
+  stage 5: until every B is settled and every recheck done: poll, place
   report per app, in the snapshot's order; timings per phase; first-window time
 ```
 
@@ -531,13 +568,24 @@ Why each stage is where it is:
 | 1. Running apps first | They need no waiting at all. Placing them first means the desk visibly starts changing within milliseconds. |
 | 2. Start everything at once | Apps take seconds to start, mostly in parallel. Starting them all before waiting for any means total time ≈ slowest app, not the sum. |
 | 3. Running browsers/editors | They only need missing tabs or folders added. Their existing windows are placed **after** the new ones, so an existing window never takes the saved position of a window that was just reopened. |
-| 4. Browsers/editors not running | Opening their windows is the slowest part (each window waits to appear and settle), so it goes last, and other apps are placed *during* those waits. |
+| 4. Browsers/editors not running | Opening their windows is the slowest part (each window has to appear before the next is opened), so it goes last, and other apps are placed *during* those waits. |
 | 5. The rest | Whatever is still starting. |
 
-**"Settled"** means: a started app has at least one new window, and the
-number of its windows hasn't changed for `settle` (1.5 s, constant). Apps
-often open a splash screen, then the real window, then a second one; placing
-too early moves the wrong window.
+**Place early, confirm later.** A started app's windows are put in place as
+soon as its first window shows, so the desk changes without delay. The app is
+**settled** once the number of its windows hasn't changed for `settle` (1.5 s,
+constant); its windows are then placed again, and only then is it reported.
+
+> **Why place twice.** Apps often open a splash screen, then the real
+> window, then a second one. Placing only once, early, could move the splash
+> screen and miss the real window; placing only once, late, keeps the user
+> waiting 1.5 s for nothing. Placing early and again at the end gives both:
+> the window moves at once, and the final placement uses the windows that
+> stayed.
+>
+> **Trade-off.** If the early placement paired a saved position with a
+> splash screen, the real window jumps into place a moment later instead of
+> appearing there directly.
 
 **Polling** starts at 50 ms and doubles up to 500 ms (constant).
 
@@ -685,7 +733,24 @@ for each window title:
 | VS Code | `main.rs - ContextFlow - Visual Studio Code` | `%APPDATA%\Code\User\globalStorage\storage.json` | `code --new-window --folder-uri file:///…` |
 | Visual Studio | `CorpusAudit - README.md - Microsoft Visual Studio` | `ApplicationPrivateSettings.xml` of each installed version | `devenv.exe <path>` |
 | JetBrains | `HelloWorld – main.py` | `%APPDATA%\JetBrains\<IDE>\options\recentProjects.xml` | `<ide>64.exe <path>` |
-| File Explorer | `Downloads - File Explorer` | Windows Shell (`Shell.Application`) via PowerShell | `explorer.exe <path>` |
+| File Explorer | `Downloads - File Explorer` | The Windows Shell, asked directly over COM (`IShellWindows`), **by window handle** | `explorer.exe <path>` |
+
+**Explorer is the exception: it is matched by window handle.** The Shell
+lists each open folder together with the window it is in, so capture asks it
+directly instead of reading titles. That works in every language (the title is
+not needed for a window with one folder), tells apart two windows with the
+same name, and copes with tabs: a window with several tabs gets the tab its
+title names (`Downloads and 2 more tabs - File Explorer`), and if the title
+names none or two, nothing is saved rather than a guess. Window handles are
+only good while the window lives, so they are used during capture and never
+saved.
+
+> **Trade-off.** A window with several tabs is saved with its front tab only,
+> and comes back as one ordinary window. Reopening the other tabs would need
+> Explorer's own window commands, which can't be driven reliably. Whether all
+> the tabs of a window report the same handle is what the Shell is documented
+> to do and what the code relies on; it has not yet been checked against a
+> real tabbed window.
 
 > **Why window titles.** It needs no extension in any of these apps. The
 > apps already keep lists of what they opened; the title says which one is
@@ -770,6 +835,25 @@ then shrink and shift the rectangle so it fits inside that screen's work area
 > **Why "fit inside".** A window placed partly off-screen, or behind the
 > taskbar, is lost to the user. Every restored window must be reachable.
 
+**Stacking and focus.** The saved windows are stored top to bottom. When
+everything is in place, the engine raises the windows from the bottom of that
+stack to its top (a raise puts a window above the others without activating
+it) and then gives the focus to the top one. Minimized windows are left out,
+because raising one would bring it back up.
+
+> **Why at the end.** Placing a window can bring it to the front, and apps
+> that are still starting take the focus when their window appears. Left
+> alone, the order the windows end up in is the order they were handled in,
+> which is not the saved order, and the last app to start keeps the keyboard.
+> One pass at the end fixes both, whatever happened before.
+>
+> **Trade-off.** Windows only lets the program the user is working in take
+> the focus. A switch started from the picker, the icon or the terminal
+> normally qualifies; when Windows refuses, the engine joins the input queue
+> of the window in front for the moment of the call, and if that fails too,
+> the stacking order is still rebuilt but the keyboard stays where it was.
+> Windows of elevated programs can't be raised by a normal one.
+
 And one level higher, **a layout per display setup**: when nothing picks a
 version, restore uses the newest snapshot saved with the same screens (same
 ids, sizes, arrangement and primary) among the last 20, so a workspace
@@ -779,10 +863,24 @@ captured once docked and once on the laptop has the right layout for each.
 
 Each saved window that had tabs or a folder is opened on its own command
 line. The new desktop window is identified as "the window of this app that
-wasn't there a moment ago", paused for up to 750 ms (because browsers and VS
-Code resize their new window themselves right after opening it), then moved
-to its saved place. Positions used by these windows are not handed out again
-to the app's other windows.
+wasn't there a moment ago" and moved to its saved place **the moment it
+appears**. The next window is opened straight away. Each new window is placed
+**once more** about 0.75 s later (the `settle` time, at most 750 ms), while
+other work carries on. Positions used by these windows are not handed out
+again to the app's other windows.
+
+> **Why the second placement.** Browsers and VS Code resize and move a new
+> window themselves just after creating it, which can undo a placement made
+> the instant it appeared. Earlier versions paused 750 ms before placing
+> each window, one after another, which cost about 1.5 s on a two-window
+> browser. Placing at once and again later costs one pause in total, at the
+> end, and the window is where it belongs from the start.
+>
+> **Trade-off.** If the browser does move its window in between, the user
+> sees it jump back. The second placement is "blind" (it doesn't check
+> whether the window moved), because comparing positions reliably across
+> screen scaling is fiddly, and placing a window where it already is changes
+> nothing visible.
 
 Limits: at most 50 tabs per window (configurable) and a command line under
 28,000 characters (Windows' limit is 32,767).
@@ -938,7 +1036,7 @@ From this machine, November 2026, with the release build.
 |---|---|---|
 | Scan all windows (`contextflow windows`, whole program) | ~65 ms | Includes process start; the scan itself is a small part. |
 | Capture, read-only (`capture --dry-run`) | 500–610 ms | This is the "save" phase of every switch. |
-| …of which: asking Windows which folders Explorer shows | 340–390 ms | One PowerShell process. Only when an Explorer window is open. |
+| …of which: asking Windows which folders Explorer shows | 340–390 ms (before), 14–63 ms (now, with no Explorer window open) | Before: one PowerShell process, whenever an Explorer window was open. Now: a direct COM query. |
 | Cold switch to "Chess" (Chrome closed, 2 windows) | **2.2 s total, first window 1.1 s** | scan 10 ms, start 18 ms, wait 2.1 s, place 111 ms. |
 
 ### 11.2 Where the time goes
@@ -954,21 +1052,27 @@ scan 10 ms, start 18 ms, wait 2.1 s, place 111 ms
 | Phase | What it measures | What makes it big |
 |---|---|---|
 | prepare | find, verify, choose version, take lock | Almost never noticeable. |
-| save | auto-saving the workspace you leave | ~0.5 s, mostly Explorer's PowerShell call. |
-| close | stop commands and cleanup rules | Up to 6 s per program that won't close nicely. 0 with no rules. |
+| save | auto-saving the workspace you leave | ~0.5 s before the Explorer change, which removed most of it (about 0.15 s expected; not yet measured with an Explorer window open). |
+| stop | the workspace's stop commands | Whatever the commands take. 0 with none. (Older runs call this phase "close", and include the cleanup.) |
 | scan | reading windows and monitors | Small, but repeated on every poll. |
 | start | the calls that start programs | Small: starting is asynchronous. |
-| wait | everything else in the engine: apps opening, settle pauses | The dominant cost. |
+| wait | everything else in the engine: apps opening and settling, the final rechecks | The dominant cost. |
+| cleanup | waiting for the cleanup thread after the desk was ready | 0 unless closing programs took longer than the restore: at most about 6 s, and only the report is delayed. |
 | place | moving windows | ~50 ms per window in the measurement above. |
 
-In the cold Chess switch, about **1.5 s of the 2.1 s wait is the deliberate
-750 ms pause per new browser window**, done one window after another
-(estimate, from the code). Chrome itself started in about 0.35 s.
+In the cold Chess switch (measured before the change described in 8.5),
+about **1.5 s of the 2.1 s wait was a deliberate 750 ms pause per new
+browser window**, done one window after another (estimate, from the code).
+Chrome itself started in about 0.35 s. With windows now placed the moment
+they appear and the pause paid once at the end, the same switch should show
+its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
+(estimate; not yet measured).
 
 ### 11.3 What scales with what
 
 * Restore time ≈ slowest app to settle, plus browser/editor windows opened
-  one after another, plus the save and cleanup phases. It does **not** grow
+  one after another (each waits only for its window to appear), plus one
+  final recheck, plus the save and cleanup phases. It does **not** grow
   with the number of already-running apps in any meaningful way.
 * Memory: the tray app with no window open is small; each open window is a
   WebView (tens of MB) and is freed when closed.
@@ -977,13 +1081,10 @@ In the cold Chess switch, about **1.5 s of the 2.1 s wait is the deliberate
 
 ### 11.4 The biggest levers, in order (estimates)
 
-1. **Place browser windows immediately, then correct** instead of pausing
-   750 ms before each one: roughly −0.7 s per browser window.
-2. **Run cleanup after the new desk is in place**, not before: up to −6 s
-   per stubborn program, at the cost of closing distractions a moment later.
-3. **Explorer folders without PowerShell** (query the Shell through COM
-   directly): about −350 ms on every switch where Explorer is open.
-4. **Open several browser windows at once**: removes the one-after-another
+1. **Run the "leaving" and "entering" cleanups together.** They still run one
+   after the other on the cleanup thread. Not measured on a real setup (none
+   of the workspaces on the development machine has cleanup rules).
+2. **Open several browser windows at once**: removes the one-after-another
    wait, if window identification can be kept reliable.
 
 ---
@@ -994,16 +1095,13 @@ In the cold Chess switch, about **1.5 s of the 2.1 s wait is the deliberate
 
 | # | Weak spot | Effect | Suggested direction |
 |---|---|---|---|
-| 1 | Windows are identified by **title** | Ambiguous or changed titles mean "not saved" or a window paired with the wrong saved position. | Combine more signals: window class, process start time, AUMID, the browser's own window id from the extension. |
+| 1 | Editors and browsers are identified by **title** | Ambiguous or changed titles mean "not saved" or a window paired with the wrong saved position. Explorer no longer has this problem (it is matched by window handle). | Not by command line (VS Code and other Electron apps run one process for all windows), and not by window class (all windows of an app share it). Candidates: more signals together (position, process start order), or an extension for VS Code. |
 | 2 | **Polling** the desktop | Up to 500 ms delay before a ready window is noticed; repeated scans. | WinEvent hooks (`EVENT_OBJECT_SHOW`, `EVENT_OBJECT_LOCATIONCHANGE`) feeding a live model of the desktop in the tray app. |
-| 3 | **Fixed settle pauses** | ~0.75 s per browser window, 1.5 s per started app. | Place immediately, then watch and re-place only if the app moves its own window. |
-| 4 | **Progress isn't streamed over the pipe** | The CLI prints the icon/CLI progress lines only at the end. | Send progress frames before the final reply (a protocol v3). |
-| 5 | **Cleanup before restore** | A slow-closing program delays the whole switch. | Run "when entering" cleanup after placement, in parallel. |
-| 6 | **Explorer via PowerShell** | ~350 ms per switch. | COM `IShellWindows` from Rust. |
-| 7 | **Many database connections** | Each program re-reads config and schema. | Let the tray app own the only connection; others ask over the pipe. |
-| 8 | **Focus isn't restored** | The window that was on top is placed first but isn't brought to the front. | Bring the saved top window to the front at the end. |
-| 9 | **Browser extension needs Developer mode** | The biggest setup hurdle for a new user. | Publish to the Chrome and Edge stores; add their extension ids to the host's allowed list. |
-| 10 | **Unsigned installer** | Windows warns on first run. | Sign with a code-signing certificate (the build script already supports it). |
+| 3 | **Progress isn't streamed over the pipe** | The CLI prints the icon/CLI progress lines only at the end. | Send progress frames before the final reply (a protocol v3). |
+| 4 | **Cleanup before restore** | A slow-closing program delays the whole switch. | Run "when entering" cleanup after placement, in parallel. |
+| 5 | **Many database connections** | Each program re-reads config and schema. | Let the tray app own the only connection; others ask over the pipe. |
+| 6 | **Browser extension needs Developer mode** | The biggest setup hurdle for a new user. | Publish to the Chrome and Edge stores; add their extension ids to the host's allowed list. |
+| 7 | **Unsigned installer** | Windows warns on first run. | Sign with a code-signing certificate (the build script already supports it). |
 
 Fixed in November 2026, and explained where they are described:
 
@@ -1011,6 +1109,22 @@ Fixed in November 2026, and explained where they are described:
   saved in snapshots, so the same desk gives the same hash (section 7.2).
 * **Checkpoints during another program's switch**: checkpoints now skip
   while any switch runs, from any front end (section 10).
+* **Fixed settle pauses**: new browser and editor windows are placed the
+  moment they appear and once more shortly after, and started apps are
+  placed when their first window shows, not 1.5 s later (sections 6.2, 8.5).
+* **Explorer folders via PowerShell**: the Shell is now asked directly over
+  COM, in a short-lived thread of its own (section 7.4).
+* **Focus and stacking after a switch**: the windows are raised from the
+  bottom of the saved stack to its top, and the top one gets the focus
+  (section 8.4).
+* **Cleanup delaying the new desk**: cleanup now runs on its own thread
+  while the restore runs (section 6.1).
+* **Explorer matched by title**: Explorer windows are matched by window
+  handle, so it works in every language and for windows with tabs
+  (section 7.4).
+* **Cleanup closing programs one at a time**: every program is asked to close
+  at once and all are waited for together, so the wait is one 6 s window
+  however many programs hide to the tray (section 6.1).
 
 ### 12.2 Bigger directions, and what they would cost
 
@@ -1131,8 +1245,8 @@ Requests name a workspace, never a path, program or command line. Details:
 |---|---|---|
 | Per-app window wait | 30 s | `RestoreArgs::new` |
 | Whole-restore limit | 120 s | config `timeouts.restore_overall_secs` |
-| Settle after a started app's windows stop changing | 1.5 s | `RestoreOptions::default` |
-| Pause before moving a new browser/editor window | ≤ 750 ms | `window_open.rs` |
+| Settle after a started app's windows stop changing (final placement) | 1.5 s | `RestoreOptions::default` |
+| Second placement of a new browser/editor window | after ≤ 750 ms | `window_open.rs` |
 | Poll interval | 50 ms → 500 ms | `cf-engine` |
 | Closing a program nicely | 6 s | `cf-cleanup` |
 | CPU sample for the cleanup preview | 600 ms, reused for 3 s | `session.rs` |

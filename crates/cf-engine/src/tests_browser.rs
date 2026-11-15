@@ -114,9 +114,12 @@ fn running_browser_only_gets_missing_tabs_and_never_duplicates() {
         "{}",
         result.steps[0].message
     );
-    // The new window is placed once, by the tab stage (not re-paired by the generic one).
+    // The new window is placed by the tab stage only: at once, then once more
+    // in the same spot (not re-paired by the generic step).
     let placed = d.placed.borrow();
-    assert_eq!(placed.iter().filter(|(h, ..)| *h == 2).count(), 1);
+    let new_window: Vec<_> = placed.iter().filter(|(h, ..)| *h == 2).collect();
+    assert_eq!(new_window.len(), 2, "{placed:?}");
+    assert_eq!(new_window[0], new_window[1]);
     // The pre-existing window was repositioned as usual.
     assert!(placed.iter().any(|(h, ..)| *h == 1));
     drop(placed);
@@ -288,11 +291,14 @@ fn reopened_window_keeps_its_slot_and_running_window_gets_the_other() {
     };
     let result = run(&d, &payload, &fast());
     let placed = d.placed.borrow();
+    // The reopened window is placed at once and once more shortly after,
+    // always in its own slot; the running one gets the other.
     assert_eq!(
         *placed,
         vec![
             (2, r(100, 100, 1200, 900), DisplayState::Maximized),
             (1, r(2700, 100, 900, 900), DisplayState::Maximized),
+            (2, r(100, 100, 1200, 900), DisplayState::Maximized),
         ],
         "{result:#?}"
     );
@@ -302,4 +308,28 @@ fn reopened_window_keeps_its_slot_and_running_window_gets_the_other() {
         "{}",
         result.steps[0].message
     );
+}
+
+/// Chrome is open with an unrelated window, and both saved windows have to be
+/// added. Every saved position goes to a new window, yet the report must still
+/// say Chrome was already running, not that it was started.
+#[test]
+fn a_running_browser_that_got_all_its_windows_added_is_not_called_started() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(1, "chrome", "Spider - Google Chrome")]),
+        live_urls: Some(vec!["https://example.com/spider".into()]),
+        browser_windows: RefCell::new(vec![
+            open_window(2, "chrome", "Drive"),
+            open_window(3, "chrome", "Docs"),
+        ]),
+        ..Default::default()
+    };
+    let result = run(&d, &chrome_payload(), &fast());
+    let message = &result.steps[0].message;
+    assert!(
+        message.starts_with("already running; added 3 missing tab(s) in 2 new window(s)"),
+        "{message}"
+    );
+    assert!(d.launched.borrow().is_empty(), "Chrome was not started");
 }

@@ -396,3 +396,72 @@ fn a_program_that_is_running_contextflow_is_protected_as_a_whole() {
     assert_eq!(r[0].outcome, Outcome::Protected);
     assert!(d.asked.borrow().is_empty() && d.terminated.borrow().is_empty());
 }
+
+// ------------------------------------------------------ closing all at once
+
+/// Several programs hide to the tray instead of exiting. Each used to get its
+/// own full wait, one after another; now they are asked together and waited
+/// for together.
+#[test]
+fn programs_that_ignore_the_request_share_one_wait() {
+    let d = Fake::with(vec![
+        proc(10, "Discord.exe", 100),
+        proc(11, "Steam.exe", 100),
+        proc(12, "Epic.exe", 100),
+    ]); // none of them closes when asked
+    let opts = RunOptions {
+        close_wait: Duration::from_millis(300),
+        poll: Duration::from_millis(1),
+    };
+    let targets = [
+        target("discord", CloseMode::Graceful),
+        target("steam", CloseMode::Graceful),
+        target("epic", CloseMode::Graceful),
+    ];
+    let began = Instant::now();
+    let r = run(&d, &targets, &HashSet::new(), &opts);
+    let took = began.elapsed();
+    assert!(
+        r.iter().all(|x| x.outcome == Outcome::StillRunning),
+        "{r:?}"
+    );
+    // One wait, not three (which would take 900 ms).
+    assert!(took < Duration::from_millis(600), "took {took:?}");
+}
+
+#[test]
+fn every_program_is_asked_before_any_is_ended_and_results_keep_their_order() {
+    let mut d = Fake::with(vec![
+        proc(10, "stubborn.exe", 100),
+        proc(11, "polite.exe", 100),
+        proc(12, "tray.exe", 100),
+    ]);
+    d.closes_on_request.insert("polite".into());
+    let r = run(
+        &d,
+        &[
+            target("stubborn", CloseMode::Force),
+            target("polite", CloseMode::Graceful),
+            target("missing", CloseMode::Graceful),
+            target("tray", CloseMode::Graceful),
+        ],
+        &HashSet::new(),
+        &fast(),
+    );
+    let outcomes: Vec<Outcome> = r.iter().map(|x| x.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [
+            Outcome::Terminated,
+            Outcome::Closed,
+            Outcome::NotRunning,
+            Outcome::StillRunning
+        ],
+        "{r:?}"
+    );
+    let names: Vec<&str> = r.iter().map(|x| x.process.as_str()).collect();
+    assert_eq!(names, ["stubborn", "polite", "missing", "tray"]);
+    // All three that were running were asked, and only the force-mode one ended.
+    assert_eq!(*d.asked.borrow(), vec![10, 11, 12]);
+    assert_eq!(*d.terminated.borrow(), vec![10]);
+}

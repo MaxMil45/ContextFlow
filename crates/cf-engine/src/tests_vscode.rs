@@ -96,8 +96,11 @@ fn running_vscode_only_opens_folders_that_are_not_open() {
         result.steps[0].message
     );
     let placed = d.placed.borrow();
-    // The new window is placed once (by the folder stage), the old one repositioned.
-    assert_eq!(placed.iter().filter(|(h, ..)| *h == 2).count(), 1);
+    // The new window is placed by the folder stage only (at once, then once
+    // more in the same spot); the old one is repositioned.
+    let new_window: Vec<_> = placed.iter().filter(|(h, ..)| *h == 2).collect();
+    assert_eq!(new_window.len(), 2, "{placed:?}");
+    assert_eq!(new_window[0], new_window[1]);
     assert!(placed.iter().any(|(h, ..)| *h == 1));
     drop(placed);
 

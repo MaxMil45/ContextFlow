@@ -69,6 +69,9 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     };
     let mut warnings = Vec::new();
     let mut component_failed = false;
+    // The system's handle of each window of `payload.windows`, same order.
+    // Handles are only good while the windows live, so they are not saved.
+    let mut handles: Vec<isize> = Vec::new();
     let mut excluded_windows = 0;
     let mut minimized_windows = 0;
 
@@ -146,6 +149,7 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
                     if display_state == DisplayState::Minimized {
                         minimized_windows += 1;
                     }
+                    handles.push(w.hwnd);
                     payload.windows.push(WindowState {
                         application_id: app_id,
                         title: w.title,
@@ -178,7 +182,7 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
     }
 
     if opts.include_windows {
-        attach_open_paths(&mut payload, &opts.detect, &mut warnings);
+        attach_open_paths(&mut payload, &handles, &opts.detect, &mut warnings);
     }
 
     for repo in opts.repos {
@@ -259,6 +263,7 @@ pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {
 /// guessed. Each JetBrains IDE is its own application, saved separately.
 fn attach_open_paths(
     payload: &mut SnapshotPayload,
+    handles: &[isize],
     sources: &cf_detect::Sources,
     warnings: &mut Vec<String>,
 ) {
@@ -267,13 +272,21 @@ fn attach_open_paths(
         let Some(app) = cf_detect::APPS.iter().find(|a| (a.is_app)(&id)) else {
             continue;
         };
-        let titles: Vec<String> = payload
+        let titles: Vec<(String, isize)> = payload
             .windows
             .iter()
-            .filter(|w| w.application_id == id)
-            .map(|w| w.title.clone())
+            .zip(handles)
+            .filter(|(w, _)| w.application_id == id)
+            .map(|(w, &h)| (w.title.clone(), h))
             .collect();
-        let Some(state) = app.detect(&titles, sources) else {
+        let windows: Vec<cf_detect::OpenWindow> = titles
+            .iter()
+            .map(|(title, handle)| cf_detect::OpenWindow {
+                title,
+                handle: *handle,
+            })
+            .collect();
+        let Some(state) = app.detect(&windows, sources) else {
             continue;
         };
         warnings.extend(app.unmatched_warning(&state));

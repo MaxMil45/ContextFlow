@@ -10,5 +10,11 @@ license.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# File Explorer's open folders come from the Windows Shell directly (COM).
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+default-features = false
+features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell"]
+
 [dev-dependencies]
 tempfile.workspace = true

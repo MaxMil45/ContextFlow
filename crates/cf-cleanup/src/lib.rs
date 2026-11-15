@@ -294,12 +294,9 @@ fn pids_of(procs: &dyn Processes, process: &str) -> Vec<u32> {
         .collect()
 }
 
-fn alive(procs: &dyn Processes, pids: &[u32]) -> Vec<u32> {
-    let running: HashSet<u32> = procs.list().iter().map(|p| p.pid).collect();
-    pids.iter()
-        .copied()
-        .filter(|p| running.contains(p))
-        .collect()
+/// The pids of every process running right now.
+fn running_pids(procs: &dyn Processes) -> HashSet<u32> {
+    procs.list().iter().map(|p| p.pid).collect()
 }
 
 fn result(t: &CleanupTarget, outcome: Outcome, message: impl Into<String>) -> TargetResult {
@@ -311,96 +308,170 @@ fn result(t: &CleanupTarget, outcome: Outcome, message: impl Into<String>) -> Ta
     }
 }
 
-/// Close `targets`, one program at a time. Never touches a protected program
-/// or one in `keep`. A failure on one program doesn't stop the others.
+/// A program that was asked to close, and what became of it so far.
+struct Asked<'a> {
+    target: &'a CleanupTarget,
+    /// Windows that were asked to close.
+    asked: usize,
+    /// Its processes that are still running.
+    remaining: Vec<u32>,
+    /// Why some of them could not be ended, if they could not.
+    errors: Vec<String>,
+}
+
+impl Asked<'_> {
+    /// Whether it is worth waiting for. With nothing to ask (no window) in force
+    /// mode, waiting would only delay ending it.
+    fn waits(&self) -> bool {
+        !self.remaining.is_empty() && (self.asked > 0 || self.target.mode == CloseMode::Graceful)
+    }
+}
+
+/// Why a program must not be touched, or the processes to close.
+fn check(
+    procs: &dyn Processes,
+    t: &CleanupTarget,
+    keep: &HashSet<String>,
+) -> Result<Vec<u32>, TargetResult> {
+    if let Some(reason) = protected_reason(&format!("{}.exe", t.process), None) {
+        return Err(result(
+            t,
+            Outcome::Protected,
+            format!("not closed: {reason}"),
+        ));
+    }
+    if keep.contains(&t.process) {
+        return Err(result(
+            t,
+            Outcome::KeptByWorkspace,
+            "left open: the workspace you're entering uses it",
+        ));
+    }
+    if host_programs(procs, &procs.protected_pids()).contains(&t.process) {
+        return Err(result(
+            t,
+            Outcome::Protected,
+            format!("not closed: {HOST_REASON}"),
+        ));
+    }
+    let pids = pids_of(procs, &t.process);
+    if pids.is_empty() {
+        return Err(result(t, Outcome::NotRunning, "not running"));
+    }
+    Ok(pids)
+}
+
+/// Close `targets`. Never touches a protected program or one in `keep`. A
+/// failure on one program doesn't stop the others. Results are in the order of
+/// `targets`.
+///
+/// Every program is asked to close first, and then all are waited for
+/// together, so the wait is one `close_wait` however many ignore the request
+/// (several apps hide to the tray instead of exiting). Closing them one after
+/// another would cost a full wait for each.
 pub fn run(
     procs: &dyn Processes,
     targets: &[CleanupTarget],
     keep: &HashSet<String>,
     opts: &RunOptions,
 ) -> Vec<TargetResult> {
-    targets
+    // 1. Ask nicely, everything at once.
+    let mut steps: Vec<Result<Asked, TargetResult>> = targets
         .iter()
-        .map(|t| run_one(procs, t, keep, opts))
-        .collect()
-}
+        .map(|t| {
+            let pids = check(procs, t, keep)?;
+            let asked = pids.iter().map(|&p| procs.request_close(p)).sum();
+            Ok(Asked {
+                target: t,
+                asked,
+                remaining: pids,
+                errors: Vec::new(),
+            })
+        })
+        .collect();
 
-fn run_one(
-    procs: &dyn Processes,
-    t: &CleanupTarget,
-    keep: &HashSet<String>,
-    opts: &RunOptions,
-) -> TargetResult {
-    if let Some(reason) = protected_reason(&format!("{}.exe", t.process), None) {
-        return result(t, Outcome::Protected, format!("not closed: {reason}"));
-    }
-    if keep.contains(&t.process) {
-        return result(
-            t,
-            Outcome::KeptByWorkspace,
-            "left open: the workspace you're entering uses it",
-        );
-    }
-    if host_programs(procs, &procs.protected_pids()).contains(&t.process) {
-        return result(t, Outcome::Protected, format!("not closed: {HOST_REASON}"));
-    }
-    let pids = pids_of(procs, &t.process);
-    if pids.is_empty() {
-        return result(t, Outcome::NotRunning, "not running");
-    }
-
-    // 1. Ask nicely.
-    let asked: usize = pids.iter().map(|&p| procs.request_close(p)).sum();
+    // 2. Wait for all of them together.
     let deadline = Instant::now() + opts.close_wait;
-    let mut remaining = alive(procs, &pids);
-    // With nothing to ask (no window), waiting would only delay a forced end.
-    let waiting = asked > 0 || t.mode == CloseMode::Graceful;
-    while waiting && !remaining.is_empty() && Instant::now() < deadline {
+    loop {
+        let running = running_pids(procs);
+        for a in steps.iter_mut().flatten() {
+            a.remaining.retain(|p| running.contains(p));
+        }
+        let waiting = steps.iter().flatten().any(Asked::waits);
+        if !waiting || Instant::now() >= deadline {
+            break;
+        }
         procs.sleep(opts.poll);
-        remaining = alive(procs, &pids);
-    }
-    if remaining.is_empty() {
-        return result(t, Outcome::Closed, "closed");
     }
 
-    // 2. Still running.
-    if t.mode == CloseMode::Graceful {
-        let why = if asked == 0 {
-            "it has no window to ask"
-        } else {
-            "it may have hidden to the tray or be asking to save"
-        };
-        return result(
-            t,
-            Outcome::StillRunning,
-            format!("still running ({why}); use force close to end it"),
-        );
-    }
-    let mut errors = Vec::new();
-    for pid in &remaining {
-        if let Err(e) = procs.terminate(*pid) {
-            errors.push(e);
+    // 3. What is still running: end it (force mode), all at once, and give
+    // them one poll to go.
+    let mut ended = false;
+    for a in steps.iter_mut().flatten() {
+        if a.target.mode == CloseMode::Force {
+            for pid in &a.remaining {
+                ended = true;
+                if let Err(e) = procs.terminate(*pid) {
+                    a.errors.push(e);
+                }
+            }
         }
     }
-    procs.sleep(opts.poll);
-    let left = alive(procs, &remaining);
-    if left.is_empty() {
-        result(
-            t,
-            Outcome::Terminated,
-            "did not close when asked, so it was ended",
-        )
-    } else {
-        tracing::warn!(process = %t.process, errors = ?errors, "cleanup could not end a program");
-        result(
-            t,
-            Outcome::Failed,
-            format!(
-                "could not end it{}",
-                errors.first().map(|e| format!(": {e}")).unwrap_or_default()
-            ),
-        )
+    if ended {
+        procs.sleep(opts.poll);
     }
+    let running = running_pids(procs);
+
+    steps
+        .into_iter()
+        .map(|step| {
+            let a = match step {
+                Ok(a) => a,
+                Err(done) => return done,
+            };
+            let t = a.target;
+            let left: Vec<u32> = a
+                .remaining
+                .iter()
+                .copied()
+                .filter(|p| running.contains(p))
+                .collect();
+            if a.remaining.is_empty() {
+                return result(t, Outcome::Closed, "closed");
+            }
+            if t.mode == CloseMode::Graceful {
+                let why = if a.asked == 0 {
+                    "it has no window to ask"
+                } else {
+                    "it may have hidden to the tray or be asking to save"
+                };
+                return result(
+                    t,
+                    Outcome::StillRunning,
+                    format!("still running ({why}); use force close to end it"),
+                );
+            }
+            if left.is_empty() {
+                return result(
+                    t,
+                    Outcome::Terminated,
+                    "did not close when asked, so it was ended",
+                );
+            }
+            tracing::warn!(process = %t.process, errors = ?a.errors, "cleanup could not end a program");
+            result(
+                t,
+                Outcome::Failed,
+                format!(
+                    "could not end it{}",
+                    a.errors
+                        .first()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default()
+                ),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

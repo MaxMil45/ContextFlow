@@ -72,6 +72,12 @@ impl Desktop for Isolated {
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {
         self.real.place(hwnd, rect, state)
     }
+    fn raise(&self, hwnd: isize) {
+        self.real.raise(hwnd)
+    }
+    fn focus(&self, hwnd: isize) {
+        self.real.focus(hwnd)
+    }
 }
 
 fn main() {

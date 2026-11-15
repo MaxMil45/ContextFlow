@@ -201,6 +201,47 @@ pub fn snapshot_app_ids(snapshot: &Snapshot) -> HashSet<String> {
         .collect()
 }
 
+/// One side of a workspace's cleanup, ready to run.
+struct CleanupJob {
+    phase: CleanupPhase,
+    workspace: String,
+    targets: Vec<CleanupTarget>,
+}
+
+fn cleanup_intro(phase: CleanupPhase) -> &'static str {
+    match phase {
+        CleanupPhase::Leaving => "closing programs from the workspace you're leaving",
+        CleanupPhase::Entering => "closing distracting programs",
+    }
+}
+
+/// Close the programs of one job. Never touches a protected program or one in
+/// `keep`.
+fn execute_cleanup(job: &CleanupJob, keep: &HashSet<String>) -> CleanupReport {
+    let results = cf_cleanup::run(
+        &WindowsProcesses,
+        &job.targets,
+        keep,
+        &cf_cleanup::RunOptions::default(),
+    );
+    tracing::info!(
+        workspace = %job.workspace,
+        closed = results
+            .iter()
+            .filter(|r| matches!(
+                r.outcome,
+                cf_cleanup::Outcome::Closed | cf_cleanup::Outcome::Terminated
+            ))
+            .count(),
+        "workspace cleanup finished"
+    );
+    CleanupReport {
+        phase: job.phase,
+        workspace: job.workspace.clone(),
+        results,
+    }
+}
+
 fn run_cleanup(
     phase: CleanupPhase,
     workspace: &str,
@@ -211,31 +252,32 @@ fn run_cleanup(
     if targets.is_empty() {
         return None;
     }
-    log(match phase {
-        CleanupPhase::Leaving => "closing programs from the workspace you're leaving",
-        CleanupPhase::Entering => "closing distracting programs",
-    });
-    let results = cf_cleanup::run(
-        &WindowsProcesses,
-        targets,
-        keep,
-        &cf_cleanup::RunOptions::default(),
-    );
-    tracing::info!(
-        workspace,
-        closed = results
-            .iter()
-            .filter(|r| matches!(
-                r.outcome,
-                cf_cleanup::Outcome::Closed | cf_cleanup::Outcome::Terminated
-            ))
-            .count(),
-        "workspace cleanup finished"
-    );
-    Some(CleanupReport {
+    log(cleanup_intro(phase));
+    let job = CleanupJob {
         phase,
         workspace: workspace.to_string(),
-        results,
+        targets: targets.to_vec(),
+    };
+    Some(execute_cleanup(&job, keep))
+}
+
+/// Run `background` on a thread of its own while `foreground` runs here.
+/// Returns both results, and how long `background` was still running after
+/// `foreground` had finished (zero when it was done first). A panic in
+/// `background` gives its default result: it must not take the restore down.
+fn alongside<T, R: Default + Send>(
+    background: impl FnOnce() -> R + Send,
+    foreground: impl FnOnce() -> T,
+) -> (T, R, Duration) {
+    std::thread::scope(|scope| {
+        let handle = scope.spawn(background);
+        let out = foreground();
+        let waited = Instant::now();
+        let back = handle.join().unwrap_or_else(|_| {
+            tracing::warn!("the cleanup stopped unexpectedly");
+            R::default()
+        });
+        (out, back, waited.elapsed())
     })
 }
 
@@ -430,7 +472,8 @@ pub fn restore_workspace(
     args: &RestoreArgs,
     log: &mut dyn FnMut(&str),
 ) -> Result<RestoreOutcome> {
-    // Per-phase timings: prepare, save, close, then the engine's own phases.
+    // Per-phase timings: prepare, save, stop commands, then the engine's own
+    // phases, then the wait for the cleanup.
     let mut phases = Vec::new();
     let mut mark = Instant::now();
     let ctx = db.find_context(workspace)?;
@@ -523,43 +566,40 @@ pub fn restore_workspace(
         }
     }
 
-    // Cleanup comes first: leave the workspace we were in, then close what
-    // this one doesn't want. Programs this snapshot restores are never closed,
-    // and a partial restore (--only) isn't a workspace switch.
-    let mut cleanups = Vec::new();
+    // What to close: leave the workspace we were in, then close what this one
+    // doesn't want. Programs this snapshot restores are never closed, and a
+    // partial restore (--only) isn't a workspace switch. It is closed while the
+    // new desk is coming up (see below), not before: a program that is slow to
+    // close must not delay it.
+    let mut jobs: Vec<CleanupJob> = Vec::new();
+    let mut keep = HashSet::new();
     let mut left_previous = false;
     if !args.dry_run && !args.skip_cleanup && args.only.is_empty() {
-        let mut keep = snapshot_app_ids(&snapshot);
+        keep = snapshot_app_ids(&snapshot);
         keep.extend(args.always_on.iter().cloned());
         let previous: Option<ContextId> = db.active_context()?.filter(|p| *p != ctx.id);
         if let Some(previous) = previous {
             if let Ok(prev_ctx) = db.find_context(&previous.to_string()) {
-                let config = db.cleanup_config(previous)?;
-                if let Some(report) = run_cleanup(
-                    CleanupPhase::Leaving,
-                    &prev_ctx.name,
-                    &config.on_exit,
-                    &keep,
-                    log,
-                ) {
-                    cleanups.push(report);
-                }
+                jobs.push(CleanupJob {
+                    phase: CleanupPhase::Leaving,
+                    workspace: prev_ctx.name,
+                    targets: db.cleanup_config(previous)?.on_exit,
+                });
                 left_previous = true;
             }
         }
-        let config = db.cleanup_config(ctx.id)?;
-        if let Some(report) = run_cleanup(
-            CleanupPhase::Entering,
-            &ctx.name,
-            &config.on_enter,
-            &keep,
-            log,
-        ) {
-            cleanups.push(report);
+        jobs.push(CleanupJob {
+            phase: CleanupPhase::Entering,
+            workspace: ctx.name.clone(),
+            targets: db.cleanup_config(ctx.id)?.on_enter,
+        });
+        jobs.retain(|j| !j.targets.is_empty());
+        for job in &jobs {
+            log(cleanup_intro(job.phase));
         }
     }
 
-    lap(&mut phases, &mut mark, "close");
+    lap(&mut phases, &mut mark, "stop");
 
     let started = Utc::now();
     let opts = RestoreOptions {
@@ -571,11 +611,23 @@ pub fn restore_workspace(
         cancel: args.cancel.clone(),
         ..Default::default()
     };
-    let run = cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log);
+    // The cleanup runs on its own thread while the desk comes up. The first
+    // thing it can affect is the report, so it is waited for before that.
+    let (run, cleanups, cleanup_wait) = alongside(
+        || {
+            jobs.iter()
+                .map(|job| execute_cleanup(job, &keep))
+                .collect::<Vec<_>>()
+        },
+        || cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log),
+    );
     // The engine counts from its own start; the switch began earlier.
     let before_engine: u64 = phases.iter().map(|(_, ms)| ms).sum();
     let first_window_ms = run.first_window_ms.map(|ms| before_engine + ms);
     phases.extend(run.phases.iter().copied());
+    // Time spent waiting for the cleanup after the desk was ready: zero when
+    // it finished first.
+    phases.push(("cleanup", cleanup_wait.as_millis() as u64));
     let timing = describe_phases(&phases, first_window_ms);
 
     tracing::info!(
@@ -680,6 +732,47 @@ mod tests {
                 .is_some(),
             "checking released the lock again"
         );
+    }
+
+    use std::time::Duration;
+
+    /// The background work runs *while* the foreground does: it reports back
+    /// to a foreground that is still waiting. Run one after the other, the
+    /// foreground would time out.
+    #[test]
+    fn the_background_work_runs_while_the_foreground_does() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (seen, back, _) = super::alongside(
+            move || {
+                tx.send("background").unwrap();
+                vec![1, 2]
+            },
+            || rx.recv_timeout(Duration::from_secs(5)).ok(),
+        );
+        assert_eq!(seen, Some("background"));
+        assert_eq!(back, vec![1, 2]);
+    }
+
+    #[test]
+    fn the_wait_for_slow_background_work_is_measured() {
+        let (_, _, waited) =
+            super::alongside(|| std::thread::sleep(Duration::from_millis(200)), || ());
+        assert!(waited >= Duration::from_millis(100), "{waited:?}");
+
+        let (_, _, waited) =
+            super::alongside(|| (), || std::thread::sleep(Duration::from_millis(100)));
+        assert!(
+            waited < Duration::from_millis(50),
+            "{waited:?}: it was done first"
+        );
+    }
+
+    #[test]
+    fn a_failing_background_job_does_not_take_the_restore_down() {
+        let (out, back, _) =
+            super::alongside(|| -> Vec<u8> { panic!("cleanup crashed") }, || "restored");
+        assert_eq!(out, "restored");
+        assert!(back.is_empty());
     }
 
     #[test]

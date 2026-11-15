@@ -6,10 +6,12 @@ use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     MonitorFromRect, MonitorFromWindow, MONITOR_DEFAULTTONEAREST,
 };
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    IsIconic, IsWindow, IsZoomed, MessageBoxW, SetWindowPlacement, MB_ICONINFORMATION,
-    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+    GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsZoomed, MessageBoxW,
+    SetForegroundWindow, SetWindowPlacement, SetWindowPos, HWND_TOP, MB_ICONINFORMATION,
+    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT,
 };
 
 use cf_core::{DisplayState, Rect};
@@ -63,6 +65,60 @@ pub fn place_window(hwnd: isize, rect: Rect, state: DisplayState) -> std::io::Re
         }
     }
     Ok(())
+}
+
+/// Put `hwnd` above the other windows without activating it. Raising a series
+/// of windows from the bottom of a saved stack to its top rebuilds that stack.
+pub fn raise_window(hwnd: isize) -> std::io::Result<()> {
+    // SAFETY: plain Win32 call; a stale handle just fails.
+    let done = unsafe {
+        SetWindowPos(
+            hwnd as HWND,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+    if done == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Give `hwnd` the keyboard focus. Windows only lets the program the user is
+/// working in take the focus, and a switch can start from a program that is
+/// not in front (the tray app after its picker closed, say). When the plain
+/// call is refused, the calling thread joins the input queue of the window in
+/// front for the moment of the call, which Windows treats as the same user
+/// action. Returns whether the window ended up in front.
+pub fn focus_window(hwnd: isize) -> bool {
+    let target = hwnd as HWND;
+    // SAFETY: plain Win32 calls; stale handles just fail.
+    unsafe {
+        if IsWindow(target) == 0 || IsIconic(target) != 0 {
+            return false;
+        }
+        if SetForegroundWindow(target) != 0 {
+            return true;
+        }
+        let front = GetForegroundWindow();
+        let front_thread = if front.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(front, std::ptr::null_mut())
+        };
+        let ours = GetCurrentThreadId();
+        if front_thread == 0 || front_thread == ours {
+            return false;
+        }
+        AttachThreadInput(ours, front_thread, 1);
+        let done = SetForegroundWindow(target) != 0;
+        AttachThreadInput(ours, front_thread, 0);
+        done
+    }
 }
 
 unsafe fn set_placement(hwnd: HWND, rect: &RECT, show_cmd: u32) -> std::io::Result<()> {

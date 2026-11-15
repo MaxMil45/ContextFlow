@@ -22,18 +22,54 @@ pub(crate) fn place_saved(
     } else {
         placement_for(&saved.rect, saved.monitor_id.as_deref(), monitors).unwrap_or(saved.rect)
     };
-    desktop.place(hwnd, target, saved.display_state)
+    let placed = desktop.place(hwnd, target, saved.display_state);
+    if placed.is_ok() {
+        desktop.placed(saved, hwnd);
+    }
+    placed
 }
 
-/// Longest pause after a new window appears before it is moved.
-const NEW_WINDOW_SETTLE_MAX: Duration = Duration::from_millis(750);
+/// Longest wait before a new window is put in place a second time.
+const RECHECK_MAX: Duration = Duration::from_millis(750);
+
+/// A window put in place the moment it appeared, to be put there once more.
+///
+/// Browsers and VS Code size and position a new window themselves just after
+/// creating it, which can undo a placement made the instant it appeared. The
+/// window is placed at once, so it is where it belongs as early as possible,
+/// and placed again when `due`; if the app didn't move it, nothing visible
+/// happens. Rechecks don't hold anything up: other windows open meanwhile.
+#[derive(Debug, Clone)]
+pub(crate) struct Recheck {
+    pub hwnd: isize,
+    pub saved: WindowState,
+    pub due: Instant,
+}
+
+/// Put a window that has just appeared in its saved place now, and schedule
+/// it to be placed once more after `settle` (at most [`RECHECK_MAX`]).
+pub(crate) fn place_new(
+    desktop: &dyn Desktop,
+    hwnd: isize,
+    saved: &WindowState,
+    monitors: &[MonitorInfo],
+    settle: Duration,
+    rechecks: &mut Vec<Recheck>,
+) -> Result<(), PlaceError> {
+    let placed = place_saved(desktop, hwnd, saved, monitors);
+    if placed.is_ok() {
+        rechecks.push(Recheck {
+            hwnd,
+            saved: saved.clone(),
+            due: Instant::now() + settle.min(RECHECK_MAX),
+        });
+    }
+    placed
+}
 
 /// Wait up to `wait` for a window of `app_id` that is not in `known` (the
-/// windows that existed before we asked for a new one). Returns its handle.
-///
-/// Once found, pause for `settle` (at most [`NEW_WINDOW_SETTLE_MAX`]):
-/// browsers and VS Code size and position a new window themselves just after
-/// creating it, which would undo a placement made the instant it appeared.
+/// windows that existed before we asked for a new one). Returns its handle
+/// as soon as it appears.
 ///
 /// `meanwhile` runs between looks, so other applications that have finished
 /// opening are put in place while this one is still on its way.
@@ -42,7 +78,6 @@ pub(crate) fn wait_for_new_window(
     app_id: &str,
     known: &HashSet<isize>,
     wait: Duration,
-    settle: Duration,
     meanwhile: &mut dyn FnMut(),
 ) -> Option<isize> {
     let deadline = Instant::now() + wait;
@@ -54,7 +89,6 @@ pub(crate) fn wait_for_new_window(
                 .map(|w| w.hwnd)
         });
         if found.is_some() {
-            std::thread::sleep(settle.min(NEW_WINDOW_SETTLE_MAX));
             return found;
         }
         if Instant::now() >= deadline {

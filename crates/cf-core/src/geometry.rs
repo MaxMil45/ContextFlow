@@ -57,6 +57,44 @@ pub fn select_monitor<'a>(
         .or_else(|| monitors.first())
 }
 
+/// Where a window saved on one display layout belongs on another, keeping its
+/// share of the screen: two windows saved side by side on a large display stay
+/// side by side on a small one, instead of both being clamped to the corner.
+///
+/// Nothing changes when the display the window sat on is still the same size.
+/// Otherwise the window's position and size are scaled by the ratio between
+/// the work area it was saved on and the one it goes to. The result may still
+/// need [`Rect::fit_within`].
+pub fn scale_to_layout(
+    window: &Rect,
+    saved_monitor_id: Option<&str>,
+    saved: &[MonitorInfo],
+    current: &[MonitorInfo],
+) -> Rect {
+    let (Some(from), Some(to)) = (
+        select_monitor(window, saved_monitor_id, saved),
+        select_monitor(window, saved_monitor_id, current),
+    ) else {
+        return *window;
+    };
+    let (src, dst) = (&from.work_area, &to.work_area);
+    if src.width <= 0 || src.height <= 0 || dst.width <= 0 || dst.height <= 0 {
+        return *window;
+    }
+    if src.width == dst.width && src.height == dst.height {
+        return *window;
+    }
+    let fx = f64::from(dst.width) / f64::from(src.width);
+    let fy = f64::from(dst.height) / f64::from(src.height);
+    let scale = |v: i32, origin: i32, f: f64| ((f64::from(v - origin)) * f).round() as i32;
+    Rect {
+        x: dst.x + scale(window.x, src.x, fx),
+        y: dst.y + scale(window.y, src.y, fy),
+        width: ((f64::from(window.width) * fx).round() as i32).max(1),
+        height: ((f64::from(window.height) * fy).round() as i32).max(1),
+    }
+}
+
 /// Final placement for a saved window on the current display configuration,
 /// guaranteeing the window is fully reachable.
 pub fn placement_for(
@@ -115,6 +153,41 @@ mod tests {
             r(100, 100, 800, 600).fit_within(&area),
             r(100, 100, 800, 600)
         );
+    }
+
+    #[test]
+    fn side_by_side_windows_stay_side_by_side_on_a_smaller_display() {
+        let big = vec![monitor("A", true, r(0, 0, 3840, 2200))];
+        let small = vec![monitor("L", true, r(0, 0, 1920, 1120))];
+        let left = r(0, 0, 1920, 2160);
+        let right = r(1920, 0, 1920, 2160);
+        let l = scale_to_layout(&left, Some("A"), &big, &small).fit_within(&small[0].work_area);
+        let rr = scale_to_layout(&right, Some("A"), &big, &small).fit_within(&small[0].work_area);
+        assert_eq!((l.x, l.width), (0, 960));
+        assert_eq!((rr.x, rr.width), (960, 960));
+    }
+
+    #[test]
+    fn the_same_size_display_changes_nothing() {
+        let a = vec![monitor("A", true, r(0, 0, 1920, 1080))];
+        let b = vec![monitor("B", true, r(0, 0, 1920, 1080))];
+        let w = r(123, 45, 801, 599);
+        assert_eq!(scale_to_layout(&w, Some("A"), &a, &b), w);
+        assert_eq!(scale_to_layout(&w, Some("A"), &[], &b), w);
+        assert_eq!(scale_to_layout(&w, Some("A"), &a, &[]), w);
+    }
+
+    #[test]
+    fn a_second_monitor_is_scaled_into_the_one_it_falls_back_to() {
+        let saved = vec![
+            monitor("A", true, r(0, 0, 1920, 1080)),
+            monitor("B", false, r(1920, 0, 2560, 1440)),
+        ];
+        let now = vec![monitor("A", true, r(0, 0, 1920, 1080))];
+        // The right half of B moves to the right half of A.
+        let w = r(1920 + 1280, 0, 1280, 1400);
+        let placed = scale_to_layout(&w, Some("B"), &saved, &now);
+        assert_eq!((placed.x, placed.width), (960, 960));
     }
 
     #[test]

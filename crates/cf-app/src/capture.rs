@@ -292,8 +292,16 @@ fn attach_open_paths(
         warnings.extend(app.unmatched_warning(&state));
         if state.path_count() > 0 {
             let saved = &mut payload.applications[i];
+            // Keep what is already saved there (a Store app's package id).
+            let mut value = state.to_value();
+            if let (Some(old), Some(new)) = (saved.adapter_state.as_object(), value.as_object_mut())
+            {
+                for (k, v) in old {
+                    new.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
             saved.adapter_id = Some(app.adapter_id.to_string());
-            saved.adapter_state = state.to_value();
+            saved.adapter_state = value;
         }
     }
 }

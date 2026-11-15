@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+cf-windows.workspace = true
 
 # File Explorer's open folders come from the Windows Shell directly (COM).
 [target.'cfg(windows)'.dependencies.windows]

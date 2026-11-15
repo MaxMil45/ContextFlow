@@ -20,9 +20,26 @@ mod imp;
 mod lock;
 #[cfg(windows)]
 mod processes;
+#[cfg(windows)]
+mod shells;
 
 #[cfg(windows)]
 pub use lock::InstanceLock;
+
+/// The program that owns window `hwnd`, and the folder each shell running in it
+/// is in, first tab first (see the `shells` module for what that means for
+/// PowerShell). `None` when the window is gone or this isn't Windows.
+pub fn window_shell_folders(hwnd: isize) -> Option<(u32, Vec<String>)> {
+    #[cfg(windows)]
+    {
+        shells::window_shell_folders(hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+}
 
 /// Placeholder so callers compile off Windows; it never excludes anything.
 #[cfg(not(windows))]

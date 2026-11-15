@@ -703,6 +703,7 @@ dependencies = [
 name = "cf-detect"
 version = "0.1.0"
 dependencies = [
+ "cf-windows",
  "serde",
  "serde_json",
  "tempfile",

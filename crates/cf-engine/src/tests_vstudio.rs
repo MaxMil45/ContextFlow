@@ -24,6 +24,7 @@ fn studio_window(title: &str, name: &str, path: Option<&str>) -> VsWindow {
         window_title: title.into(),
         name: Some(name.into()),
         path: path.map(String::from),
+        tabs: Vec::new(),
     }
 }
 
@@ -105,6 +106,7 @@ fn explorer_opens_only_the_folders_that_are_not_open() {
         window_title: title.into(),
         name: Some(name.into()),
         path: Some(path.into()),
+        tabs: Vec::new(),
     };
     let mut a = app("explorer");
     a.adapter_id = Some("explorer".into());

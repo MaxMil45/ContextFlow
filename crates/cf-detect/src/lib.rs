@@ -12,6 +12,7 @@
 
 mod explorer;
 mod jetbrains;
+mod terminal;
 mod vscode;
 mod vstudio;
 
@@ -28,6 +29,7 @@ pub const VSCODE: &str = "vscode";
 pub const VISUAL_STUDIO: &str = "visualstudio";
 pub const EXPLORER: &str = "explorer";
 pub const JETBRAINS: &str = "jetbrains";
+pub const TERMINAL: &str = "terminal";
 
 /// One window and what it had open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +43,9 @@ pub struct Window {
     /// if it could not be worked out. (`folder_uri` in older VS Code states.)
     #[serde(alias = "folder_uri")]
     pub path: Option<String>,
+    /// Further folders the window had open, one per extra tab (a terminal's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<String>,
 }
 
 /// What an application's windows had open: its `adapter_state`.
@@ -84,6 +89,8 @@ pub struct Sources {
     pub explorer: bool,
     /// Each JetBrains IDE's `recentProjects.xml`.
     pub jetbrains_recent: Vec<PathBuf>,
+    /// Ask Windows which folders Windows Terminal's shells are in.
+    pub terminal: bool,
 }
 
 impl Sources {
@@ -93,6 +100,7 @@ impl Sources {
             visual_studio_settings: vstudio::default_settings_files(),
             explorer: true,
             jetbrains_recent: jetbrains::default_recent_files(),
+            terminal: true,
         }
     }
 }
@@ -139,7 +147,14 @@ pub struct App {
     /// Whether a saved path still exists on this computer.
     pub exists: fn(&str) -> bool,
     /// The command-line arguments that reopen a saved path in its own window.
-    pub open_args: fn(&str) -> Vec<String>,
+    /// `path` is the window's first folder, `more` its other tabs' folders.
+    pub open_args: fn(&str, &[String]) -> Vec<String>,
+    /// A program to start it with instead of the saved one, when there is one
+    /// (a Store app's saved path can't be started with arguments).
+    pub launcher: Option<fn() -> Option<String>>,
+    /// Windows can't be told apart by title: an app that already has as many
+    /// windows as were saved is taken to have them all.
+    pub counted: bool,
     lookup: Lookup,
     /// Several windows may show the same entry (otherwise each is used once).
     shared: bool,
@@ -149,7 +164,7 @@ pub struct App {
     unmatched: &'static str,
 }
 
-pub static APPS: [App; 4] = [
+pub static APPS: [App; 5] = [
     App {
         adapter_id: VSCODE,
         label: "VS Code",
@@ -157,7 +172,9 @@ pub static APPS: [App; 4] = [
         parse_title: |t| (vscode::root_name_from_title(t), None),
         is_safe: vscode::is_safe_folder_uri,
         exists: vscode::folder_exists,
-        open_args: |uri| vec!["--new-window".into(), "--folder-uri".into(), uri.into()],
+        open_args: |uri, _| vec!["--new-window".into(), "--folder-uri".into(), uri.into()],
+        launcher: None,
+        counted: false,
         lookup: Lookup::ByTitle(vscode::candidates),
         shared: true,
         always_report: true,
@@ -173,6 +190,8 @@ pub static APPS: [App; 4] = [
         exists: |p| Path::new(p).exists(),
         // Each `devenv.exe <path>` starts its own Visual Studio window.
         open_args: one_arg,
+        launcher: None,
+        counted: false,
         lookup: Lookup::ByTitle(vstudio::candidates),
         shared: false,
         always_report: true,
@@ -187,6 +206,8 @@ pub static APPS: [App; 4] = [
         exists: is_dir,
         // `explorer.exe <folder>` opens it in a new window.
         open_args: one_arg,
+        launcher: None,
+        counted: false,
         lookup: Lookup::ByWindow(explorer::detect),
         shared: false,
         always_report: false,
@@ -201,15 +222,33 @@ pub static APPS: [App; 4] = [
         exists: is_dir,
         // `<ide>64.exe <project folder>` opens it (in the running IDE if there is one).
         open_args: one_arg,
+        launcher: None,
+        counted: false,
         lookup: Lookup::ByTitle(jetbrains::candidates),
         shared: false,
         always_report: false,
         unmatched:
             "the project for {n} window(s) could not be worked out; they will reopen without one",
     },
+    App {
+        adapter_id: TERMINAL,
+        label: "Windows Terminal",
+        is_app: |id| id == "windowsterminal",
+        // Terminal titles are whatever the shell says; they name no folder.
+        parse_title: |_| (None, None),
+        is_safe: terminal::is_safe,
+        exists: is_dir,
+        open_args: terminal::open_args,
+        launcher: Some(terminal::launcher),
+        counted: true,
+        lookup: Lookup::ByWindow(terminal::detect),
+        shared: false,
+        always_report: false,
+        unmatched: "",
+    },
 ];
 
-fn one_arg(path: &str) -> Vec<String> {
+fn one_arg(path: &str, _more: &[String]) -> Vec<String> {
     vec![path.to_string()]
 }
 
@@ -328,6 +367,7 @@ pub fn build_state(
                 window_title: title.clone(),
                 name,
                 path,
+                tabs: Vec::new(),
             }
         })
         .collect();
@@ -375,6 +415,7 @@ mod tests {
                 window_title: "x - Visual Studio Code".into(),
                 name: Some("x".into()),
                 path: Some("file:///c%3A/x".into()),
+                tabs: Vec::new(),
             }],
         };
         let (app, back) = saved(Some(VSCODE), &state.to_value()).unwrap();
@@ -411,6 +452,7 @@ mod tests {
             window_title: String::new(),
             name: name.map(String::from),
             path: path.map(String::from),
+            tabs: Vec::new(),
         };
         let state = |windows| State {
             schema_version: STATE_SCHEMA,

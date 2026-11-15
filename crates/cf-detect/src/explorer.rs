@@ -203,6 +203,7 @@ fn detect_in(
                 // restore can tell the folder is already open.
                 name: name.or_else(|| chosen.map(|f| f.name.clone())),
                 path: chosen.map(|f| f.path.clone()),
+                tabs: Vec::new(),
             }
         })
         .collect();

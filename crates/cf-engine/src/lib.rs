@@ -378,6 +378,30 @@ fn importance_order(payload: &SnapshotPayload) -> Vec<&ApplicationState> {
     apps
 }
 
+/// The snapshot with every window rescaled to the displays that are connected
+/// now, or `None` when nothing needs to change (same layout, or no layout was
+/// saved).
+fn fit_to_layout(payload: &SnapshotPayload, current: &[MonitorInfo]) -> Option<SnapshotPayload> {
+    if payload.monitors.is_empty() || current.is_empty() {
+        return None;
+    }
+    let mut out = payload.clone();
+    let mut changed = false;
+    for w in &mut out.windows {
+        let scaled = cf_core::geometry::scale_to_layout(
+            &w.rect,
+            w.monitor_id.as_deref(),
+            &payload.monitors,
+            current,
+        );
+        if scaled != w.rect {
+            w.rect = scaled;
+            changed = true;
+        }
+    }
+    changed.then_some(out)
+}
+
 /// Restore `payload` onto `desktop`. `log` receives short progress lines.
 ///
 /// The desk fills up in stages, most important application first within each:
@@ -395,12 +419,16 @@ pub fn restore(
     log: &mut dyn FnMut(&str),
 ) -> RestoreRun {
     let began = Instant::now();
-    let timed = desktop::Timed::new(desktop, &payload.windows);
-    let desktop: &dyn Desktop = &timed;
     let monitors: Vec<MonitorInfo> = desktop.monitors().unwrap_or_else(|e| {
         log(&format!("warning: could not read monitors ({e})"));
         Vec::new()
     });
+    // Saved on another display layout? Then keep each window's share of the
+    // screen. Everything below works with these adjusted windows.
+    let adjusted = fit_to_layout(payload, &monitors);
+    let payload = adjusted.as_ref().unwrap_or(payload);
+    let timed = desktop::Timed::new(desktop, &payload.windows);
+    let desktop: &dyn Desktop = &timed;
     let baseline_windows = desktop.windows().unwrap_or_else(|e| {
         log(&format!("warning: could not read open windows ({e})"));
         Vec::new()
@@ -493,6 +521,15 @@ pub fn restore(
             results.push(step(RestoreStatus::Skipped, Some("DRY_RUN"), msg), log);
             continue;
         }
+
+        // A Store app (Windows Terminal) can't be given a folder by its saved
+        // path; its own launcher can.
+        let plan = match (plan, &folders) {
+            (Some(LaunchPlan::Packaged(_)), Some(f)) if f.launcher.is_some() => {
+                f.launcher.clone().map(LaunchPlan::Exe)
+            }
+            (plan, _) => plan,
+        };
 
         match (plan, tabs, folders) {
             // A browser or VS Code that isn't running is started by opening its

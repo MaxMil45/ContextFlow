@@ -735,7 +735,27 @@ for each window title:
 | JetBrains | `HelloWorld – main.py` | `%APPDATA%\JetBrains\<IDE>\options\recentProjects.xml` | `<ide>64.exe <path>` |
 | File Explorer | `Downloads - File Explorer` | The Windows Shell, asked directly over COM (`IShellWindows`), **by window handle** | `explorer.exe <path>` |
 
-**Explorer is the exception: it is matched by window handle.** The Shell
+| Windows Terminal | whatever the shell last said (names no folder) | The terminal's own process: the shells running below the window, and the folder each is in | `wt.exe -w new -d <a> ; new-tab -d <b> …` |
+
+**Windows Terminal reads processes, not titles.** The window's process is
+asked which shells (PowerShell, cmd) run below it; the folder of each is read
+from that process, and the first tab's goes in the window's `path`, the others
+in `tabs`. Restore starts one new window per saved window with a tab per
+folder, through the `wt.exe` alias (the Store app's own path can't be given
+arguments). Windows can't be told apart by title, so a running terminal with
+as many windows as were saved is taken to have them all.
+
+> **Limits, stated plainly.** PowerShell does not change its process's folder
+> when you `cd`, so for it the saved folder is where the tab *started*, which
+> is the project folder for tabs opened by "Open in Terminal" or `wt -d`, and
+> the home folder otherwise. `cmd` is read live. WSL and `bash` tabs are not
+> saved (their Windows-side folder says nothing about the Linux folder), split
+> panes come back as tabs, and two windows hosted by one terminal process
+> can't be separated, so nothing is saved for them. Seeing the live folder of
+> PowerShell would need a line in the user's PowerShell profile that reports
+> it, which ContextFlow doesn't install.
+
+**Explorer is the exception among the title-based apps: it is matched by window handle.** The Shell
 lists each open folder together with the window it is in, so capture asks it
 directly instead of reading titles. That works in every language (the title is
 not needed for a window with one folder), tells apart two windows with the
@@ -834,6 +854,15 @@ then shrink and shift the rectangle so it fits inside that screen's work area
 
 > **Why "fit inside".** A window placed partly off-screen, or behind the
 > taskbar, is lost to the user. Every restored window must be reachable.
+
+**A different display layout.** The snapshot keeps the displays it was saved
+on. At the start of a restore, each window is scaled by the ratio between the
+work area it sat on and the one it goes to, so two windows saved side by side
+on a large display stay side by side on a small one (and are then kept
+on-screen as before). When the display is the same size, nothing is changed,
+so the common case is exact. Trade-off: a window made to fit a smaller display
+is not made larger again when the large display returns; the snapshot itself
+is never modified, so restoring it there gives the original sizes.
 
 **Stacking and focus.** The saved windows are stored top to bottom. When
 everything is in place, the engine raises the windows from the bottom of that

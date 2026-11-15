@@ -13,6 +13,7 @@ fn vs_window(title: &str, root: &str, uri: Option<&str>) -> VsCodeWindow {
         window_title: title.into(),
         name: Some(root.into()),
         path: uri.map(String::from),
+        tabs: Vec::new(),
     }
 }
 

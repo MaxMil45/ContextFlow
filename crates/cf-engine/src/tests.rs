@@ -729,6 +729,30 @@ fn helper_process_is_started_through_its_app() {
     assert_eq!(d.placed.borrow()[0].0, 7);
 }
 
+#[test]
+fn windows_saved_on_a_larger_display_keep_their_share_of_a_smaller_one() {
+    let mut p = payload();
+    p.monitors = vec![monitor("M1", true, r(0, 0, 3840, 2200))];
+    p.windows = vec![
+        saved_window("code", "main.rs", r(0, 0, 1920, 2160), "M1"),
+        saved_window("chrome", "Docs", r(1920, 0, 1920, 2160), "M1"),
+    ];
+    p.applications.truncate(2);
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![
+            open_window(1, "code", "main.rs - Code"),
+            open_window(2, "chrome", "Docs - Chrome"),
+        ]),
+        ..Default::default()
+    };
+    run(&d, &p, &fast());
+    let placed = d.placed.borrow();
+    let at = |hwnd| placed.iter().find(|p| p.0 == hwnd).unwrap().1;
+    assert_eq!((at(1).x, at(1).width), (0, 960), "{placed:?}");
+    assert_eq!((at(2).x, at(2).width), (960, 960), "{placed:?}");
+}
+
 /// Collects the progress lines a restore logs.
 fn run_logged(d: &Fake, p: &SnapshotPayload, o: &RestoreOptions) -> (RestoreRun, Vec<String>) {
     let mut lines = Vec::new();
@@ -977,3 +1001,5 @@ fn reopened_browser_windows_take_their_place_in_the_stack() {
     assert_eq!(*d.raised.borrow(), [12, 11]);
     assert_eq!(*d.focused.borrow(), [11]);
 }
+
+include!("tests_terminal.rs");

@@ -42,6 +42,12 @@ pub(crate) struct EditorWork {
     pub wording: &'static Wording,
     /// The editor's name, for messages.
     pub label: &'static str,
+    /// A program to start it with instead of the saved one (see
+    /// `cf_detect::App::launcher`).
+    pub launcher: Option<String>,
+    /// Windows are told apart by number, not by name (see
+    /// `cf_detect::App::counted`).
+    pub counted: bool,
 }
 
 impl EditorWork {
@@ -73,7 +79,7 @@ pub(crate) fn editor_work(app: &ApplicationState) -> Option<EditorWork> {
             continue;
         }
         items.push(OpenItem {
-            args: (editor.open_args)(path),
+            args: (editor.open_args)(path, &w.tabs),
             name: w.name.clone(),
             window_title: w.window_title.clone(),
         });
@@ -84,6 +90,8 @@ pub(crate) fn editor_work(app: &ApplicationState) -> Option<EditorWork> {
         title_name: editor.parse_title,
         wording,
         label: editor.label,
+        launcher: editor.launcher.and_then(|find| find()),
+        counted: editor.counted,
     })
 }
 
@@ -109,6 +117,7 @@ pub(crate) fn restore_windows(
 ) -> TabRestore {
     let mut out = TabRestore::default();
     out.notes.extend(work.notes.iter().cloned());
+    let exe = work.launcher.as_deref().unwrap_or(exe);
 
     let open_names: Vec<String> = current_titles
         .iter()
@@ -125,12 +134,18 @@ pub(crate) fn restore_windows(
     let mut used_saved = vec![false; saved.len()];
     let mut opened = 0usize;
 
-    for window in &work.items {
-        // Already open: the ordinary step repositions that window.
-        let already_open = window
-            .name
-            .as_deref()
-            .is_some_and(|n| open_names.contains(&n.to_lowercase()));
+    for (index, window) in work.items.iter().enumerate() {
+        // Already open: the ordinary step repositions that window. Windows
+        // that can't be told apart by name count as open while there are as
+        // many open as were saved.
+        let already_open = if work.counted {
+            index < current_titles.len()
+        } else {
+            window
+                .name
+                .as_deref()
+                .is_some_and(|n| open_names.contains(&n.to_lowercase()))
+        };
         if already_open {
             continue;
         }

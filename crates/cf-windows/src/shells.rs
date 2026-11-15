@@ -281,12 +281,10 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         let got = got.expect("the folder of a child of ours can be read");
-        let want = std::fs::canonicalize(&dir).unwrap();
-        let want = want
-            .to_string_lossy()
-            .trim_start_matches(r"\\?\")
-            .to_string();
-        assert!(got.eq_ignore_ascii_case(&want), "{got} vs {want}");
+        // The temp folder may be spelled in its short form (`RUNNER~1`) on one
+        // side and its long form on the other: compare the real folders.
+        let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(real(std::path::Path::new(&got)), real(&dir), "{got}");
         let _ = std::fs::remove_dir(&dir);
     }
 

@@ -11,7 +11,9 @@ It complements two other documents:
 | Document | What it is for |
 |---|---|
 | `docs/SOFTWARE_ARCHITECTURE.md` (this one) | How the system works, and why. A reference. |
-| `docs/ARCHITECTURE.md` | The review and the six-step plan of November 2026. Parts of its "today" (18 crates, a separate agent) describe the code before that plan was carried out. |
+| `docs/ARCHITECTURE.md` | The short version: how it is built, what the November 2026 plan changed. Read it first. |
+| `docs/ROADMAP.md` | What is left to do, improvements in order, ideas, and what was turned down. |
+| `docs/COMMANDS.md` | Every command and option. |
 | `docs/AGENT.md` | The pipe protocol and its security checks in full detail. |
 
 **How to read it.** Each section starts with the idea in plain words, then
@@ -1139,7 +1141,23 @@ its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
 | 5 | **Browser extension needs Developer mode** | The biggest setup hurdle for a new user. | Publish to the Chrome and Edge stores; add their extension ids to the host's allowed list. |
 | 6 | **Unsigned installer** | Windows warns on first run. | Sign with a code-signing certificate (the build script already supports it). |
 
+What to do about each of these, in order and with sizes, is in
+[ROADMAP.md](ROADMAP.md), together with gaps that are features rather than
+weak spots (pinned tabs, browser profiles, PowerShell's current folder,
+virtual desktops).
+
 Fixed in November 2026, and explained where they are described:
+
+* **Force close ending a program that is asking to save**: a program showing
+  a dialog is left running and reported (section 6.1).
+* **The two cleanups one after the other**: the "leaving" and "entering"
+  cleanups run together, and a program named by both is closed once
+  (section 6.1).
+* **Windows Terminal not restored**: its windows reopen with a tab per folder
+  (section 7.4).
+* **Side-by-side windows collapsing on a smaller display**: windows keep
+  their share of the screen (section 8.4).
+* **A slow first look for new windows**: polling starts at 25 ms.
 
 * **Volatile data in the snapshot hash**: the capture time is no longer
   saved in snapshots, so the same desk gives the same hash (section 7.2).
@@ -1163,6 +1181,9 @@ Fixed in November 2026, and explained where they are described:
   however many programs hide to the tray (section 6.1).
 
 ### 12.2 Bigger directions, and what they would cost
+
+The ordered list is [ROADMAP.md](ROADMAP.md); this section explains the
+larger ones.
 
 **A live desktop model (event-driven).** The tray app would keep an
 always-current list of windows from WinEvent hooks instead of scanning.

@@ -11,7 +11,6 @@ cf-browser.workspace = true
 cf-cleanup.workspace = true
 cf-config.workspace = true
 cf-core.workspace = true
-cf-diff.workspace = true
 cf-engine.workspace = true
 cf-git.workspace = true
 cf-ipc.workspace = true

@@ -120,6 +120,8 @@ exports, imports and the integrity check use the same code as
 
 ## Not done yet
 
+The full list is in [docs/ROADMAP.md](../docs/ROADMAP.md). For the app itself:
+
 * A signing certificate, an auto-updater and a store-listed browser extension.
 * A clean-VM install and uninstall run of the installer.
 * Programs are told apart by executable name, so Focus rules show which files a

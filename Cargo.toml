@@ -19,7 +19,6 @@ cf-config = { path = "crates/cf-config" }
 cf-browser = { path = "crates/cf-browser" }
 cf-detect = { path = "crates/cf-detect" }
 cf-engine = { path = "crates/cf-engine" }
-cf-cli = { path = "crates/cf-cli" }
 cf-cleanup = { path = "crates/cf-cleanup" }
 cf-app = { path = "crates/cf-app" }
 cf-ipc = { path = "crates/cf-ipc" }

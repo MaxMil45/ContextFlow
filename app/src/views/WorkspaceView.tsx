@@ -46,6 +46,7 @@ import {
 } from "../components/ui";
 import {
   absoluteTime,
+  captureStatusTone,
   friendlyAppName,
   plural,
   relativeTime,
@@ -108,7 +109,6 @@ type RestoreRun = {
   leaveNote?: string;
 };
 
-const statusTone = { complete: "ok", partial: "warn", failed: "bad" } as const;
 const statusLabel = { complete: "Complete", partial: "Partial", failed: "Failed" } as const;
 
 export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pending, onPendingHandled, onSwitchTo, others }: Props) {
@@ -659,7 +659,7 @@ function HistoryRow({
         onClick={onSelect}
         title={`Version ${entry.version} · ${absoluteTime(entry.createdAt)} · ${entry.shortHash}`}
       >
-        <span className={`status-dot ${statusTone[entry.captureStatus]}`} role="img" aria-label={statusLabel[entry.captureStatus]} />
+        <span className={`status-dot ${captureStatusTone[entry.captureStatus]}`} role="img" aria-label={statusLabel[entry.captureStatus]} />
         <span className="timeline-main">
           <span className="timeline-when">{relativeTime(entry.createdAt)}</span>
           <span className="timeline-sub">
@@ -707,7 +707,7 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
             </span>
           )}
           {snapshot.captureStatus !== "complete" && (
-            <Badge tone={statusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]} save</Badge>
+            <Badge tone={captureStatusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]} save</Badge>
           )}
         </div>
       </section>
@@ -787,7 +787,7 @@ function VersionDetails({
       <header className="card-header">
         <h3>
           Version {snapshot.version}
-          <Badge tone={statusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]}</Badge>
+          <Badge tone={captureStatusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]}</Badge>
         </h3>
         <div className="actions">
           <button className="ghost" onClick={onCompareNow} data-tip="What changed on your screen since this was saved?">

@@ -29,6 +29,10 @@ cargo test --workspace
 | `cf-diff` | Detects the spec's example divergence, window matching, deterministic output |
 | `cf-windows` | Monitors and windows can be enumerated on this machine |
 | `cf-engine` | Restore: launches apps and places windows; a missing app, a failed launch, a window that never appears, an elevated app and a missing monitor are each isolated; running it twice opens nothing twice |
+| `cf-detect` | Folders and projects of VS Code, Visual Studio, JetBrains IDEs, File Explorer (by window) and Windows Terminal (by its shells): matching, ties never guessed, unsafe or missing paths dropped |
+| `cf-cleanup` | Protected programs are never closed, programs are asked together and waited for once, force close never ends a program that is showing a dialog |
+| `cf-app` | Capture, auto-save rules, the switch session (cleanup alongside the restore), start and stop commands, the service the app serves |
+| `cf-ipc` | The pipe: protocol, access checks, a server dying mid-request |
 
 For a longer crash run (the plan's 100-iteration target):
 
@@ -87,7 +91,7 @@ Tick each one off. "Expect" is what a correct build does.
 10. Uninstall one app's path (or capture with a made-up path in a test copy), restore, and **expect** that app to be reported as `EXE_NOT_FOUND` while the others still restore.
 11. Unplug a monitor (if you have two) and restore. **Expect:** windows from that monitor appear on the remaining one, fully on screen.
 
-Known limits: Microsoft Store apps (new Notepad, Calculator, Windows Terminal) are skipped and reported. Apps that run as administrator can't be moved (reported as needing your action). Only each app's windows come back, not what was open inside (which folder, which tabs).
+Known limits: apps that run as administrator can't be moved (reported as needing your action). A Microsoft Store app is started by its package id; if that can't be worked out it is skipped and reported. For apps without an integration (see the README's "What comes back"), only the windows come back, not what was open inside.
 
 ### 00. Browser tabs
 1. Run `contextflow browser install`, then load the extension in Chrome/Edge (see the README), and confirm with `contextflow browser status`.
@@ -251,9 +255,30 @@ Use a throwaway database for the first three (see section 2).
 7. Export with a passphrase; import it: you're asked for the passphrase, and a wrong one is refused.
 8. Turn on Windows High Contrast: every edge and focus ring stays visible. Tab to the workspace tabs and use the arrow keys.
 
+### O. Added in November 2026: check these on a real desk
+
+These were built with tests and small probes only. Each line is one check.
+
+1. **Stacking and focus.** Overlap three windows, note which is on top, capture. Rearrange them, restore. **Expect:** the same window is on top, and typing goes into it.
+2. **Cleanup alongside the restore.** Add a Focus rule for a program that hides to the tray (for example Discord). Switch in. **Expect:** the new desk appears straight away; the report still lists the program, and the timing line in `contextflow doctor` shows a `cleanup` phase.
+3. **Force close and unsaved work.** Open Notepad (or another editor that asks to save), type something, and add it to a workspace's Focus rules with **Force close**. Switch in. **Expect:** the "save?" prompt stays open, the editor is not ended, and the report says it is showing a dialog.
+4. **Windows Terminal.** Open a terminal window with two tabs in different folders (start them with `wt -d <folder>` or "Open in Terminal"). Capture, close it, restore. **Expect:** one window with a tab per folder, where it was. Restore again: no second window. A PowerShell tab that was moved with `cd` comes back in the folder it started in; that is a known limit.
+5. **A smaller screen.** Capture two windows side by side on a large display, then restore with only the laptop screen. **Expect:** they are still side by side, each about half the screen.
+6. **Explorer with tabs.** Open one Explorer window with two or three tabs, capture, close, restore. **Expect:** one window showing the tab that was in front. To check the assumption behind it, run `cargo test -p cf-detect real_explorer -- --ignored --nocapture` with the window open: every tab should print the same window handle.
+7. **Delete older versions.** In a workspace with several versions, open History and press the bin above the list. **Expect:** it asks first, then only the newest version (and a pinned one) remain.
+8. **Opening a vault or project.** Add a start command such as `"...\Obsidian.exe" "obsidian://open?vault=Work"` to a workspace and switch in. **Expect:** the app shows that vault.
+
+Three checks start real programs and are skipped in the normal run. Run them by hand when changing that code:
+
+```powershell
+cargo test -p cf-windows real_terminal -- --ignored --nocapture   # opens and closes a terminal window
+cargo test -p cf-windows real_shells -- --ignored --nocapture     # what PowerShell and cmd report after a cd
+cargo test -p cf-cleanup real_dialog -- --ignored --nocapture     # shows a message box for a moment
+```
+
 ## 4. Not built yet
 
-Apps, their windows, browser tabs and VS Code folders come back. Not built yet: VS Code's open files, terminal directories, and the contents of any other app (only their windows return). Tab and folder comparison in `diff` is also not built yet.
+VS Code's open files, the folder a PowerShell tab moved to, pinned tabs and tab groups, the other tabs of an Explorer window, and the contents of any app without an integration (only its windows return). Tab and folder comparison in `diff` is also not built. The full list, in order, is in [ROADMAP.md](ROADMAP.md).
 
 ## 5. Reporting a problem
 

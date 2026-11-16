@@ -31,8 +31,6 @@ cf-cleanup.workspace = true
 cf-config.workspace = true
 cf-core.workspace = true
 cf-diff.workspace = true
-cf-engine.workspace = true
-cf-git.workspace = true
 cf-ipc.workspace = true
 cf-storage.workspace = true
 cf-detect.workspace = true
@@ -40,13 +38,8 @@ cf-windows.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
-hex.workspace = true
-image.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tracing.workspace = true
-tracing-appender.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

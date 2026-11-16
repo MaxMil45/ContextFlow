@@ -1,6 +1,6 @@
 name: Release
 
-# Push a version tag (for example `v0.2.0`) and the installer is built and
+# Push a version tag (for example `v0.1.0`) and the installer is built and
 # attached to a GitHub Release for people to download.
 on:
   push:

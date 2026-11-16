@@ -166,7 +166,7 @@ Each workspace can close the programs that distract from it, and free their memo
 * **When I enter this workspace** (when you restore it): for example Discord, Steam, the Epic launcher.
 * **When I leave this workspace** (when you restore a different one, or choose *Leave workspace*): for example Docker Desktop.
 
-Each program is either **Close nicely** (ask it to close like its close button; if it stays open, for example because it hides to the tray, it is left running and reported) or **Force close** (ask first, wait a few seconds, then end it if it is still running). Before anything closes, the app shows what is running now, how many processes, how much memory and CPU closing it would free, and asks you to confirm when you close programs by hand. Programs the workspace itself restores are never closed by its own cleanup.
+Each program is either **Close nicely** (ask it to close like its close button; if it stays open, for example because it hides to the tray, it is left running and reported) or **Force close** (ask first, wait a few seconds, then end it if it is still running; a program that is showing a dialog, such as "Save changes?", is left running and reported instead). Before anything closes, the app shows what is running now, how many processes, how much memory and CPU closing it would free, and asks you to confirm when you close programs by hand. Programs the workspace itself restores are never closed by its own cleanup.
 
 ```bash
 contextflow cleanup apps                              # what is running, with memory and CPU
@@ -189,7 +189,7 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `cf-storage` | SQLite (WAL, FK, migrations), immutable snapshots enforced by triggers |
 | `cf-config` | `config.toml` loading and validation |
 | `cf-browser` | Browser extension protocol, native-messaging host, tab matching and install |
-| `cf-detect` | Works out which folder, solution or project each VS Code, Visual Studio, JetBrains IDE and File Explorer window has open |
+| `cf-detect` | Works out which folder, solution or project each VS Code, Visual Studio, JetBrains IDE and File Explorer window has open, and the folder of each Windows Terminal tab |
 | `cf-git` | Read-only Git inspection (`status --porcelain=v2`, `--no-optional-locks`) |
 | `cf-diff` | Context Diff across apps, windows, monitors, Git and notes |
 | `cf-windows` | Win32 window and monitor discovery (per-monitor DPI aware) |
@@ -201,6 +201,8 @@ Cleanup also runs when a desktop icon restores the workspace. Matching is by pro
 | `app/src-tauri` | Tauri desktop app (`contextflow-app`): thin commands over `cf-app` and the crates above, React UI in `app/src` |
 
 ## Development
+
+How it is built: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). What is left to do and ideas: [docs/ROADMAP.md](docs/ROADMAP.md). How to test, including on a real desktop: [docs/TESTING.md](docs/TESTING.md).
 
 ```bash
 cargo test --workspace
@@ -214,4 +216,4 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ContextFlow never mutates Git repositories, never overwrites newer files and never stores credentials or cookies. Every restore step reports an explicit status.
 
-It closes a program only if you listed it in a workspace's cleanup rules (see above). Closing always asks the program first; ending one that ignores the request ("force close") is a separate choice you make per program, and the preview and confirmation say that unsaved work in it is lost. Critical Windows programs, and any program running ContextFlow itself, are never closed.
+It closes a program only if you listed it in a workspace's cleanup rules (see above). Closing always asks the program first; ending one that ignores the request ("force close") is a separate choice you make per program, and the preview and confirmation say that unsaved work in it is lost. A program that answers the request with a dialog box is not ended. Critical Windows programs, and any program running ContextFlow itself, are never closed.

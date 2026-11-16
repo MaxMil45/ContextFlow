@@ -67,9 +67,9 @@ Only one switch runs at a time on the machine, whichever front end asked.
 
 | Part | Lines | What it is |
 |---|---|---|
-| Rust, 13 crates and the app backend | about 28,700 | 380 tests passing |
+| Rust, 13 crates and the app backend | about 29,100 | 387 tests passing, 4 more run by hand |
 | Desktop app UI (`app/src`) | about 5,500 | React |
-| Docs | about 1,900 current, 1,000 in `docs/history/` | See section 6 |
+| Docs | about 2,600 current, 1,000 in `docs/history/` | See section 6 |
 
 ---
 
@@ -87,7 +87,9 @@ All are done.
 | 5 | First run and setup | "Save what's open now" on first run. (The two setup chores are still open: see section 4.) |
 | 6 | Show it | The README leads with the one-key switch. (The recording is still missing.) |
 
-Done since, beyond the plan: the CLI help leads with the everyday commands and
+Done since, beyond the plan: force close never ends a program that is
+showing a dialog (it is probably asking to save); ten unused dependencies were
+removed; the CLI help leads with the everyday commands and
 hides the advanced ones; the "leaving" and "entering" cleanups run together;
 the first poll starts at 25 ms; the History tab can delete all older versions; the snapshot fingerprint no longer changes between
 identical desks; fixed pauses replaced by place-at-once-then-recheck; cleanup
@@ -98,45 +100,22 @@ Windows Terminal folders and tabs are saved and reopened.
 
 ---
 
-## 4. What is still to do, in order of importance
+## 4. What is still to do
 
-**Before announcing it**
+The full list, in order, with sizes and the test for "done", is
+[ROADMAP.md](ROADMAP.md). In short:
 
-1. Record the 20-second switch for the top of the README (in progress).
-2. Reinstall to try the current app build, and tag a release (`v0.2.0`): the
-   release workflow then builds the installer and attaches it to a GitHub Release.
-
-**Decided for now: distributed through GitHub.** The installer is unsigned
-(SmartScreen warns once; the README says how to continue) and the browser
-extension is installed with Developer mode. Store publishing and code signing
-need accounts and a certificate and can come later; the build script already
-supports signing (`CONTEXTFLOW_SIGN_THUMBPRINT`), and store ids would go in
-`crates/cf-browser/src/install.rs`.
-
-**Correctness gaps**
-
-3. Try the parts only tested with fakes on a real desk: stacking and focus,
-   cleanup with real programs, tabbed Explorer windows.
-4. Browser profile isolation (work and personal tabs in the right profile).
-5. Identifying editor and browser windows by more than their title.
-6. Windows on other virtual desktops.
-
-**Features and polish**
-
-7. Pinned tabs and tab groups (needs a two-way extension channel).
-8. Save every tab of a tabbed Explorer window.
-
-**Later, only with evidence**
-
-9. An event-driven window hook (the first poll already starts at 25 ms).
-10. One database connection owned by the tray app.
-11. Streaming progress to the plain CLI output (the on-screen card already
-    shows it for icon launches).
-12. The two-placement "jump", if windows are seen moving twice.
-13. Wishlist: audio pause, switching on Wi-Fi or docking, calendar trigger.
-
-The same open items, with their trade-offs, are in section 12 of
-[SOFTWARE_ARCHITECTURE.md](SOFTWARE_ARCHITECTURE.md).
+* **For the owner:** try the current build on a real desk (several features
+  have only been tested with a fake desktop), record the switch for the
+  README, tag the first release (`v0.1.0`).
+* **Next improvements:** pinned tabs and tab groups (a channel from the app to
+  the browser extension), browser profiles, PowerShell's current folder,
+  telling windows apart by more than their title.
+* **Decided for now:** distributed through GitHub, with an unsigned installer
+  and the extension installed with Developer mode. Store publishing and code
+  signing come later.
+* **Only with evidence:** event-driven window detection, one database
+  connection, progress streamed to the command line, database encryption.
 
 ---
 
@@ -160,6 +139,7 @@ The same open items, with their trade-offs, are in section 12 of
 | [README.md](../README.md) | What it is, install, the main commands |
 | [COMMANDS.md](COMMANDS.md) | Every `contextflow` command and option |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | This page |
+| [ROADMAP.md](ROADMAP.md) | What is left to do, improvements in order, ideas, and what was turned down |
 | [SOFTWARE_ARCHITECTURE.md](SOFTWARE_ARCHITECTURE.md) | The full technical description |
 | [AGENT.md](AGENT.md) | The pipe the icon and CLI use: access checks, protocol, fallback |
 | [TESTING.md](TESTING.md) | How to test, including on a real desktop |

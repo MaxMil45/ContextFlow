@@ -39,16 +39,28 @@ without doing it.
 
 ## Install
 
-Build the per-user installer (no admin prompt) with
-`powershell -File scripts\build-installer.ps1`; see [app/README.md](app/README.md).
-Or install just the command-line programs (`contextflow` and the windowless
-`contextflow-launch`), with Rust 1.80+ (MSVC toolchain):
+**Download the installer** from the [Releases page](../../releases): run
+`ContextFlow_<version>_x64-setup.exe`. It installs for your user only, with no
+admin prompt.
+
+The installer is not code-signed yet, so Windows SmartScreen may say it
+protected your PC. Click **More info**, then **Run anyway**. The source is all
+here, and you can build the same installer yourself:
+
+```bash
+powershell -File scriptsuild-installer.ps1
+```
+
+(see [app/README.md](app/README.md)). Or install just the command-line
+programs (`contextflow` and the windowless `contextflow-launch`), with Rust
+1.80+ (MSVC toolchain):
 
 ```bash
 cargo install --path crates/cf-cli
 ```
 
-Browser tabs need a one-time setup: see [Reopening browser tabs](#reopening-browser-tabs-one-time-setup).
+Browser tabs need a one-time setup (the extension isn't in the Chrome or Edge
+store yet): see [Reopening browser tabs](#reopening-browser-tabs-one-time-setup).
 
 ## What comes back
 
@@ -57,6 +69,9 @@ Browser tabs need a one-time setup: see [Reopening browser tabs](#reopening-brow
   opens twice if you switch again, and anything that didn't come back is named.
 * **Chrome and Edge tabs, VS Code and File Explorer folders, Visual Studio
   solutions and JetBrains projects** reopen in their own windows.
+* **Windows Terminal windows** reopen with a tab per folder. PowerShell tabs
+  come back in the folder they were started in (PowerShell doesn't report a
+  `cd`); `cmd` tabs in the folder they were in.
 * **Programs that distract from a workspace** can close themselves as you enter
   it (see [Workspace Cleanup](#workspace-cleanup-focus-rules-in-the-app)), and a
   workspace can run its own start and stop commands, such as a dev server.
@@ -74,7 +89,7 @@ The app (see [app/README.md](app/README.md)) does everything the command line do
 * **Health check:** Settings → Advanced (or `contextflow doctor`) checks the database, backups, the browser extension, shortcuts and more, and can save a diagnostics report for bug reports. The database is copied next to itself before any update changes its schema.
 * **Park and resume:** Park puts the workspace you're in aside (with a note) to deal with something else; Resume (sidebar, tray or Ctrl+K) brings you straight back, even through several interruptions.
 * **Timeline:** every switch, park, resume and leave, with your notes and a way back.
-* **Start and stop commands** per workspace (Focus rules tab): start a dev server or containers when you enter, stop them when you leave. Run exactly as written (never through a shell, never elevated), only for workspaces you created or approved, and never exported.
+* **Start and stop commands** per workspace (Focus rules tab): start a dev server or containers when you enter, stop them when you leave. Run exactly as written (never through a shell, never elevated), only for workspaces you created or approved, and never exported. They are also how to open a particular project in an app that is already running, such as an Obsidian vault (`Obsidian.exe "obsidian://open?vault=Work"`): see [docs/COMMANDS.md](docs/COMMANDS.md#opening-a-specific-project-in-a-one-window-app-obsidian-vaults-and-similar).
 * **Search what you saved:** Ctrl+K also finds tabs, folders, notes and branches inside your workspaces.
 * **JetBrains IDEs** (IntelliJ, PyCharm, CLion, WebStorm, Rider...) reopen their projects.
 * **Privacy:** keep chosen window titles private (stored as "(hidden)"), and protect exports with a passphrase (AES-256-GCM, Argon2id). CLI: `export --encrypt` with `CONTEXTFLOW_PASSPHRASE`.
@@ -108,6 +123,8 @@ contextflow browser install
 Then in Chrome or Edge open `chrome://extensions` (or `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and choose the folder the command printed. `contextflow browser status` should then say the extension is connected. After that, `capture` saves each browser window's tabs and the desktop icon reopens them. The extension sees only tab addresses and titles; it cannot read cookies, history, passwords or page content, and it ignores private windows. Keep a tab out of saves with `excluded_url_patterns` in the config.
 
 ## Commands
+
+Every command and option is in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 | Command | Purpose |
 |---|---|

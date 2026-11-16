@@ -27,6 +27,9 @@ pub trait Processes {
     /// Ask a process to close; returns how many windows were asked.
     fn request_close(&self, pid: u32) -> usize;
     fn terminate(&self, pid: u32) -> Result<(), String>;
+    /// Whether the process is showing a dialog box (most likely "save your
+    /// changes?"). Ending it then would throw that work away.
+    fn has_open_prompt(&self, pid: u32) -> bool;
     /// The session cleanup may act in; processes in other sessions are left alone.
     fn own_session(&self) -> Option<u32>;
     /// ContextFlow itself and the programs that started it: never closed.
@@ -317,6 +320,8 @@ struct Asked<'a> {
     remaining: Vec<u32>,
     /// Why some of them could not be ended, if they could not.
     errors: Vec<String>,
+    /// Processes that were left running because they are showing a dialog.
+    held_back: Vec<u32>,
 }
 
 impl Asked<'_> {
@@ -386,6 +391,7 @@ pub fn run(
                 asked,
                 remaining: pids,
                 errors: Vec::new(),
+                held_back: Vec::new(),
             })
         })
         .collect();
@@ -406,12 +412,20 @@ pub fn run(
 
     // 3. What is still running: end it (force mode), all at once, and give
     // them one poll to go.
+    //
+    // Except a program that is showing a dialog: it is most likely asking
+    // whether to save, and ending it would lose that work. It is left running
+    // and reported, so the user can answer it.
     let mut ended = false;
     for a in steps.iter_mut().flatten() {
         if a.target.mode == CloseMode::Force {
-            for pid in &a.remaining {
+            for pid in a.remaining.clone() {
+                if procs.has_open_prompt(pid) {
+                    a.held_back.push(pid);
+                    continue;
+                }
                 ended = true;
-                if let Err(e) = procs.terminate(*pid) {
+                if let Err(e) = procs.terminate(pid) {
                     a.errors.push(e);
                 }
             }
@@ -439,6 +453,13 @@ pub fn run(
             if a.remaining.is_empty() {
                 return result(t, Outcome::Closed, "closed");
             }
+            if !a.held_back.is_empty() && a.held_back.iter().any(|p| left.contains(p)) {
+                return result(
+                    t,
+                    Outcome::StillRunning,
+                    "not ended: it is showing a dialog, probably asking whether to save.                      Answer it, then close the program",
+                );
+            }
             if t.mode == CloseMode::Graceful {
                 let why = if a.asked == 0 {
                     "it has no window to ask"
@@ -459,11 +480,17 @@ pub fn run(
                 );
             }
             tracing::warn!(process = %t.process, errors = ?a.errors, "cleanup could not end a program");
+            // Windows refuses to let a normal program end an elevated one.
+            let hint = a
+                .errors
+                .first()
+                .filter(|e| e.to_lowercase().contains("denied"))
+                .map_or("", |_| " (it may be running as administrator)");
             result(
                 t,
                 Outcome::Failed,
                 format!(
-                    "could not end it{}",
+                    "could not end it{}{hint}",
                     a.errors
                         .first()
                         .map(|e| format!(": {e}"))

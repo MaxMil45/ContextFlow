@@ -1,0 +1,39 @@
+name: Release
+
+# Push a version tag (for example `v0.2.0`) and the installer is built and
+# attached to a GitHub Release for people to download.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    name: installer (Windows, per-user NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Unsigned unless a certificate thumbprint is provided as a secret.
+      - name: Build installer
+        shell: pwsh
+        env:
+          CONTEXTFLOW_SIGN_THUMBPRINT: ${{ secrets.CONTEXTFLOW_SIGN_THUMBPRINT }}
+        run: ./scripts/build-installer.ps1
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/nsis/*.exe
+          generate_release_notes: true

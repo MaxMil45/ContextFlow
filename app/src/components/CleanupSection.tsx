@@ -305,7 +305,7 @@ function CleanupSide({
           </p>
           {anyForce && (
             <p className="muted small">
-              Force close ends a program if it doesn't close when asked. Anything unsaved in it is lost.
+              Force close ends a program if it doesn't close when asked. Anything unsaved in it is lost, except that a program showing a dialog (such as "Save changes?") is left running for you to answer.
             </p>
           )}
         </ConfirmDialog>

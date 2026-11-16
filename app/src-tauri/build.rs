@@ -27,6 +27,7 @@ fn main() {
         "delete_workspace",
         "set_pinned_version",
         "delete_snapshot",
+        "delete_old_snapshots",
         "get_trust_review",
         "approve_workspace",
         "list_running_apps",

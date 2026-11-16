@@ -207,6 +207,43 @@ mod tests {
         assert!(!missing.ok && missing.message.contains("couldn't find"));
     }
 
+    /// The way to open a vault or project in an app that is already running:
+    /// a start command whose argument is an address. The program receives it
+    /// exactly as typed, as one argument.
+    #[test]
+    fn an_address_argument_reaches_the_program_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("show.ps1");
+        let out = dir.path().join("out.txt");
+        std::fs::write(
+            &script,
+            format!(
+                "Set-Content -NoNewline -Path '{}' -Value ($args.Count.ToString() + '|' + $args[0])",
+                out.display()
+            ),
+        )
+        .unwrap();
+        let uri = "obsidian://open?vault=My%20Work&file=a";
+        let r = run(
+            &spec(
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    &script.to_string_lossy(),
+                    uri,
+                ],
+                true,
+            ),
+            "W",
+            "start",
+        );
+        assert!(r.ok, "{r:?}");
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), format!("1|{uri}"));
+    }
+
     #[test]
     fn the_command_line_is_shown_as_written() {
         assert_eq!(

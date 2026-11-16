@@ -17,11 +17,24 @@ use cf_config::Config;
 use cf_core::redact;
 use cf_storage::Database;
 
+/// Shown at the end of `contextflow --help`: the commands that are hidden from
+/// the list above so the everyday ones stand out. They all still work.
+const ADVANCED_HELP: &str = "Advanced commands (each has its own --help):
+  snapshots, show, diff     Look at a workspace's saved versions
+  delete-snapshot, prune    Remove old versions
+  verify, backup            Check and copy the database
+  export, import            Move workspaces between computers
+  config, info              Settings and where things are kept
+  windows                   List the windows ContextFlow can see (names for --only)
+
+Everything is described in docs/COMMANDS.md.";
+
 #[derive(Parser)]
 #[command(
     name = "contextflow",
     version,
-    about = "Capture your environment. Preserve your progress. Resume exactly where you left off."
+    about = "Capture your environment. Preserve your progress. Resume exactly where you left off.",
+    after_help = ADVANCED_HELP
 )]
 struct Cli {
     /// Database file. Overrides `storage.database_path` in the config.
@@ -90,31 +103,6 @@ pub(crate) enum Command {
         no_save: bool,
     },
 
-    /// Programs a workspace closes when you enter or leave it.
-    #[command(subcommand)]
-    Cleanup(CleanupCmd),
-
-    /// Check what commonly stops ContextFlow from working, and how to fix it.
-    Doctor,
-
-    /// Leave the active workspace: save it, then run its "when leaving" cleanup.
-    Leave {
-        /// A note for the workspace, shown first when you come back.
-        #[arg(long)]
-        note: Option<String>,
-    },
-
-    /// Make restore (and the desktop icon) always use one snapshot version
-    /// (default: the latest).
-    Pin {
-        workspace: String,
-        #[arg(long)]
-        version: Option<u32>,
-    },
-
-    /// Go back to restoring the latest snapshot.
-    Unpin { workspace: String },
-
     /// Create a desktop icon that restores a workspace with a double-click.
     Shortcut {
         workspace: String,
@@ -136,10 +124,41 @@ pub(crate) enum Command {
         default_icon: bool,
     },
 
+    /// Leave the active workspace: save it, then run its "when leaving" cleanup.
+    Leave {
+        /// A note for the workspace, shown first when you come back.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Programs a workspace closes when you enter or leave it.
+    #[command(subcommand)]
+    Cleanup(CleanupCmd),
+
+    /// Check what commonly stops ContextFlow from working, and how to fix it.
+    Doctor,
+
+    /// Make restore (and the desktop icon) always use one snapshot version
+    /// (default: the latest).
+    Pin {
+        workspace: String,
+        #[arg(long)]
+        version: Option<u32>,
+    },
+
+    /// Go back to restoring the latest snapshot.
+    Unpin { workspace: String },
+
+    /// Set up and check the Chrome/Edge extension that saves your open tabs.
+    #[command(subcommand)]
+    Browser(BrowserCmd),
+
     /// List a workspace's snapshot history.
+    #[command(hide = true)]
     Snapshots { workspace: String },
 
     /// Show a snapshot (latest by default).
+    #[command(hide = true)]
     Show {
         workspace: String,
         #[arg(long)]
@@ -149,6 +168,7 @@ pub(crate) enum Command {
     },
 
     /// Compare two snapshots, or a snapshot with the live environment.
+    #[command(hide = true)]
     Diff {
         workspace: String,
         /// Base snapshot version.
@@ -165,6 +185,7 @@ pub(crate) enum Command {
     },
 
     /// Permanently delete one snapshot version.
+    #[command(hide = true)]
     DeleteSnapshot {
         workspace: String,
         #[arg(long)]
@@ -176,6 +197,7 @@ pub(crate) enum Command {
 
     /// Delete old snapshots according to the retention rules. Shows what would
     /// be deleted unless --yes is given. The latest snapshot is always kept.
+    #[command(hide = true)]
     Prune {
         /// Workspace to prune (omit with --all).
         workspace: Option<String>,
@@ -192,6 +214,7 @@ pub(crate) enum Command {
     },
 
     /// Export workspaces (with full history) to a JSON file.
+    #[command(hide = true)]
     Export {
         workspaces: Vec<String>,
         #[arg(long, conflicts_with = "workspaces")]
@@ -207,6 +230,7 @@ pub(crate) enum Command {
     },
 
     /// Import workspaces from an export file. Hashes are verified first.
+    #[command(hide = true)]
     Import {
         file: PathBuf,
         /// Import under a different name (single-workspace files only).
@@ -215,6 +239,7 @@ pub(crate) enum Command {
     },
 
     /// Write a consistent copy of the whole database.
+    #[command(hide = true)]
     Backup {
         /// Destination file (default: backups folder next to the database).
         #[arg(long)]
@@ -222,6 +247,7 @@ pub(crate) enum Command {
     },
 
     /// Verify snapshot hashes and database health (all workspaces by default).
+    #[command(hide = true)]
     Verify {
         workspace: Option<String>,
         #[arg(long, requires = "workspace")]
@@ -229,17 +255,16 @@ pub(crate) enum Command {
     },
 
     /// Show or create the configuration file.
+    #[command(hide = true)]
     #[command(subcommand)]
     Config(ConfigCmd),
 
-    /// Set up and check the Chrome/Edge extension that saves your open tabs.
-    #[command(subcommand)]
-    Browser(BrowserCmd),
-
     /// Show where ContextFlow keeps its database, config and logs.
+    #[command(hide = true)]
     Info,
 
     /// Debug: list the windows ContextFlow can currently see.
+    #[command(hide = true)]
     Windows {
         #[arg(long)]
         json: bool,

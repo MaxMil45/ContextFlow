@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-old-snapshots"
+description = "Enables the delete_old_snapshots command without any pre-configured scope."
+commands.allow = ["delete_old_snapshots"]
+
+[[permission]]
+identifier = "deny-delete-old-snapshots"
+description = "Denies the delete_old_snapshots command without any pre-configured scope."
+commands.deny = ["delete_old_snapshots"]

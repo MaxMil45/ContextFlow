@@ -728,6 +728,26 @@ pub async fn delete_snapshot(
     .await
 }
 
+/// Delete every version of a workspace except the newest and a pinned one, and
+/// return the versions that were deleted. For clearing out test saves.
+#[tauri::command]
+pub async fn delete_old_snapshots(
+    state: State<'_, AppState>,
+    workspace: String,
+) -> CmdResult<Vec<u32>> {
+    let path = state.paths.db.clone();
+    blocking(move || {
+        let mut db = open(&path)?;
+        let ctx = db.find_context(&workspace)?;
+        let policy = RetentionPolicy {
+            keep_last: Some(1),
+            max_age: None,
+        };
+        Ok(db.prune(ctx.id, &policy, Utc::now())?)
+    })
+    .await
+}
+
 /// Every program the workspace could start, for the approval dialog.
 #[tauri::command]
 pub async fn get_trust_review(

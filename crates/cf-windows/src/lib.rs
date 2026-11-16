@@ -153,6 +153,20 @@ pub fn request_close(pid: u32) -> usize {
     }
 }
 
+/// Whether the process is showing a dialog box, such as "Save changes?".
+/// Always `false` off Windows.
+pub fn has_open_prompt(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        processes::has_open_prompt(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 /// End a process immediately; its unsaved work is lost.
 pub fn terminate_process(pid: u32) -> Result<()> {
     #[cfg(windows)]

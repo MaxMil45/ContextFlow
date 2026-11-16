@@ -81,7 +81,7 @@ pub(crate) fn wait_for_new_window(
     meanwhile: &mut dyn FnMut(),
 ) -> Option<isize> {
     let deadline = Instant::now() + wait;
-    let mut poll = Duration::from_millis(100);
+    let mut poll = Duration::from_millis(25);
     loop {
         let found = desktop.windows().ok().and_then(|ws| {
             ws.iter()

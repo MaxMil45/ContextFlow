@@ -22,6 +22,10 @@ impl Processes for WindowsProcesses {
         cf_windows::terminate_process(pid).map_err(|e| e.to_string())
     }
 
+    fn has_open_prompt(&self, pid: u32) -> bool {
+        cf_windows::has_open_prompt(pid)
+    }
+
     fn own_session(&self) -> Option<u32> {
         cf_windows::current_session()
     }

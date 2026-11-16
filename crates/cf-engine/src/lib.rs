@@ -773,7 +773,7 @@ pub fn restore(
 
     // 5. Whatever was started and is not in place yet: wait for all of them
     // together, so the total is bounded by the slowest, not the sum.
-    let mut poll = Duration::from_millis(50);
+    let mut poll = Duration::from_millis(25);
     loop {
         place_ready(
             desktop,

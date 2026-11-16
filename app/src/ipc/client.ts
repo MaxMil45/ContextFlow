@@ -164,6 +164,9 @@ export const api = {
   deleteSnapshot: (workspace: string, version: number) =>
     call<void>("delete_snapshot", { workspace, version }),
 
+  /** Deletes all but the newest (and a pinned) version; returns the deleted ones. */
+  deleteOldSnapshots: (workspace: string) => call<number[]>("delete_old_snapshots", { workspace }),
+
   getTrustReview: (workspace: string) => call<TrustReview>("get_trust_review", { workspace }),
 
   approveWorkspace: (workspace: string) => call<WorkspaceSummary>("approve_workspace", { workspace }),

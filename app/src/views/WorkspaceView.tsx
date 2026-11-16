@@ -92,6 +92,7 @@ type Dialog =
   | "leave"
   | "park"
   | "export"
+  | "deleteOld"
   | { deleteVersion: number }
   | { compare: { from: number; to?: number } };
 
@@ -446,6 +447,16 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   <h3>
                     <History size={15} aria-hidden /> Saved versions
                   </h3>
+                  {(history.data?.length ?? 0) > 1 && (
+                    <button
+                      className="ghost icon"
+                      aria-label="Delete older versions"
+                      data-tip="Delete older versions"
+                      onClick={() => setDialog("deleteOld")}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                 </header>
                 {history.error && <ErrorBanner error={history.error} />}
                 {history.loading && !history.data && <SkeletonList rows={3} />}
@@ -583,6 +594,26 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
           to={dialog.compare.to}
           onClose={() => setDialog(undefined)}
         />
+      )}
+      {dialog === "deleteOld" && (
+        <ConfirmDialog
+          title="Delete older versions?"
+          confirmLabel="Delete older versions"
+          danger
+          action={async () => {
+            const deleted = await api.deleteOldSnapshots(id);
+            setSelectedVersion(undefined);
+            refresh();
+            toast.show(deleted.length ? `Deleted ${deleted.length} older version(s) of “${name}”` : "Nothing older to delete");
+          }}
+          onClose={() => setDialog(undefined)}
+        >
+          <p>
+            This permanently deletes every saved version of <strong>{name}</strong> except the newest
+            {workspace.pinnedVersion ? ` and the pinned version (v${workspace.pinnedVersion})` : ""}. Version numbers are
+            not reused. Use it to clear out test saves.
+          </p>
+        </ConfirmDialog>
       )}
       {typeof dialog === "object" && "deleteVersion" in dialog && (
         <ConfirmDialog

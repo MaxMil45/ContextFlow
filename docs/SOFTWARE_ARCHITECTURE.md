@@ -524,11 +524,22 @@ restore_workspace(workspace, args):
 > and every safety check are unchanged; programs that need ending by force
 > are ended together, too.
 >
-> **Trade-off.** The "leaving" and "entering" cleanups are still two separate
-> runs one after the other on that thread, so a workspace with stubborn
-> programs on both sides can keep it busy for two waits. That only delays the
-> report, not the desk. Merging them needs care when the same program is
-> named on both sides.
+> **A program with a dialog open is never force-ended.** Force mode ends a
+> program that ignores the close request. A program that answered the request
+> with "Save changes?" is also still running, and ending it would lose exactly
+> the work the user would have saved. So before ending anything, the program's
+> windows are checked for a dialog (a visible popup of a window, or a standard
+> Windows dialog box); if one is open, the program is left alone and reported
+> as still running, with the reason. A hung program has no such dialog and is
+> still ended, which is what force mode is for. Limit: apps that draw their own
+> prompt inside the window (Electron apps, for instance) can't be recognised
+> this way, so force mode can still end them; the app warns about that.
+>
+> **The two cleanups run together.** The "leaving" and "entering" cleanups are
+> independent, so each runs on its own thread and the results keep their order
+> (leaving first). A program named by both is closed by the first only, so it
+> is never asked twice or ended after it has already gone. With stubborn
+> programs on both sides the wait is one 6 s, not two.
 >
 > **Why "only if anything came back".** A switch where every app failed
 > should not claim you are now in that workspace; the next switch would
@@ -587,7 +598,7 @@ constant); its windows are then placed again, and only then is it reported.
 > splash screen, the real window jumps into place a moment later instead of
 > appearing there directly.
 
-**Polling** starts at 50 ms and doubles up to 500 ms (constant).
+**Polling** starts at 25 ms and doubles up to 500 ms (constant).
 
 > **Why polling and not events.** Windows has event hooks for window
 > creation (`SetWinEventHook`), but polling is simpler, easy to fake in tests,
@@ -1110,10 +1121,7 @@ its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
 
 ### 11.4 The biggest levers, in order (estimates)
 
-1. **Run the "leaving" and "entering" cleanups together.** They still run one
-   after the other on the cleanup thread. Not measured on a real setup (none
-   of the workspaces on the development machine has cleanup rules).
-2. **Open several browser windows at once**: removes the one-after-another
+1. **Open several browser windows at once**: removes the one-after-another
    wait, if window identification can be kept reliable.
 
 ---
@@ -1126,11 +1134,10 @@ its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
 |---|---|---|---|
 | 1 | Editors and browsers are identified by **title** | Ambiguous or changed titles mean "not saved" or a window paired with the wrong saved position. Explorer no longer has this problem (it is matched by window handle). | Not by command line (VS Code and other Electron apps run one process for all windows), and not by window class (all windows of an app share it). Candidates: more signals together (position, process start order), or an extension for VS Code. |
 | 2 | **Polling** the desktop | Up to 500 ms delay before a ready window is noticed; repeated scans. | WinEvent hooks (`EVENT_OBJECT_SHOW`, `EVENT_OBJECT_LOCATIONCHANGE`) feeding a live model of the desktop in the tray app. |
-| 3 | **Progress isn't streamed over the pipe** | The CLI prints the icon/CLI progress lines only at the end. | Send progress frames before the final reply (a protocol v3). |
-| 4 | **Cleanup before restore** | A slow-closing program delays the whole switch. | Run "when entering" cleanup after placement, in parallel. |
-| 5 | **Many database connections** | Each program re-reads config and schema. | Let the tray app own the only connection; others ask over the pipe. |
-| 6 | **Browser extension needs Developer mode** | The biggest setup hurdle for a new user. | Publish to the Chrome and Edge stores; add their extension ids to the host's allowed list. |
-| 7 | **Unsigned installer** | Windows warns on first run. | Sign with a code-signing certificate (the build script already supports it). |
+| 3 | **Progress isn't streamed over the pipe** | Icon launches show live progress on the on-screen card (the app serves them); the plain CLI prints its progress lines only at the end. | Send progress frames before the final reply (a protocol v3). |
+| 4 | **Many database connections** | Each program re-reads config and schema. | Let the tray app own the only connection; others ask over the pipe. |
+| 5 | **Browser extension needs Developer mode** | The biggest setup hurdle for a new user. | Publish to the Chrome and Edge stores; add their extension ids to the host's allowed list. |
+| 6 | **Unsigned installer** | Windows warns on first run. | Sign with a code-signing certificate (the build script already supports it). |
 
 Fixed in November 2026, and explained where they are described:
 
@@ -1276,7 +1283,7 @@ Requests name a workspace, never a path, program or command line. Details:
 | Whole-restore limit | 120 s | config `timeouts.restore_overall_secs` |
 | Settle after a started app's windows stop changing (final placement) | 1.5 s | `RestoreOptions::default` |
 | Second placement of a new browser/editor window | after ≤ 750 ms | `window_open.rs` |
-| Poll interval | 50 ms → 500 ms | `cf-engine` |
+| Poll interval | 25 ms → 500 ms | `cf-engine` |
 | Closing a program nicely | 6 s | `cf-cleanup` |
 | CPU sample for the cleanup preview | 600 ms, reused for 3 s | `session.rs` |
 | Live tab file freshness | 120 s (extension sends every 20 s) | `cf-browser` |

@@ -261,6 +261,45 @@ fn run_cleanup(
     Some(execute_cleanup(&job, keep))
 }
 
+/// A program named by an earlier job is left out of the later ones: it is
+/// already being closed, and asking twice would only report a second, confusing
+/// outcome (or try to end a process that has just gone).
+fn drop_repeats(jobs: &mut [CleanupJob]) {
+    let mut seen: HashSet<String> = HashSet::new();
+    for job in jobs {
+        let named: Vec<String> = job
+            .targets
+            .iter()
+            .map(|t| t.process.to_lowercase())
+            .collect();
+        let mut keep_flags = named.iter().map(|n| !seen.contains(n));
+        job.targets.retain(|_| keep_flags.next().unwrap_or(true));
+        seen.extend(named);
+    }
+}
+
+/// Run `work` for every item at once, each on its own thread, and return the
+/// results in the order of `items`. An item whose thread panicked has no result.
+fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .iter()
+            .map(|item| {
+                let work = &work;
+                scope.spawn(move || work(item))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| {
+                h.join()
+                    .map_err(|_| tracing::warn!("a cleanup stopped unexpectedly"))
+                    .ok()
+            })
+            .collect()
+    })
+}
+
 /// Run `background` on a thread of its own while `foreground` runs here.
 /// Returns both results, and how long `background` was still running after
 /// `foreground` had finished (zero when it was done first). A panic in
@@ -593,6 +632,7 @@ pub fn restore_workspace(
             workspace: ctx.name.clone(),
             targets: db.cleanup_config(ctx.id)?.on_enter,
         });
+        drop_repeats(&mut jobs);
         jobs.retain(|j| !j.targets.is_empty());
         for job in &jobs {
             log(cleanup_intro(job.phase));
@@ -614,11 +654,7 @@ pub fn restore_workspace(
     // The cleanup runs on its own thread while the desk comes up. The first
     // thing it can affect is the report, so it is waited for before that.
     let (run, cleanups, cleanup_wait) = alongside(
-        || {
-            jobs.iter()
-                .map(|job| execute_cleanup(job, &keep))
-                .collect::<Vec<_>>()
-        },
+        || in_parallel(&jobs, |job| execute_cleanup(job, &keep)),
         || cf_engine::restore(&WindowsDesktop, &snapshot.payload, &opts, log),
     );
     // The engine counts from its own start; the switch began earlier.
@@ -734,7 +770,62 @@ mod tests {
         );
     }
 
+    use super::{CleanupJob, CleanupPhase};
+    use cf_core::CleanupTarget;
     use std::time::Duration;
+
+    fn target(name: &str) -> CleanupTarget {
+        CleanupTarget {
+            process: name.into(),
+            mode: Default::default(),
+        }
+    }
+
+    fn job(phase: CleanupPhase, names: &[&str]) -> CleanupJob {
+        CleanupJob {
+            phase,
+            workspace: "w".into(),
+            targets: names.iter().map(|n| target(n)).collect(),
+        }
+    }
+
+    #[test]
+    fn a_program_in_both_jobs_is_closed_by_the_first_only() {
+        let mut jobs = vec![
+            job(CleanupPhase::Leaving, &["Docker", "steam"]),
+            job(CleanupPhase::Entering, &["discord", "DOCKER", "steam"]),
+        ];
+        super::drop_repeats(&mut jobs);
+        let names = |j: &CleanupJob| {
+            j.targets
+                .iter()
+                .map(|t| t.process.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&jobs[0]), ["Docker", "steam"]);
+        assert_eq!(names(&jobs[1]), ["discord"]);
+    }
+
+    #[test]
+    fn jobs_run_at_the_same_time_and_results_keep_their_order() {
+        // Each job waits until the other has started: only possible if they
+        // run together.
+        let barrier = std::sync::Barrier::new(2);
+        let out = super::in_parallel(&[1, 2], |n| {
+            barrier.wait();
+            *n * 10
+        });
+        assert_eq!(out, [10, 20]);
+    }
+
+    #[test]
+    fn a_job_that_crashes_does_not_lose_the_others() {
+        let out = super::in_parallel(&[1, 2, 3], |n| {
+            assert!(*n != 2, "boom");
+            *n
+        });
+        assert_eq!(out, [1, 3]);
+    }
 
     /// The background work runs *while* the foreground does: it reports back
     /// to a foreground that is still waiting. Run one after the other, the

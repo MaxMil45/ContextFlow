@@ -28,6 +28,7 @@
     "allow-delete-workspace",
     "allow-set-pinned-version",
     "allow-delete-snapshot",
+    "allow-delete-old-snapshots",
     "allow-get-trust-review",
     "allow-approve-workspace",
     "allow-list-running-apps",

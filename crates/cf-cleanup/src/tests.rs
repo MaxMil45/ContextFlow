@@ -30,6 +30,8 @@ struct Fake {
     /// Programs with no window to ask.
     windowless: HashSet<String>,
     unkillable: HashSet<u32>,
+    /// Processes showing a dialog (asking to save).
+    prompting: HashSet<u32>,
     protected: HashSet<u32>,
     asked: RefCell<Vec<u32>>,
     terminated: RefCell<Vec<u32>>,
@@ -76,6 +78,9 @@ impl Processes for Fake {
         self.terminated.borrow_mut().push(pid);
         self.procs.borrow_mut().retain(|p| p.pid != pid);
         Ok(())
+    }
+    fn has_open_prompt(&self, pid: u32) -> bool {
+        self.prompting.contains(&pid)
     }
     fn own_session(&self) -> Option<u32> {
         Some(1)
@@ -286,6 +291,57 @@ fn force_mode_ends_a_program_that_ignores_the_request() {
 }
 
 #[test]
+fn force_mode_never_ends_a_program_that_is_asking_to_save() {
+    // Both programs ignore the request; only the first has a dialog open.
+    let mut d = Fake::with(vec![proc(10, "editor.exe", 100), proc(11, "steam.exe", 50)]);
+    d.prompting.insert(10);
+    let r = run(
+        &d,
+        &[
+            target("editor", CloseMode::Force),
+            target("steam", CloseMode::Force),
+        ],
+        &HashSet::new(),
+        &fast(),
+    );
+    assert_eq!(r[0].outcome, Outcome::StillRunning, "{r:?}");
+    assert!(r[0].message.contains("dialog"), "{}", r[0].message);
+    assert_eq!(r[1].outcome, Outcome::Terminated);
+    // The one with the dialog was never ended.
+    assert_eq!(*d.terminated.borrow(), vec![11]);
+    assert!(d.list().iter().any(|p| p.pid == 10));
+}
+
+#[test]
+fn a_dialog_only_holds_back_the_process_that_shows_it() {
+    // Two processes of one program: one asks to save, the other is ended.
+    let mut d = Fake::with(vec![proc(10, "app.exe", 100), proc(11, "app.exe", 50)]);
+    d.prompting.insert(10);
+    let r = run(
+        &d,
+        &[target("app", CloseMode::Force)],
+        &HashSet::new(),
+        &fast(),
+    );
+    assert_eq!(*d.terminated.borrow(), vec![11]);
+    assert_eq!(r[0].outcome, Outcome::StillRunning, "{r:?}");
+}
+
+#[test]
+fn graceful_mode_never_ends_anything_so_a_dialog_changes_nothing() {
+    let mut d = Fake::with(vec![proc(10, "editor.exe", 100)]);
+    d.prompting.insert(10);
+    let r = run(
+        &d,
+        &[target("editor", CloseMode::Graceful)],
+        &HashSet::new(),
+        &fast(),
+    );
+    assert!(d.terminated.borrow().is_empty());
+    assert_eq!(r[0].outcome, Outcome::StillRunning);
+}
+
+#[test]
 fn force_mode_does_not_wait_for_a_program_with_no_window() {
     let mut d = Fake::with(vec![proc(10, "daemon.exe", 100)]);
     d.windowless.insert("daemon".into());
@@ -339,6 +395,11 @@ fn an_unkillable_program_is_reported_and_the_rest_still_run() {
     assert!(
         r[0].message.contains("access is denied"),
         "{}",
+        r[0].message
+    );
+    assert!(
+        r[0].message.contains("administrator"),
+        "an access-denied failure says why: {}",
         r[0].message
     );
     assert_eq!(r[1].outcome, Outcome::Closed);
@@ -464,4 +525,43 @@ fn every_program_is_asked_before_any_is_ended_and_results_keep_their_order() {
     // All three that were running were asked, and only the force-mode one ended.
     assert_eq!(*d.asked.borrow(), vec![10, 11, 12]);
     assert_eq!(*d.terminated.borrow(), vec![10]);
+}
+
+/// The real check against a real dialog: a message box is opened in another
+/// process, found, and the process is ended by the test itself. Run with
+/// `cargo test -p cf-cleanup real_dialog -- --ignored --nocapture`. A message
+/// box appears on screen for a moment.
+#[test]
+#[ignore = "shows a real message box for a moment"]
+fn real_dialog_is_detected_and_a_plain_process_is_not() {
+    let mut plain = std::process::Command::new("cmd.exe")
+        .args(["/c", "ping -n 20 127.0.0.1 >nul"])
+        .spawn()
+        .unwrap();
+    let mut boxed = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Add-Type -AssemblyName System.Windows.Forms;              [void][System.Windows.Forms.MessageBox]::Show('ContextFlow test: please ignore')",
+        ])
+        .spawn()
+        .unwrap();
+    let mut seen = false;
+    for _ in 0..60 {
+        if cf_windows::has_open_prompt(boxed.id()) {
+            seen = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let plain_says = cf_windows::has_open_prompt(plain.id());
+    let _ = boxed.kill();
+    let _ = plain.kill();
+    let _ = boxed.wait();
+    let _ = plain.wait();
+    assert!(seen, "the message box was not found");
+    assert!(
+        !plain_says,
+        "a process with no window was said to have a dialog"
+    );
 }

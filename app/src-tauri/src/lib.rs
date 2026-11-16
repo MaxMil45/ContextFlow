@@ -105,6 +105,7 @@ pub fn run() {
             commands::delete_workspace,
             commands::set_pinned_version,
             commands::delete_snapshot,
+            commands::delete_old_snapshots,
             commands::get_trust_review,
             commands::approve_workspace,
             cleanup_commands::list_running_apps,

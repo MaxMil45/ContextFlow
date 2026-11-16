@@ -15,8 +15,8 @@ use windows_sys::Win32::System::Threading::{
     TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, GW_OWNER,
-    WM_CLOSE,
+    EnumWindows, GetClassNameW, GetLastActivePopup, GetWindow, GetWindowThreadProcessId,
+    IsWindowVisible, PostMessageW, GW_OWNER, WM_CLOSE,
 };
 
 use crate::ProcessInfo;
@@ -139,6 +139,49 @@ pub fn request_close(pid: u32) -> usize {
         EnumWindows(Some(post_close), &mut req as *mut CloseRequest as LPARAM);
     }
     req.sent
+}
+
+struct PromptSearch {
+    pid: u32,
+    found: bool,
+}
+
+/// The class every standard Windows dialog box has (message boxes, "Save
+/// changes?" prompts, file pickers).
+const DIALOG_CLASS: &str = "#32770";
+
+unsafe extern "system" fn look_for_prompt(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let search = &mut *(lparam as *mut PromptSearch);
+    let mut owner_pid = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut owner_pid);
+    if owner_pid != search.pid || IsWindowVisible(hwnd) == 0 {
+        return 1;
+    }
+    // A window with a visible popup of its own has a dialog open on it.
+    let popup = GetLastActivePopup(hwnd);
+    let mut class = [0u16; 64];
+    let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
+    if (popup != hwnd && IsWindowVisible(popup) != 0)
+        || String::from_utf16_lossy(&class[..len]) == DIALOG_CLASS
+    {
+        search.found = true;
+        return 0; // stop looking
+    }
+    1
+}
+
+/// Whether process `pid` is showing a dialog box (such as "Do you want to save
+/// changes?"), which closing it would leave waiting for an answer.
+pub fn has_open_prompt(pid: u32) -> bool {
+    let mut search = PromptSearch { pid, found: false };
+    // SAFETY: the callback only reads window properties; `search` outlives the call.
+    unsafe {
+        EnumWindows(
+            Some(look_for_prompt),
+            &mut search as *mut PromptSearch as LPARAM,
+        );
+    }
+    search.found
 }
 
 /// End a process immediately. Unsaved work in it is lost.

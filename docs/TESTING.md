@@ -30,6 +30,8 @@ cargo test --workspace
 | `cf-windows` | Monitors and windows can be enumerated on this machine |
 | `cf-engine` | Restore: launches apps and places windows; a missing app, a failed launch, a window that never appears, an elevated app and a missing monitor are each isolated; running it twice opens nothing twice |
 | `cf-detect` | Folders and projects of VS Code, Visual Studio, JetBrains IDEs, File Explorer (by window) and Windows Terminal (by its shells): matching, ties never guessed, unsafe or missing paths dropped |
+| `cf-browser` | The extension's messages are validated, the live tab files, matching tabs to windows, and pin requests: written once, passed on once per helper, expired and broken ones deleted |
+| `extensions/browser/test` | The extension's pinning against a fake browser: the right tabs, in order, once, ignoring other browsers (`node extensions/browser/test/pinning.test.js`) |
 | `cf-cleanup` | Protected programs are never closed, programs are asked together and waited for once, force close never ends a program that is showing a dialog |
 | `cf-app` | Capture, auto-save rules, the switch session (cleanup alongside the restore), start and stop commands, the service the app serves |
 | `cf-ipc` | The pipe: protocol, access checks, a server dying mid-request |
@@ -266,7 +268,8 @@ These were built with tests and small probes only. Each line is one check.
 5. **A smaller screen.** Capture two windows side by side on a large display, then restore with only the laptop screen. **Expect:** they are still side by side, each about half the screen.
 6. **Explorer with tabs.** Open one Explorer window with two or three tabs, capture, close, restore. **Expect:** one window showing the tab that was in front. To check the assumption behind it, run `cargo test -p cf-detect real_explorer -- --ignored --nocapture` with the window open: every tab should print the same window handle.
 7. **Delete older versions.** In a workspace with several versions, open History and press the bin above the list. **Expect:** it asks first, then only the newest version (and a pinned one) remain.
-8. **Opening a vault or project.** Add a start command such as `"...\Obsidian.exe" "obsidian://open?vault=Work"` to a workspace and switch in. **Expect:** the app shows that vault.
+8. **Pinned tabs.** Reload the extension in `chrome://extensions` (it should say version 0.3.0) after installing the new build. Pin two tabs in a Chrome window, capture, close Chrome, restore. **Expect:** the same two tabs are pinned, in the same order. Then close only that window with Chrome still open and restore again: the same. The helper's log (`browser\host.log` in the data folder that `contextflow info` shows) says "asked the extension to pin 2 tab(s)".
+9. **Opening a vault or project.** Add a start command such as `"...\Obsidian.exe" "obsidian://open?vault=Work"` to a workspace and switch in. **Expect:** the app shows that vault.
 
 Three checks start real programs and are skipped in the normal run. Run them by hand when changing that code:
 
@@ -278,7 +281,7 @@ cargo test -p cf-cleanup real_dialog -- --ignored --nocapture     # shows a mess
 
 ## 4. Not built yet
 
-VS Code's open files, the folder a PowerShell tab moved to, pinned tabs and tab groups, the other tabs of an Explorer window, and the contents of any app without an integration (only its windows return). Tab and folder comparison in `diff` is also not built. The full list, in order, is in [ROADMAP.md](ROADMAP.md).
+VS Code's open files, the folder a PowerShell tab moved to, tab groups, the other tabs of an Explorer window, and the contents of any app without an integration (only its windows return). Tab and folder comparison in `diff` is also not built. The full list, in order, is in [ROADMAP.md](ROADMAP.md).
 
 ## 5. Reporting a problem
 

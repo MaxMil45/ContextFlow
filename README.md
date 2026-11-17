@@ -68,7 +68,8 @@ store yet): see [Reopening browser tabs](#reopening-browser-tabs-one-time-setup)
   to where it was, falling back to a connected screen if one has gone. Nothing
   opens twice if you switch again, and anything that didn't come back is named.
 * **Chrome and Edge tabs, VS Code and File Explorer folders, Visual Studio
-  solutions and JetBrains projects** reopen in their own windows.
+  solutions and JetBrains projects** reopen in their own windows. Pinned tabs
+  come back pinned while the extension is connected.
 * **Windows Terminal windows** reopen with a tab per folder. PowerShell tabs
   come back in the folder they were started in (PowerShell doesn't report a
   `cd`); `cmd` tabs in the folder they were in.

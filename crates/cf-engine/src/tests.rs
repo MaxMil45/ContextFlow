@@ -89,6 +89,8 @@ struct Fake {
     /// Windows that appear, one per call, when a browser window is opened.
     browser_windows: RefCell<Vec<DiscoveredWindow>>,
     browser_opens: RefCell<Vec<Vec<String>>>,
+    /// Pin requests left for the extension: (browser, addresses).
+    pin_requests: RefCell<Vec<(String, Vec<String>)>>,
     /// Arguments of every `open_app_window` call (e.g. VS Code folders).
     app_window_opens: RefCell<Vec<Vec<String>>>,
     denied: HashSet<isize>,
@@ -143,6 +145,12 @@ impl Desktop for Fake {
     }
     fn live_browser_urls(&self, _browser: &str) -> Option<Vec<String>> {
         self.live_urls.clone()
+    }
+    fn request_pins(&self, browser: &str, urls: &[String]) {
+        self.events.borrow_mut().push(format!("pin:{}", urls.len()));
+        self.pin_requests
+            .borrow_mut()
+            .push((browser.to_string(), urls.to_vec()));
     }
     fn packaged_app_id(&self, exe: &str) -> Option<String> {
         let id = application_id(exe);

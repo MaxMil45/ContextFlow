@@ -333,3 +333,88 @@ fn a_running_browser_that_got_all_its_windows_added_is_not_called_started() {
     );
     assert!(d.launched.borrow().is_empty(), "Chrome was not started");
 }
+
+/// A Chrome window with two pinned tabs (mail, chat) and an ordinary one.
+fn pinned_payload() -> SnapshotPayload {
+    let mut window = saved_tabs_window(
+        "Mail - Google Chrome",
+        &[
+            "https://mail.example.com/",
+            "https://chat.example.com/",
+            "https://docs.example.com/",
+        ],
+    );
+    window.tabs[0].pinned = true;
+    window.tabs[1].pinned = true;
+    SnapshotPayload {
+        applications: vec![browser_app(vec![window])],
+        windows: vec![saved_window(
+            "chrome",
+            "Mail - Google Chrome",
+            r(0, 0, 900, 800),
+            "M1",
+        )],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn pinned_tabs_are_asked_for_before_their_window_opens() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![open_window(11, "chrome", "x")]),
+        ..Default::default()
+    };
+    let result = run(&d, &pinned_payload(), &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    assert_eq!(
+        *d.pin_requests.borrow(),
+        vec![(
+            "chrome".to_string(),
+            vec![
+                "https://mail.example.com/".to_string(),
+                "https://chat.example.com/".to_string()
+            ]
+        )]
+    );
+    // Asked first, so the request is waiting when the extension connects.
+    let events = d.events.borrow();
+    let pin = events.iter().position(|e| e == "pin:2").unwrap();
+    let open = events.iter().position(|e| e == "open:3").unwrap();
+    assert!(pin < open, "{events:?}");
+}
+
+#[test]
+fn only_pinned_tabs_that_are_being_reopened_are_asked_for() {
+    // Mail is already open: it is not reopened, so it is not asked for (the
+    // user's own tab is never pinned by ContextFlow).
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(1, "chrome", "Mail - Google Chrome")]),
+        live_urls: Some(vec!["https://mail.example.com".into()]),
+        browser_windows: RefCell::new(vec![open_window(12, "chrome", "y")]),
+        ..Default::default()
+    };
+    run(&d, &pinned_payload(), &fast());
+    assert_eq!(
+        *d.pin_requests.borrow(),
+        vec![(
+            "chrome".to_string(),
+            vec!["https://chat.example.com/".to_string()]
+        )]
+    );
+}
+
+#[test]
+fn a_window_without_pinned_tabs_asks_for_nothing() {
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![
+            open_window(11, "chrome", "x"),
+            open_window(12, "chrome", "y"),
+        ]),
+        ..Default::default()
+    };
+    run(&d, &chrome_payload(), &fast());
+    assert!(d.pin_requests.borrow().is_empty());
+}

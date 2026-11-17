@@ -87,7 +87,8 @@ All are done.
 | 5 | First run and setup | "Save what's open now" on first run. (The two setup chores are still open: see section 4.) |
 | 6 | Show it | The README leads with the one-key switch. (The recording is still missing.) |
 
-Done since, beyond the plan: force close never ends a program that is
+Done since, beyond the plan: pinned tabs come back pinned (restore asks the
+browser extension, through its helper program); force close never ends a program that is
 showing a dialog (it is probably asking to save); ten unused dependencies were
 removed; the CLI help leads with the everyday commands and
 hides the advanced ones; the "leaving" and "entering" cleanups run together;
@@ -108,8 +109,8 @@ The full list, in order, with sizes and the test for "done", is
 * **For the owner:** try the current build on a real desk (several features
   have only been tested with a fake desktop), record the switch for the
   README, tag the first release (`v0.1.0`).
-* **Next improvements:** pinned tabs and tab groups (a channel from the app to
-  the browser extension), browser profiles, PowerShell's current folder,
+* **Next improvements:** tab groups (using the channel to the browser
+  extension that pinned tabs use), browser profiles, PowerShell's current folder,
   telling windows apart by more than their title.
 * **Decided for now:** distributed through GitHub, with an unsigned installer
   and the extension installed with Developer mode. Store publishing and code

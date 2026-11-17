@@ -632,6 +632,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -718,6 +719,7 @@ dependencies = [
  "cf-core",
  "cf-detect",
  "cf-windows",
+ "chrono",
  "serde",
  "serde_json",
  "tracing",

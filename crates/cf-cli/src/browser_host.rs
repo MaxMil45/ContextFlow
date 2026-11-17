@@ -1,6 +1,7 @@
 //! `contextflow-browser-host`: started by Chrome/Edge (never by hand) when the
 //! ContextFlow extension connects. It receives tab lists on stdin, validates
-//! them, and keeps the latest copy on disk for `contextflow capture`.
+//! them, and keeps the latest copy on disk for `contextflow capture`. It sends
+//! the extension the pin requests restore leaves for it.
 
 use std::io::stdin;
 use std::path::Path;
@@ -23,18 +24,35 @@ fn main() {
     // stderr is discarded by the browser; keep a short log for troubleshooting.
     let log_path = dir.with_file_name("host.log");
     truncate_if_large(&log_path, MAX_LOG_BYTES);
-    let mut log = |m: &str| {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            let _ = writeln!(f, "{} {m}", chrono::Utc::now().to_rfc3339());
-        }
-    };
+    let mut log = |m: &str| append_log(&log_path, m);
+    // Pin requests left by restore go to the extension on stdout, from a thread
+    // of its own; it ends with the process when the browser disconnects.
+    if let Some(requests) = cf_browser::request::default_request_dir() {
+        let log_path = log_path.clone();
+        std::thread::spawn(move || {
+            let mut out = std::io::stdout();
+            cf_browser::host::serve_requests(
+                &requests,
+                &mut out,
+                std::time::Duration::from_millis(250),
+                &|| true,
+                &mut |m| append_log(&log_path, m),
+            );
+        });
+    }
     let mut input = stdin().lock();
     cf_browser::host::run(&mut input, &dir, &mut log);
+}
+
+fn append_log(path: &Path, message: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{} {message}", chrono::Utc::now().to_rfc3339());
+    }
 }
 
 #[cfg(test)]

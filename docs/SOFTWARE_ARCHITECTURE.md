@@ -447,8 +447,33 @@ capture ──▶ reads files younger than 120 s ──▶ matches live windows 
 >
 > **Why restore needs no extension.** Reopening uses the browser's own
 > command line (`chrome.exe --new-window <url> <url> …`). The extension is
-> only needed to *read* tabs, and to avoid opening tabs that are already
-> open.
+> only needed to *read* tabs, to avoid opening tabs that are already open,
+> and to pin tabs again (below).
+
+**The one message back: pin requests.** The command line can open tabs but
+not pin them. So just before restore opens a window, it leaves a small file
+for each window whose reopened tabs included pinned ones:
+
+```
+restore ──▶ browser/requests/pin-<id>.json ──▶ every running host (checks every 250 ms)
+            { browser, urls, created_at }        passes each request on once ──▶ extension
+                                                 extension of that browser pins one unpinned
+                                                 tab per address, in the saved order
+```
+
+> **Why it is safe to pin by address.** Restore reopens only tabs that are not
+> open already, so an unpinned tab with a requested address is the one it just
+> opened, never one of the user's own. Requests are tried for 60 s (tabs may
+> still be loading, and a cold browser connects its extension a few seconds
+> after starting), then expire; hosts delete expired files. Each request is
+> passed on at most once per host and applied at most once by the extension.
+>
+> **Trade-off.** It is best effort. Without the extension, or with an older
+> one, tabs reopen unpinned, as before, and nothing reports it. If a site
+> redirects to a different address before the extension looks, that tab stays
+> unpinned. Every host of the browser passes the request on (one per profile),
+> because nothing tells which profile opened the window; only the one that
+> has the tabs finds anything to pin.
 
 ---
 
@@ -927,6 +952,10 @@ again to the app's other windows.
 Limits: at most 50 tabs per window (configurable) and a command line under
 28,000 characters (Windows' limit is 32,767).
 
+**Pinned tabs** are asked for before their window opens (section 5.4), so the
+request is waiting when a browser that is just starting connects its
+extension.
+
 ### 8.6 Results and codes
 
 | Status | Typical codes | Meaning |
@@ -1143,10 +1172,13 @@ its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
 
 What to do about each of these, in order and with sizes, is in
 [ROADMAP.md](ROADMAP.md), together with gaps that are features rather than
-weak spots (pinned tabs, browser profiles, PowerShell's current folder,
+weak spots (tab groups, browser profiles, PowerShell's current folder,
 virtual desktops).
 
 Fixed in November 2026, and explained where they are described:
+
+* **Pinned tabs reopening unpinned**: restore asks the extension to pin them
+  again (section 5.4).
 
 * **Force close ending a program that is asking to save**: a program showing
   a dialog is left running and reported (section 6.1).
@@ -1270,6 +1302,11 @@ Requests name a workspace, never a path, program or command line. Details:
 
 * The extension sees tab addresses and titles only; never cookies, history,
   passwords or page content; never private windows.
+* The only thing sent to the extension is a pin request: web addresses
+  (`http`/`https` only, at most 100, checked by the helper before passing them
+  on) that restore has just reopened. Request files live in the user's own
+  data folder; anything able to write there could at worst pin a tab with an
+  address the user already has open, and only for 60 s.
 * Window titles can be hidden by pattern (`(hidden)` is stored).
 * Tabs can be excluded by address pattern.
 * Logs shorten home-folder paths and addresses.

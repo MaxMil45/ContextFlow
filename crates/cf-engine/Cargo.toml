@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 cf-browser.workspace = true
+chrono.workspace = true
 cf-detect.workspace = true
 cf-core.workspace = true
 cf-windows.workspace = true

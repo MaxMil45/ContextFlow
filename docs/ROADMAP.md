@@ -55,6 +55,7 @@ against the live desktop.
 | Windows Terminal tabs | A real capture and a real launch of a test window | A full switch reopens the window with a tab per folder, in place. |
 | Windows saved on a larger display | Unit and engine tests | Side-by-side windows stay side by side on the laptop screen. |
 | Explorer windows with several tabs | Tests with made-up data | Each tab of one window reports the same window; check with `cargo test -p cf-detect real_explorer -- --ignored --nocapture`. |
+| Pinned tabs come back pinned | Engine tests, the extension against a fake browser, and the real helper program passing a request on | Restore a window with pinned tabs, once with Chrome closed and once with it open: the same tabs are pinned again. Needs the extension reloaded (version 0.3.0) and the new build installed. |
 | "Delete older versions" in the History tab | Typecheck and the storage tests behind it | The button appears with two or more versions and keeps the newest and the pinned one. |
 
 ---
@@ -67,11 +68,10 @@ Sizes are estimates. "Done when" is the test for finishing.
 
 | # | Improvement | Why | Size | Done when |
 |---|---|---|---|---|
-| 1 | **Pinned tabs come back pinned** | Pins are already saved and then dropped: the browser's command line can't pin. Needs a channel from the app to the extension (the helper the browser starts would watch for requests and pass them on). | 2 days | A restored window has the same tabs pinned. A failed request never blocks the restore. |
-| 2 | **Tab groups** | Same channel. Needs the `tabGroups` permission and the group's name, colour and members saved at capture. | 2 to 3 days after 1 | Groups come back with name and colour. |
-| 3 | **Browser profiles** | With work and personal profiles, restored tabs open in whichever was used last. The id the extension sends is its own, not Chrome's profile folder, so a mapping is needed (read Chrome's `Local State`, find the profile folders that have the extension). Only matters with more than one profile. | 3 days | Each window reopens in the profile it was saved from. |
-| 4 | **PowerShell's current folder** | PowerShell doesn't tell Windows when you `cd`, so a tab is saved with the folder it started in. Offer an opt-in line for the PowerShell profile that reports the folder to ContextFlow. Windows Terminal keeps this information to itself, so there is no way without the shell's help. | 1 to 2 days | With the line installed, a tab that moved is saved where it is. Without it, nothing changes. |
-| 5 | **Telling windows apart by more than their title** | Two windows with the same title, or a title that changed, can be saved without a folder or paired with the wrong position. Combine title, position and the order the windows were created; for browsers, the extension's own window id. Never guess on a tie. | 3 days | Two same-named windows of one app come back in their own places. |
+| 1 | **Tab groups** | Uses the channel built for pinned tabs (see SOFTWARE_ARCHITECTURE.md, section 5.4). Needs the `tabGroups` permission and the group's name, colour and members saved at capture. | 2 to 3 days | Groups come back with name and colour. |
+| 2 | **Browser profiles** | With work and personal profiles, restored tabs open in whichever was used last. The id the extension sends is its own, not Chrome's profile folder, so a mapping is needed (read Chrome's `Local State`, find the profile folders that have the extension). Only matters with more than one profile. | 3 days | Each window reopens in the profile it was saved from. |
+| 3 | **PowerShell's current folder** | PowerShell doesn't tell Windows when you `cd`, so a tab is saved with the folder it started in. Offer an opt-in line for the PowerShell profile that reports the folder to ContextFlow. Windows Terminal keeps this information to itself, so there is no way without the shell's help. | 1 to 2 days | With the line installed, a tab that moved is saved where it is. Without it, nothing changes. |
+| 4 | **Telling windows apart by more than their title** | Two windows with the same title, or a title that changed, can be saved without a folder or paired with the wrong position. Combine title, position and the order the windows were created; for browsers, the extension's own window id. Never guess on a tie. | 3 days | Two same-named windows of one app come back in their own places. |
 
 ### Good, but after the above
 

@@ -3,6 +3,7 @@
 //! ```text
 //!   Chrome / Edge ──(extension)──▶ native host ──▶ live state files ──▶ capture
 //!   restore ──▶ browser.exe --new-window <saved urls>
+//!   restore ──▶ pin request file ──▶ native host ──▶ extension (pins the tabs)
 //! ```
 //!
 //! * The extension reports open windows and tabs to a small local program (the
@@ -12,11 +13,13 @@
 //!   file per browser profile, only while the browser is running.
 //! * Capture reads those files and attaches the tabs to the matching windows.
 //! * Restore needs no extension: it just starts the browser with the saved
-//!   addresses.
+//!   addresses. With the extension, tabs that were pinned are pinned again
+//!   (see [`request`]): the command line can't do that.
 
 pub mod host;
 pub mod install;
 pub mod protocol;
+pub mod request;
 pub mod saved;
 pub mod state;
 

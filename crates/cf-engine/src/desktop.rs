@@ -33,6 +33,9 @@ pub trait Desktop {
     /// Normalised addresses of the tabs open right now in `browser`, or `None`
     /// when the extension isn't connected and so the answer is unknown.
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>>;
+    /// Ask the browser extension to pin these tabs once they are open (the
+    /// command line can't). Best effort: without the extension nothing happens.
+    fn request_pins(&self, browser: &str, urls: &[String]);
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError>;
     /// Put a window above the others without activating it.
     fn raise(&self, hwnd: isize);
@@ -152,6 +155,9 @@ impl Desktop for Timed<'_> {
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
         self.inner.live_browser_urls(browser)
     }
+    fn request_pins(&self, browser: &str, urls: &[String]) {
+        self.inner.request_pins(browser, urls);
+    }
     fn raise(&self, hwnd: isize) {
         timed(&self.place, || self.inner.raise(hwnd));
     }
@@ -237,6 +243,16 @@ impl Desktop for WindowsDesktop {
 
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
         cf_browser::live_urls(&cf_browser::default_state_dir()?, browser)
+    }
+
+    fn request_pins(&self, browser: &str, urls: &[String]) {
+        let Some(dir) = cf_browser::request::default_request_dir() else {
+            return;
+        };
+        match cf_browser::request::write_pin_request(&dir, browser, urls, chrono::Utc::now()) {
+            Ok(_) => {}
+            Err(e) => tracing::debug!(browser, error = %e, "could not leave a pin request"),
+        }
     }
 
     fn raise(&self, hwnd: isize) {

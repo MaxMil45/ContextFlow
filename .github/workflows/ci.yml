@@ -40,6 +40,10 @@ jobs:
           npm ci
           npm run build
 
+      # The extension's pinning logic, against a fake browser.
+      - name: Extension test
+        run: node extensions/browser/test/pinning.test.js
+
       - name: Format
         run: cargo fmt --all -- --check
 

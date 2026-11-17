@@ -2,12 +2,14 @@
 //! stdin. Messages are a 4-byte little-endian length followed by that many
 //! bytes of JSON.
 //!
-//! The host only *receives*; it writes validated state files and deletes them
-//! when the browser disconnects. It never writes anything back to the browser.
+//! The host *receives* tab lists, writes validated state files, and deletes
+//! them when the browser disconnects. The only thing it sends to the browser
+//! is a pin request that restore left for it ([`serve_requests`]).
 
 use std::collections::HashSet;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use chrono::Utc;
 
@@ -61,6 +63,32 @@ pub fn run(input: &mut dyn Read, dir: &Path, log: &mut dyn FnMut(&str)) {
 
     for (browser, profile) in seen {
         remove_state(dir, &browser, &profile);
+    }
+}
+
+/// Pass every new pin request in `requests` to the extension on `out`, checking
+/// every `poll`, until `out` can no longer be written (the browser went away)
+/// or `keep_going` says to stop.
+pub fn serve_requests(
+    requests: &Path,
+    out: &mut dyn Write,
+    poll: Duration,
+    keep_going: &dyn Fn() -> bool,
+    log: &mut dyn FnMut(&str),
+) {
+    let mut sent = HashSet::new();
+    while keep_going() {
+        for request in crate::request::pending_requests(requests, Utc::now(), &mut sent) {
+            let frame = crate::request::frame(&request.to_message());
+            if out.write_all(&frame).and_then(|()| out.flush()).is_err() {
+                return; // the browser closed the pipe
+            }
+            log(&format!(
+                "asked the extension to pin {} tab(s)",
+                request.urls.len()
+            ));
+        }
+        std::thread::sleep(poll);
     }
 }
 
@@ -176,5 +204,68 @@ mod tests {
         let mut cut = 100u32.to_le_bytes().to_vec();
         cut.extend_from_slice(b"short");
         assert!(run_bytes(cut, dir.path())[0].contains("truncated"));
+    }
+
+    /// A writer that stops accepting after `ok` frames, like a browser that
+    /// closed the pipe.
+    struct Pipe {
+        frames: Vec<Vec<u8>>,
+        ok: usize,
+    }
+
+    impl Write for Pipe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.frames.len() >= self.ok {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            self.frames.push(buf.to_vec());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pin_requests_are_sent_once_as_frames_and_a_closed_pipe_ends_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let urls = vec!["https://mail.example.com/".to_string()];
+        crate::request::write_pin_request(dir.path(), "chrome", &urls, Utc::now()).unwrap();
+        crate::request::write_pin_request(dir.path(), "msedge", &urls, Utc::now()).unwrap();
+
+        // Three polls: both requests go in the first, nothing is sent twice.
+        let polls = std::cell::Cell::new(0);
+        let mut pipe = Pipe {
+            frames: Vec::new(),
+            ok: 10,
+        };
+        serve_requests(
+            dir.path(),
+            &mut pipe,
+            Duration::ZERO,
+            &|| {
+                polls.set(polls.get() + 1);
+                polls.get() <= 3
+            },
+            &mut |_| {},
+        );
+        assert_eq!(pipe.frames.len(), 2);
+        let body: serde_json::Value = serde_json::from_slice(&pipe.frames[0][4..]).unwrap();
+        assert_eq!(body["type"], "pin");
+        assert_eq!(body["urls"][0], "https://mail.example.com/");
+
+        // A browser that has gone: the loop ends by itself.
+        crate::request::write_pin_request(dir.path(), "chrome", &urls, Utc::now()).unwrap();
+        let mut closed = Pipe {
+            frames: Vec::new(),
+            ok: 0,
+        };
+        serve_requests(
+            dir.path(),
+            &mut closed,
+            Duration::ZERO,
+            &|| true,
+            &mut |_| {},
+        );
     }
 }

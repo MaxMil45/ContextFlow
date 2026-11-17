@@ -69,6 +69,9 @@ impl Desktop for Isolated {
     fn live_browser_urls(&self, _browser: &str) -> Option<Vec<String>> {
         None
     }
+    fn request_pins(&self, _browser: &str, _urls: &[String]) {
+        // A throwaway profile has no extension to pass the request to.
+    }
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {
         self.real.place(hwnd, rect, state)
     }

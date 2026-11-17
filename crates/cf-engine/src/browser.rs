@@ -78,6 +78,17 @@ pub(crate) fn tab_state(app: &ApplicationState) -> Option<BrowserAppState> {
     BrowserAppState::from_value(&app.adapter_state).filter(|s| s.tab_count() > 0)
 }
 
+/// The addresses about to be opened whose saved tab was pinned, in order.
+fn pinned_among(window: &cf_browser::SavedWindow, opening: &[String]) -> Vec<String> {
+    let opening: HashSet<String> = opening.iter().map(|u| normalize_url(u)).collect();
+    window
+        .tabs
+        .iter()
+        .filter(|t| t.pinned && opening.contains(&normalize_url(&t.url)))
+        .map(|t| t.url.clone())
+        .collect()
+}
+
 /// Drop trailing addresses until the command line fits.
 fn fit_command_line(urls: &mut Vec<String>) -> usize {
     let mut dropped = 0;
@@ -168,6 +179,17 @@ pub(crate) fn restore_tabs(
             out.failures
                 .push("not opened: the restore ran out of time".into());
             break;
+        }
+
+        // Pinned tabs are asked for before the window opens, so the request is
+        // waiting when a browser that is only starting connects its extension.
+        let pinned = pinned_among(window, &urls);
+        if !pinned.is_empty() {
+            log(&format!(
+                "asking the extension to pin {} tab(s)",
+                pinned.len()
+            ));
+            desktop.request_pins(&app.application_id, &pinned);
         }
 
         log(&format!(

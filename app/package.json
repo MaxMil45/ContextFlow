@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "preview:mock": "vite --open /?mock",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "bindings": "cargo test -p contextflow-app export_bindings",

@@ -405,20 +405,10 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
         <div className="tab-panel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} key={tab}>
           {tab === "overview" && (
             <>
-              <CaptureCard
-                workspace={id}
-                label={name}
-                disabled={workspace.isArchived}
-                openKey={captureKey}
-                onCaptured={() => {
-                  setSelectedVersion(undefined);
-                  refresh();
-                }}
-              />
+              {/* What you came for first: where you left off and what comes
+                  back. Saving and the save setting follow. */}
               {snapshot.error && <ErrorBanner error={snapshot.error} />}
               {snapshot.loading && !snapshot.data && <SkeletonText lines={4} />}
-              <SaveModeCard workspace={workspace} onChanged={onChanged} />
-              <SwitcherTip />
               {snapshot.data && <BrowserNotice snapshot={snapshot.data} />}
               {snapshot.data ? (
                 <Overview snapshot={snapshot.data} />
@@ -430,6 +420,19 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   </Empty>
                 )
               )}
+              <CaptureCard
+                workspace={id}
+                label={name}
+                disabled={workspace.isArchived}
+                openKey={captureKey}
+                onCaptured={() => {
+                  setSelectedVersion(undefined);
+                  refresh();
+                }}
+              />
+              {/* Only meaningful once something is saved. */}
+              {snapshot.data && <SaveModeCard workspace={workspace} onChanged={onChanged} />}
+              <SwitcherTip />
             </>
           )}
 
@@ -449,12 +452,11 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
                   </h3>
                   {(history.data?.length ?? 0) > 1 && (
                     <button
-                      className="ghost icon"
-                      aria-label="Delete older versions"
-                      data-tip="Delete older versions"
+                      className="ghost small"
+                      data-tip="Keep only the newest version (and a pinned one)"
                       onClick={() => setDialog("deleteOld")}
                     >
-                      <Trash2 size={15} />
+                      Delete older…
                     </button>
                   )}
                 </header>
@@ -736,15 +738,7 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
             <li className="app-row" key={a.applicationId}>
               <AppIcon applicationId={a.applicationId} />
               <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
-              <span className="muted small">
-                {[
-                  plural(a.windowCount, "window"),
-                  a.tabCount > 0 && plural(a.tabCount, "tab"),
-                  a.folderCount > 0 && plural(a.folderCount, "folder"),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
+              <span className="muted small">{appSummary(a)}</span>
             </li>
           ))}
         </ul>
@@ -768,6 +762,17 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
   );
 }
 
+/** "2 windows · 7 tabs · 2 folders": what comes back of one application. */
+function appSummary(a: SnapshotDetail["applications"][number]): string {
+  return [
+    plural(a.windowCount, "window"),
+    a.tabCount > 0 && plural(a.tabCount, "tab"),
+    a.folderCount > 0 && plural(a.folderCount, "folder"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function VersionDetails({
   snapshot,
   pinned,
@@ -785,7 +790,7 @@ function VersionDetails({
   return (
     <>
       <header className="card-header">
-        <h3>
+        <h3 className="nowrap">
           Version {snapshot.version}
           <Badge tone={captureStatusTone[snapshot.captureStatus]}>{statusLabel[snapshot.captureStatus]}</Badge>
         </h3>
@@ -820,7 +825,7 @@ function VersionDetails({
           <li className="app-row" key={a.applicationId}>
             <AppIcon applicationId={a.applicationId} />
             <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
-            <span className="muted small">{plural(a.windowCount, "window")}</span>
+            <span className="muted small">{appSummary(a)}</span>
           </li>
         ))}
       </ul>

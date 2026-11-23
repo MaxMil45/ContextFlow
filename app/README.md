@@ -19,6 +19,20 @@ The window uses the native Windows frame (Snap Layouts, Alt+Space menu). The
 first `tauri dev` compiles the whole workspace and can take a few minutes before
 the window appears.
 
+## Working on the interface without the Rust side
+
+```bash
+cd app
+npm run preview:mock
+```
+
+opens the interface in an ordinary browser with sample data
+(`src/dev/mockBackend.ts`): four workspaces, history, Focus rules, a restore
+preview and a restore with one failure. Changes are accepted but not kept.
+Commands without a sample answer show an error saying so. It is for looking at
+screens and layout; the real behaviour needs `npm run tauri dev`. The sample
+data is only loaded in development and is not part of any build.
+
 ## What is in the window
 
 * **Sidebar:** workspaces with their picture or colour, Ctrl+K search, an

@@ -86,7 +86,18 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
     <section className="card restore-panel" aria-live="polite">
       <header className="card-header">
         <h3>
-          {dryRun ? "Restore preview" : only ? "Retrying" : mode === "switch" ? "Switching to" : "Restoring"} · {label}
+          {dryRun
+            ? "Restore preview"
+            : running
+              ? only
+                ? "Retrying"
+                : mode === "switch"
+                  ? "Switching to"
+                  : "Restoring"
+              : mode === "switch"
+                ? "Switch finished"
+                : "Restore finished"}{" "}
+          · {label}
           {report && ` v${report.version}`}
         </h3>
         {running ? (
@@ -126,7 +137,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
 
       {dryRun && cleanupPlan && cleanupPlan.items.length > 0 && (
         <div className="cleanup-results">
-          <div className="muted small">Cleanup that would run first</div>
+          <div className="muted small">Programs that would be closed while the workspace comes back</div>
           <ul className="cleanup-confirm">
             {cleanupPlan.items.map((i) => (
               <li key={i.process}>
@@ -168,7 +179,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
                 {report.steps.map((s) => (
                   <tr key={s.applicationId}>
                     <td>
-                      <Badge tone={restoreStatusTone[s.status]}>{restoreStatusLabel[s.status]}</Badge>
+                      <StepBadge step={s} />
                     </td>
                     <td title={s.applicationId}>{friendlyAppName(s.applicationId)}</td>
                     <td>{s.message}</td>
@@ -187,7 +198,7 @@ export function RestorePanel({ workspace, label, version, dryRun, mode = "restor
           {retryable.length > 0 && onRetry && (
             <div className="actions left">
               <button className="primary" onClick={() => onRetry(retryable)}>
-                Retry {retryable.length === 1 ? retryable[0] : `${retryable.length} programs`}
+                Retry {retryable.length === 1 ? friendlyAppName(retryable[0]!) : `${retryable.length} programs`}
               </button>
               <span className="muted small">Only the programs that didn't come back are restored again.</span>
             </div>
@@ -247,4 +258,15 @@ export function CommandResults({ runs }: { runs: CommandRun[] }) {
       </ul>
     </div>
   );
+}
+
+/** A step's result. In a preview every app is "skipped" (nothing was done),
+ * which reads like a problem, so say what would happen instead. Real
+ * problems found by a preview (a missing program, say) keep their own label. */
+function StepBadge({ step }: { step: RestoreReport["steps"][number] }) {
+  if (step.code === "DRY_RUN") {
+    const running = step.message.startsWith("already running");
+    return <Badge tone="muted">{running ? "Running" : "Will start"}</Badge>;
+  }
+  return <Badge tone={restoreStatusTone[step.status]}>{restoreStatusLabel[step.status]}</Badge>;
 }

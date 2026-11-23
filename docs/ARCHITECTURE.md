@@ -87,7 +87,9 @@ All are done.
 | 5 | First run and setup | "Save what's open now" on first run. (The two setup chores are still open: see section 4.) |
 | 6 | Show it | The README leads with the one-key switch. (The recording is still missing.) |
 
-Done since, beyond the plan: pinned tabs come back pinned (restore asks the
+Done since, beyond the plan: the interface can be previewed in a browser with
+sample data (`npm run preview:mock` in `app/`), and a pass over it fixed its
+layout and wording; pinned tabs come back pinned (restore asks the
 browser extension, through its helper program); force close never ends a program that is
 showing a dialog (it is probably asking to save); ten unused dependencies were
 removed; the CLI help leads with the everyday commands and

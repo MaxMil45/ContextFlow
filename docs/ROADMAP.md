@@ -82,7 +82,7 @@ Sizes are estimates. "Done when" is the test for finishing.
 | 8 | **Every tab of an Explorer window** | Only the front tab is saved. Reopening tabs needs a reliable way to drive Explorer, which is not known yet. | Unknown |
 | 9 | **More apps** | `cf-detect` takes a new app as a table entry and a small module: Notepad++, Sublime Text, Office documents (from their recent lists). | About a day each |
 | 10 | **An updater** | People on an old build stay on it. Tauri has an updater; it needs signed update files. | 2 days, after signing |
-| 11 | **Tests for the user interface** | The Rust side has several hundred tests; the React side has none beyond the typecheck. | 2 days for the main flows |
+| 11 | **Tests for the user interface** | The Rust side has several hundred tests; the React side has none beyond the typecheck. `npm run preview:mock` (sample data in a browser) is the starting point: the same sample answers can drive automated checks of the main screens. | 2 days for the main flows |
 
 ### Only with evidence
 

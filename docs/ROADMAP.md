@@ -145,6 +145,15 @@ So they are not proposed again without new facts.
   design. Renaming would change the protocol for no gain.
 * `docs/history/` holds the original plan and blueprint, unchanged. They
   describe the past.
+* Every capture starts from `CaptureOptions::from_config` (in `cf-app`) and
+  changes only what differs. Don't build the options by hand again: five
+  hand-built copies had drifted (the CLI's `diff --live` looked up no editor
+  folders).
+* Known duplication left on purpose: the "close on outside click or Escape"
+  code in `IconPicker.tsx` and the menu in `ui.tsx` (the menu also handles
+  arrow keys, so a shared hook would split its key handling), and
+  `WorkspaceView.tsx` at about 1,150 lines is the next file worth splitting
+  (its dialogs and the History tab could be their own files).
 
 ---
 

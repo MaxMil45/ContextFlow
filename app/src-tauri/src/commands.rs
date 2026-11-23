@@ -87,17 +87,7 @@ fn detail(s: &Snapshot) -> SnapshotDetail {
         notes: p.notes.clone(),
         applications,
         monitor_count: p.monitors.len() as u32,
-        repositories: p
-            .git
-            .iter()
-            .map(|g| RepositoryEntry {
-                path: g.repository_path.clone(),
-                branch: g.branch.clone(),
-                staged: g.staged,
-                modified: g.modified,
-                untracked: g.untracked,
-            })
-            .collect(),
+        repositories: p.git.iter().map(RepositoryEntry::from).collect(),
     }
 }
 
@@ -268,15 +258,8 @@ pub(crate) fn do_capture(
 
     let result = capture::capture(capture::CaptureOptions {
         only: &only,
-        repos: &repos,
-        notes,
-        include_windows: cfg.capture.include_windows,
         unminimize: request.unminimize.unwrap_or(false),
-        rules: &cfg.capture,
-        git_timeout: cfg.timeouts.git(),
-        browser: &cfg.browser,
-        browser_state_dir: cf_browser::default_state_dir(),
-        detect: cf_detect::Sources::installed(),
+        ..capture::CaptureOptions::from_config(cfg, &repos, notes)
     });
 
     let snap = db.create_snapshot(ctx.id, result.payload, result.status)?;

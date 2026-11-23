@@ -17,8 +17,7 @@ use std::time::Duration;
 use cf_core::{ApplicationState, MonitorInfo, WindowState};
 
 use crate::browser::{TabRestore, Wording};
-use crate::window_open::{place_new, wait_for_new_window};
-use crate::{window_app_id, Budget, Desktop, PlaceError, RestoreOptions};
+use crate::{window_app_id, Budget, Desktop, RestoreOptions};
 
 /// One thing to reopen in its own window.
 #[derive(Debug, Clone)]
@@ -181,39 +180,18 @@ pub(crate) fn restore_windows(
         };
         opened += 1;
         let wait = wait.min(budget.remaining());
-        match wait_for_new_window(desktop, &app.application_id, &known, wait, &mut || {
-            meanwhile(&mut *log)
-        }) {
-            None => out.failures.push(format!(
-                "a window for a saved {} did not appear within {} seconds",
-                work.wording.singular,
-                wait.as_secs()
-            )),
-            Some(hwnd) => {
-                known.insert(hwnd);
-                out.claimed.insert(hwnd);
-                if let Some(i) = geometry {
-                    out.used_saved.push(i);
-                    match place_new(
-                        desktop,
-                        hwnd,
-                        saved[i],
-                        monitors,
-                        opts.settle,
-                        &mut out.rechecks,
-                    ) {
-                        Ok(()) => out.placed += 1,
-                        Err(PlaceError::AccessDenied) => out.failures.push(format!(
-                            "a {} window belongs to a program running as administrator and can't be moved",
-                            work.label
-                        )),
-                        Err(PlaceError::Other(e)) => out
-                            .failures
-                            .push(format!("a window opened but couldn't be moved: {e}")),
-                    }
-                }
-            }
-        }
+        out.take_new_window(
+            desktop,
+            &app.application_id,
+            &mut known,
+            wait,
+            geometry.map(|i| (i, saved[i])),
+            monitors,
+            opts.settle,
+            &format!("a window for a saved {}", work.wording.singular),
+            work.label,
+            &mut || meanwhile(&mut *log),
+        );
     }
     out
 }

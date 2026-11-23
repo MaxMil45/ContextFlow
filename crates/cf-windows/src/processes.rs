@@ -19,11 +19,42 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, PostMessageW, GW_OWNER, WM_CLOSE,
 };
 
+use crate::text::from_wide;
 use crate::ProcessInfo;
 
-fn utf16(buf: &[u16]) -> String {
-    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    String::from_utf16_lossy(&buf[..n])
+/// One process as the system's process list shows it, without opening it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub pid: u32,
+    pub parent: u32,
+    /// Executable file name, e.g. `pwsh.exe`.
+    pub name: String,
+}
+
+/// Every running process, from one system snapshot. Opens no process, so it
+/// is cheap; [`list_processes`] adds what needs each one opened.
+pub(crate) fn snapshot() -> std::io::Result<Vec<Entry>> {
+    let mut out = Vec::new();
+    // SAFETY: a plain ToolHelp snapshot, closed before returning.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = Process32FirstW(snap, &mut entry) != 0;
+        while ok {
+            out.push(Entry {
+                pid: entry.th32ProcessID,
+                parent: entry.th32ParentProcessID,
+                name: from_wide(&entry.szExeFile),
+            });
+            ok = Process32NextW(snap, &mut entry) != 0;
+        }
+        CloseHandle(snap);
+    }
+    Ok(out)
 }
 
 struct Details {
@@ -74,34 +105,35 @@ unsafe fn details(pid: u32) -> Details {
 }
 
 pub fn list_processes() -> std::io::Result<Vec<ProcessInfo>> {
-    let mut out = Vec::new();
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap == INVALID_HANDLE_VALUE {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut entry: PROCESSENTRY32W = zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-        let mut ok = Process32FirstW(snap, &mut entry) != 0;
-        while ok {
-            let pid = entry.th32ProcessID;
-            let d = details(pid);
+    Ok(snapshot()?
+        .into_iter()
+        .map(|e| {
+            // SAFETY: reads a process's details; handles are closed inside.
+            let d = unsafe { details(e.pid) };
             let mut session = 0u32;
-            let session_id = (ProcessIdToSessionId(pid, &mut session) != 0).then_some(session);
-            out.push(ProcessInfo {
-                pid,
-                parent_pid: entry.th32ParentProcessID,
-                name: utf16(&entry.szExeFile),
+            // SAFETY: writes only to `session`.
+            let session_id =
+                (unsafe { ProcessIdToSessionId(e.pid, &mut session) } != 0).then_some(session);
+            ProcessInfo {
+                pid: e.pid,
+                parent_pid: e.parent,
+                name: e.name,
                 path: d.path,
                 session_id,
                 ram_bytes: d.ram_bytes,
                 cpu_time_100ns: d.cpu_time_100ns,
-            });
-            ok = Process32NextW(snap, &mut entry) != 0;
-        }
-        CloseHandle(snap);
-    }
-    Ok(out)
+            }
+        })
+        .collect())
+}
+
+/// The ids of every running process, and nothing else: one system snapshot,
+/// without opening any process. Much cheaper than [`list_processes`], which
+/// opens each one for its path, memory and CPU time.
+pub fn running_pids() -> std::collections::HashSet<u32> {
+    snapshot()
+        .map(|list| list.into_iter().map(|e| e.pid).collect())
+        .unwrap_or_default()
 }
 
 /// The session this program runs in; only processes in it are ever touched.

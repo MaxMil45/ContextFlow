@@ -37,6 +37,50 @@ pub(crate) struct TabRestore {
     pub rechecks: Vec<Recheck>,
 }
 
+impl TabRestore {
+    /// Wait for the window just opened for `app_id` and put it where `saved`
+    /// was (if anything was saved for it). `what` names the window in messages
+    /// ("a window with 3 tab(s)"), `label` the program ("browser", "VS Code").
+    /// Shared by browsers and editors, so both report the same way.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn take_new_window(
+        &mut self,
+        desktop: &dyn Desktop,
+        app_id: &str,
+        known: &mut HashSet<isize>,
+        wait: Duration,
+        saved: Option<(usize, &WindowState)>,
+        monitors: &[MonitorInfo],
+        settle: Duration,
+        what: &str,
+        label: &str,
+        meanwhile: &mut dyn FnMut(),
+    ) {
+        let Some(hwnd) = wait_for_new_window(desktop, app_id, known, wait, meanwhile) else {
+            self.failures.push(format!(
+                "{what} did not appear within {} seconds",
+                wait.as_secs()
+            ));
+            return;
+        };
+        known.insert(hwnd);
+        self.claimed.insert(hwnd);
+        let Some((i, saved)) = saved else {
+            return;
+        };
+        self.used_saved.push(i);
+        match place_new(desktop, hwnd, saved, monitors, settle, &mut self.rechecks) {
+            Ok(()) => self.placed += 1,
+            Err(PlaceError::AccessDenied) => self.failures.push(format!(
+                "a {label} window belongs to a program running as administrator and can't be moved"
+            )),
+            Err(PlaceError::Other(e)) => self
+                .failures
+                .push(format!("a window opened but couldn't be moved: {e}")),
+        }
+    }
+}
+
 /// How step reports describe what was opened (shared with VS Code folders).
 #[derive(Debug)]
 pub(crate) struct Wording {
@@ -214,42 +258,18 @@ pub(crate) fn restore_tabs(
         };
         // Never wait past the overall budget.
         let wait = wait.min(budget.remaining());
-        let new_window =
-            wait_for_new_window(desktop, &app.application_id, &known, wait, &mut || {
-                meanwhile(&mut *log)
-            });
-
-        match new_window {
-            None => out.failures.push(format!(
-                "a window with {} tab(s) did not appear within {} seconds",
-                urls.len(),
-                wait.as_secs()
-            )),
-            Some(hwnd) => {
-                known.insert(hwnd);
-                out.claimed.insert(hwnd);
-                if let Some(i) = geometry {
-                    out.used_saved.push(i);
-                    match place_new(
-                        desktop,
-                        hwnd,
-                        saved[i],
-                        monitors,
-                        opts.settle,
-                        &mut out.rechecks,
-                    ) {
-                        Ok(()) => out.placed += 1,
-                        Err(PlaceError::AccessDenied) => out.failures.push(
-                            "a browser window belongs to a program running as administrator and can't be moved"
-                                .into(),
-                        ),
-                        Err(PlaceError::Other(e)) => {
-                            out.failures.push(format!("a window opened but couldn't be moved: {e}"))
-                        }
-                    }
-                }
-            }
-        }
+        out.take_new_window(
+            desktop,
+            &app.application_id,
+            &mut known,
+            wait,
+            geometry.map(|i| (i, saved[i])),
+            monitors,
+            opts.settle,
+            &format!("a window with {} tab(s)", urls.len()),
+            "browser",
+            &mut || meanwhile(&mut *log),
+        );
     }
     out
 }

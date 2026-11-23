@@ -39,15 +39,9 @@ pub(crate) fn capture_cmd(
 
     let result = capture::capture(capture::CaptureOptions {
         only: &only,
-        repos: &repos,
-        notes: note.into_iter().collect(),
         include_windows: cfg.capture.include_windows && !no_windows,
         unminimize,
-        rules: &cfg.capture,
-        git_timeout: cfg.timeouts.git(),
-        browser: &cfg.browser,
-        browser_state_dir: cf_browser::default_state_dir(),
-        detect: cf_detect::Sources::installed(),
+        ..capture::CaptureOptions::from_config(cfg, &repos, note.into_iter().collect())
     });
 
     let p = &result.payload;

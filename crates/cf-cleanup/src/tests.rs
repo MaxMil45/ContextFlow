@@ -37,6 +37,8 @@ struct Fake {
     terminated: RefCell<Vec<u32>>,
     /// Extra CPU time each process gains per sleep, in 100 ns ticks.
     cpu_per_sleep: HashMap<u32, u64>,
+    /// How many full listings were asked for.
+    listings: std::cell::Cell<usize>,
 }
 
 impl Fake {
@@ -50,7 +52,11 @@ impl Fake {
 
 impl Processes for Fake {
     fn list(&self) -> Vec<ProcessInfo> {
+        self.listings.set(self.listings.get() + 1);
         self.procs.borrow().clone()
+    }
+    fn pids(&self) -> HashSet<u32> {
+        self.procs.borrow().iter().map(|p| p.pid).collect()
     }
     fn request_close(&self, pid: u32) -> usize {
         self.asked.borrow_mut().push(pid);
@@ -275,6 +281,30 @@ fn graceful_mode_never_ends_a_program_that_stays_open() {
     assert!(r[0].message.contains("force"), "{}", r[0].message);
     assert!(d.terminated.borrow().is_empty());
     assert_eq!(*d.asked.borrow(), vec![10]);
+}
+
+#[test]
+fn the_system_is_read_once_however_many_programs_are_listed() {
+    let mut d = Fake::with(vec![
+        proc(10, "a.exe", 10),
+        proc(11, "b.exe", 10),
+        proc(12, "c.exe", 10),
+    ]);
+    d.closes_on_request = ["a", "b"].map(String::from).into();
+    let r = run(
+        &d,
+        &[
+            target("a", CloseMode::Graceful),
+            target("b", CloseMode::Graceful),
+            target("c", CloseMode::Graceful),
+        ],
+        &HashSet::new(),
+        &fast(),
+    );
+    assert_eq!(r[0].outcome, Outcome::Closed);
+    assert_eq!(r[2].outcome, Outcome::StillRunning);
+    // One full listing; waiting uses the cheap list of ids.
+    assert_eq!(d.listings.get(), 1);
 }
 
 #[test]

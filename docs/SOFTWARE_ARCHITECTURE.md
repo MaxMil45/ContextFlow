@@ -551,6 +551,13 @@ restore_workspace(workspace, args):
 > and every safety check are unchanged; programs that need ending by force
 > are ended together, too.
 >
+> **One look at the system per cleanup.** The running programs are listed
+> once at the start (path, session and which programs run ContextFlow
+> itself), not again for every rule. While waiting, only the ids of running
+> processes are read, which needs no process to be opened: measured on a
+> machine with 338 processes, 6 ms against 15 ms for the full listing, every
+> quarter second for up to 6 s.
+>
 > **A program with a dialog open is never force-ended.** Force mode ends a
 > program that ignores the close request. A program that answered the request
 > with "Save changes?" is also still running, and ending it would lose exactly

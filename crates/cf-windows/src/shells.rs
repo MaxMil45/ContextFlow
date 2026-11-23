@@ -11,11 +11,10 @@
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+
+use crate::processes::{snapshot, Entry as Proc};
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, IsWow64Process, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_VM_READ,
@@ -26,14 +25,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 /// their process is in a Windows folder, which says nothing about where the
 /// Linux shell inside is.
 const SHELLS: [&str; 4] = ["pwsh.exe", "powershell.exe", "cmd.exe", "nu.exe"];
-
-/// One process, as the snapshot lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Proc {
-    pub pid: u32,
-    pub parent: u32,
-    pub name: String,
-}
 
 /// The shells below `root`, whatever depth: a terminal starts its console host
 /// first and the shell below that. A shell started *from* a shell (a `cmd`
@@ -55,35 +46,6 @@ pub(crate) fn shells_under(table: &[Proc], root: u32) -> Vec<u32> {
             }
             work.push((child.pid, under_shell || shell));
         }
-    }
-    out
-}
-
-fn snapshot() -> Vec<Proc> {
-    let mut out = Vec::new();
-    // SAFETY: a plain ToolHelp snapshot, closed before returning.
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap == INVALID_HANDLE_VALUE {
-            return out;
-        }
-        let mut entry: PROCESSENTRY32W = zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-        let mut ok = Process32FirstW(snap, &mut entry) != 0;
-        while ok {
-            let n = entry
-                .szExeFile
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(entry.szExeFile.len());
-            out.push(Proc {
-                pid: entry.th32ProcessID,
-                parent: entry.th32ParentProcessID,
-                name: String::from_utf16_lossy(&entry.szExeFile[..n]),
-            });
-            ok = Process32NextW(snap, &mut entry) != 0;
-        }
-        CloseHandle(snap);
     }
     out
 }
@@ -218,7 +180,7 @@ pub(crate) fn window_shell_folders(hwnd: isize) -> Option<(u32, Vec<String>)> {
     if pid == 0 {
         return None;
     }
-    let mut shells = shells_under(&snapshot(), pid);
+    let mut shells = shells_under(&snapshot().unwrap_or_default(), pid);
     shells.sort_by_key(|&p| started_at(p));
     let folders = shells.into_iter().filter_map(process_cwd).collect();
     Some((pid, folders))
@@ -350,10 +312,10 @@ mod tests {
                 .map(|p| p.pid)
                 .collect()
         };
-        let before = terminals(&snapshot());
+        let before = terminals(&snapshot().unwrap_or_default());
         crate::launch_process(alias.to_str().unwrap(), &args, None).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(6));
-        let table = snapshot();
+        let table = snapshot().unwrap_or_default();
         let new: Vec<u32> = terminals(&table)
             .into_iter()
             .filter(|p| !before.contains(p))

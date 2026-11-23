@@ -733,15 +733,7 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
         <header className="card-header">
           <h3>What comes back</h3>
         </header>
-        <ul className="app-list">
-          {snapshot.applications.map((a) => (
-            <li className="app-row" key={a.applicationId}>
-              <AppIcon applicationId={a.applicationId} />
-              <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
-              <span className="muted small">{appSummary(a)}</span>
-            </li>
-          ))}
-        </ul>
+        <AppList applications={snapshot.applications} />
         {snapshot.repositories.length > 0 && (
           <>
             <h4>Repositories</h4>
@@ -759,6 +751,21 @@ function Overview({ snapshot }: { snapshot: SnapshotDetail }) {
         )}
       </section>
     </>
+  );
+}
+
+/** The applications a version brings back, one row each. */
+function AppList({ applications, className }: { applications: SnapshotDetail["applications"]; className?: string }) {
+  return (
+    <ul className={className ? `app-list ${className}` : "app-list"}>
+      {applications.map((a) => (
+        <li className="app-row" key={a.applicationId}>
+          <AppIcon applicationId={a.applicationId} />
+          <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
+          <span className="muted small">{appSummary(a)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -820,15 +827,7 @@ function VersionDetails({
         {plural(windows, "window")}, {plural(snapshot.monitorCount, "monitor")}
       </p>
       {snapshot.notes.length > 0 && <p className="gap-top">“{snapshot.notes.at(-1)}”</p>}
-      <ul className="app-list gap-top">
-        {snapshot.applications.map((a) => (
-          <li className="app-row" key={a.applicationId}>
-            <AppIcon applicationId={a.applicationId} />
-            <span className="app-name" title={a.applicationId}>{friendlyAppName(a.applicationId)}</span>
-            <span className="muted small">{appSummary(a)}</span>
-          </li>
-        ))}
-      </ul>
+      <AppList applications={snapshot.applications} className="gap-top" />
     </>
   );
 }

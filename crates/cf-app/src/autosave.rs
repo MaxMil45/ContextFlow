@@ -182,18 +182,7 @@ pub fn save_active(
     let notes: Vec<String> = new_note.or(previous_note).into_iter().collect();
 
     log(&format!("Saving “{}”", prev.name));
-    let result = capture::capture(capture::CaptureOptions {
-        only: &[],
-        repos: &repos,
-        notes,
-        include_windows: cfg.capture.include_windows,
-        unminimize: false,
-        rules: &cfg.capture,
-        git_timeout: cfg.timeouts.git(),
-        browser: &cfg.browser,
-        browser_state_dir: cf_browser::default_state_dir(),
-        detect: cf_detect::Sources::installed(),
-    });
+    let result = capture::capture(capture::CaptureOptions::from_config(cfg, &repos, notes));
 
     let decision = match decide(previous.as_ref().map(|s| &s.payload), &result.payload) {
         Decision::Unchanged if note_changed => Decision::Save,

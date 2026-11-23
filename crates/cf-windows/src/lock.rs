@@ -4,6 +4,7 @@
 //! The mutex is owned by the kernel, so it is released automatically when the
 //! process exits or crashes; a stale lock file can never block the user.
 
+use crate::text::wide;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 
@@ -17,10 +18,6 @@ impl Drop for InstanceLock {
             CloseHandle(self.0 as _);
         }
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Try to take the lock called `name` (use a `Local\` prefix so it is

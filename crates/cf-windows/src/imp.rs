@@ -1,3 +1,4 @@
+use crate::text::from_wide;
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
 
@@ -42,11 +43,6 @@ fn rect_from(r: &RECT) -> Rect {
     }
 }
 
-fn utf16_to_string(buf: &[u16]) -> String {
-    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    String::from_utf16_lossy(&buf[..end])
-}
-
 unsafe extern "system" fn collect_hwnd(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let handles = &mut *(lparam as *mut Vec<HWND>);
     handles.push(hwnd);
@@ -71,13 +67,13 @@ unsafe fn window_text(hwnd: HWND) -> String {
     }
     let mut buf = vec![0u16; len as usize + 1];
     let copied = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-    utf16_to_string(&buf[..copied.max(0) as usize])
+    from_wide(&buf[..copied.max(0) as usize])
 }
 
 unsafe fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 256];
     let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-    utf16_to_string(&buf[..n.max(0) as usize])
+    from_wide(&buf[..n.max(0) as usize])
 }
 
 unsafe fn process_image_path(pid: u32) -> Option<String> {
@@ -89,7 +85,7 @@ unsafe fn process_image_path(pid: u32) -> Option<String> {
     let mut size = buf.len() as u32;
     let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut size);
     CloseHandle(handle);
-    (ok != 0).then(|| utf16_to_string(&buf[..size as usize]))
+    (ok != 0).then(|| from_wide(&buf[..size as usize]))
 }
 
 unsafe fn monitor_device_name(hmon: HMONITOR) -> Option<(String, MONITORINFO)> {
@@ -98,7 +94,7 @@ unsafe fn monitor_device_name(hmon: HMONITOR) -> Option<(String, MONITORINFO)> {
     if GetMonitorInfoW(hmon, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO) == 0 {
         return None;
     }
-    Some((utf16_to_string(&info.szDevice), info.monitorInfo))
+    Some((from_wide(&info.szDevice), info.monitorInfo))
 }
 
 pub fn enumerate_windows() -> Result<Vec<DiscoveredWindow>> {

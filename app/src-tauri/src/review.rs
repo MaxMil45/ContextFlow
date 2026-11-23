@@ -20,18 +20,7 @@ pub(crate) fn capture_now(
     repos: &[PathBuf],
     notes: Vec<String>,
 ) -> capture::CaptureResult {
-    capture::capture(capture::CaptureOptions {
-        only: &[],
-        repos,
-        notes,
-        include_windows: cfg.capture.include_windows,
-        unminimize: false,
-        rules: &cfg.capture,
-        git_timeout: cfg.timeouts.git(),
-        browser: &cfg.browser,
-        browser_state_dir: cf_browser::default_state_dir(),
-        detect: cf_detect::Sources::installed(),
-    })
+    capture::capture(capture::CaptureOptions::from_config(cfg, repos, notes))
 }
 
 /// What a capture would save right now: the programs, their windows, tabs and
@@ -76,17 +65,7 @@ pub async fn discover_capture(
             .collect();
         Ok(CaptureDiscovery {
             apps,
-            repositories: p
-                .git
-                .iter()
-                .map(|g| DiscoveredRepo {
-                    path: g.repository_path.clone(),
-                    branch: g.branch.clone(),
-                    staged: g.staged,
-                    modified: g.modified,
-                    untracked: g.untracked,
-                })
-                .collect(),
+            repositories: p.git.iter().map(RepositoryEntry::from).collect(),
             monitor_count: p.monitors.len() as u32,
             warnings: r.warnings,
             excluded_windows: r.excluded_windows as u32,

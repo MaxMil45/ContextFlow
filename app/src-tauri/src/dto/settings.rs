@@ -195,24 +195,13 @@ pub struct DiscoveredApp {
     pub folder_count: u32,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export, export_to = "../../src/bindings/")]
-pub struct DiscoveredRepo {
-    pub path: String,
-    pub branch: Option<String>,
-    pub staged: u32,
-    pub modified: u32,
-    pub untracked: u32,
-}
-
 /// What a capture would save right now, to choose from before saving.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct CaptureDiscovery {
     pub apps: Vec<DiscoveredApp>,
-    pub repositories: Vec<DiscoveredRepo>,
+    pub repositories: Vec<super::RepositoryEntry>,
     pub monitor_count: u32,
     pub warnings: Vec<String>,
     pub excluded_windows: u32,

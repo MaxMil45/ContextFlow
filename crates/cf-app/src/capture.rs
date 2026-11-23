@@ -59,6 +59,30 @@ pub struct CaptureResult {
     pub minimized_windows: usize,
 }
 
+impl<'a> CaptureOptions<'a> {
+    /// A full capture as the settings say: every application, windows if
+    /// enabled, browser tabs and the folders editors have open. Callers change
+    /// only what differs (`..CaptureOptions::from_config(..)`).
+    pub fn from_config(
+        cfg: &'a cf_config::Config,
+        repos: &'a [PathBuf],
+        notes: Vec<String>,
+    ) -> Self {
+        Self {
+            only: &[],
+            repos,
+            notes,
+            include_windows: cfg.capture.include_windows,
+            unminimize: false,
+            rules: &cfg.capture,
+            git_timeout: cfg.timeouts.git(),
+            browser: &cfg.browser,
+            browser_state_dir: cf_browser::default_state_dir(),
+            detect: cf_detect::Sources::installed(),
+        }
+    }
+}
+
 pub use cf_engine::application_id;
 
 pub fn capture(opts: CaptureOptions<'_>) -> CaptureResult {

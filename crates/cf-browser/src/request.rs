@@ -16,7 +16,6 @@
 //! never connects disappears by itself.
 
 use std::collections::HashSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -102,12 +101,7 @@ pub fn write_pin_request(
     };
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{PREFIX}{}.json", request.id));
-    let tmp = path.with_extension("tmp");
-    let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(&serde_json::to_vec(&request)?)?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, &path)?;
+    crate::state::write_atomic(&path, &serde_json::to_vec(&request)?)?;
     Ok(Some(request))
 }
 

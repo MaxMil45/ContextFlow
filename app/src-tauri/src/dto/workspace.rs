@@ -127,6 +127,18 @@ pub struct RepositoryEntry {
     pub untracked: u32,
 }
 
+impl From<&cf_core::GitState> for RepositoryEntry {
+    fn from(g: &cf_core::GitState) -> Self {
+        Self {
+            path: g.repository_path.clone(),
+            branch: g.branch.clone(),
+            staged: g.staged,
+            modified: g.modified,
+            untracked: g.untracked,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../src/bindings/")]

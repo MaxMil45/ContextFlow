@@ -22,6 +22,8 @@ mod lock;
 mod processes;
 #[cfg(windows)]
 mod shells;
+#[cfg(windows)]
+mod text;
 
 #[cfg(windows)]
 pub use lock::InstanceLock;
@@ -124,6 +126,19 @@ pub fn list_processes() -> Result<Vec<ProcessInfo>> {
     #[cfg(not(windows))]
     {
         Err(PlatformError::Unsupported)
+    }
+}
+
+/// The ids of every running process: cheap, for "is it still running?".
+/// Empty off Windows.
+pub fn running_pids() -> std::collections::HashSet<u32> {
+    #[cfg(windows)]
+    {
+        processes::running_pids()
+    }
+    #[cfg(not(windows))]
+    {
+        std::collections::HashSet::new()
     }
 }
 
@@ -422,6 +437,21 @@ mod tests {
             try_lock_instance(&name).unwrap().is_some(),
             "free again after the holder drops it"
         );
+    }
+
+    /// What listing processes costs here. Run with
+    /// `cargo test -p cf-windows --release process_listing_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn process_listing_cost() {
+        let time = |f: &dyn Fn() -> usize| {
+            let start = std::time::Instant::now();
+            let n = (0..5).map(|_| f()).last().unwrap_or(0);
+            (n, start.elapsed() / 5)
+        };
+        let (n, full) = time(&|| list_processes().unwrap().len());
+        let (m, ids) = time(&|| running_pids().len());
+        println!("{n} processes: full listing {full:?}, ids only {ids:?} ({m})");
     }
 
     #[test]

@@ -87,7 +87,10 @@ All are done.
 | 5 | First run and setup | "Save what's open now" on first run. (The two setup chores are still open: see section 4.) |
 | 6 | Show it | The README leads with the one-key switch. (The recording is still missing.) |
 
-Done since, beyond the plan: the interface can be previewed in a browser with
+Done since, beyond the plan: a review for duplication merged five copies of
+the capture settings into one builder, three process-list walks into one, and
+the browser and editor window placement into one routine, and cleanup now reads
+the process list once per run instead of four times per program; the interface can be previewed in a browser with
 sample data (`npm run preview:mock` in `app/`), and a pass over it fixed its
 layout and wording; pinned tabs come back pinned (restore asks the
 browser extension, through its helper program); force close never ends a program that is

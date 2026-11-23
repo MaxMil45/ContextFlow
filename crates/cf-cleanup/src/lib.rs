@@ -36,6 +36,11 @@ pub trait Processes {
     fn protected_pids(&self) -> HashSet<u32>;
     fn logical_cpus(&self) -> usize;
     fn sleep(&self, d: Duration);
+    /// The ids of every running process. The default lists everything; the
+    /// real system has a much cheaper way, used while waiting for programs.
+    fn pids(&self) -> HashSet<u32> {
+        self.list().iter().map(|p| p.pid).collect()
+    }
 }
 
 /// All running processes of one program (same executable name).
@@ -75,10 +80,8 @@ fn eligible(p: &ProcessInfo, own_session: Option<u32>, protected: &HashSet<u32>)
 /// started it (a terminal, the app that launched it). Closing any process of
 /// such a program could end ContextFlow itself, so the whole program is
 /// protected, not only the one process.
-fn host_programs(procs: &dyn Processes, protected: &HashSet<u32>) -> HashSet<String> {
-    procs
-        .list()
-        .iter()
+fn host_programs(list: &[ProcessInfo], protected: &HashSet<u32>) -> HashSet<String> {
+    list.iter()
         .filter(|p| protected.contains(&p.pid))
         .map(|p| stem(&p.name))
         .collect()
@@ -92,7 +95,7 @@ const HOST_REASON: &str = "it is running ContextFlow";
 pub fn running_apps(procs: &dyn Processes, sample: Duration) -> Vec<RunningApp> {
     let own_session = procs.own_session();
     let protected_pids = procs.protected_pids();
-    let hosts = host_programs(procs, &protected_pids);
+    let hosts = host_programs(&procs.list(), &protected_pids);
     let before = procs.list();
     let started = Instant::now();
     procs.sleep(sample);
@@ -286,20 +289,35 @@ impl Default for RunOptions {
     }
 }
 
-fn pids_of(procs: &dyn Processes, process: &str) -> Vec<u32> {
-    let own_session = procs.own_session();
-    let protected = procs.protected_pids();
-    procs
-        .list()
-        .iter()
-        .filter(|p| eligible(p, own_session, &protected) && stem(&p.name) == process)
-        .map(|p| p.pid)
-        .collect()
+/// What a cleanup needs to know about the system, read once at its start.
+struct System {
+    list: Vec<ProcessInfo>,
+    own_session: Option<u32>,
+    protected: HashSet<u32>,
+    /// Programs running ContextFlow itself.
+    hosts: HashSet<String>,
 }
 
-/// The pids of every process running right now.
-fn running_pids(procs: &dyn Processes) -> HashSet<u32> {
-    procs.list().iter().map(|p| p.pid).collect()
+impl System {
+    fn read(procs: &dyn Processes) -> Self {
+        let list = procs.list();
+        let protected = procs.protected_pids();
+        let hosts = host_programs(&list, &protected);
+        Self {
+            list,
+            own_session: procs.own_session(),
+            protected,
+            hosts,
+        }
+    }
+
+    fn pids_of(&self, process: &str) -> Vec<u32> {
+        self.list
+            .iter()
+            .filter(|p| eligible(p, self.own_session, &self.protected) && stem(&p.name) == process)
+            .map(|p| p.pid)
+            .collect()
+    }
 }
 
 fn result(t: &CleanupTarget, outcome: Outcome, message: impl Into<String>) -> TargetResult {
@@ -334,7 +352,7 @@ impl Asked<'_> {
 
 /// Why a program must not be touched, or the processes to close.
 fn check(
-    procs: &dyn Processes,
+    system: &System,
     t: &CleanupTarget,
     keep: &HashSet<String>,
 ) -> Result<Vec<u32>, TargetResult> {
@@ -352,14 +370,14 @@ fn check(
             "left open: the workspace you're entering uses it",
         ));
     }
-    if host_programs(procs, &procs.protected_pids()).contains(&t.process) {
+    if system.hosts.contains(&t.process) {
         return Err(result(
             t,
             Outcome::Protected,
             format!("not closed: {HOST_REASON}"),
         ));
     }
-    let pids = pids_of(procs, &t.process);
+    let pids = system.pids_of(&t.process);
     if pids.is_empty() {
         return Err(result(t, Outcome::NotRunning, "not running"));
     }
@@ -381,10 +399,11 @@ pub fn run(
     opts: &RunOptions,
 ) -> Vec<TargetResult> {
     // 1. Ask nicely, everything at once.
+    let system = System::read(procs);
     let mut steps: Vec<Result<Asked, TargetResult>> = targets
         .iter()
         .map(|t| {
-            let pids = check(procs, t, keep)?;
+            let pids = check(&system, t, keep)?;
             let asked = pids.iter().map(|&p| procs.request_close(p)).sum();
             Ok(Asked {
                 target: t,
@@ -399,7 +418,7 @@ pub fn run(
     // 2. Wait for all of them together.
     let deadline = Instant::now() + opts.close_wait;
     loop {
-        let running = running_pids(procs);
+        let running = procs.pids();
         for a in steps.iter_mut().flatten() {
             a.remaining.retain(|p| running.contains(p));
         }
@@ -434,7 +453,7 @@ pub fn run(
     if ended {
         procs.sleep(opts.poll);
     }
-    let running = running_pids(procs);
+    let running = procs.pids();
 
     steps
         .into_iter()

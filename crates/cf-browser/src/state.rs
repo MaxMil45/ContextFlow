@@ -36,13 +36,19 @@ pub fn write_state(dir: &Path, state: &LiveState) -> std::io::Result<()> {
         ));
     }
     std::fs::create_dir_all(dir)?;
-    let final_path = state_file(dir, &state.browser, &state.profile_id);
-    let tmp = final_path.with_extension("tmp");
+    let path = state_file(dir, &state.browser, &state.profile_id);
+    write_atomic(&path, &serde_json::to_vec(state)?)
+}
+
+/// Write `bytes` to `path` so a reader sees the old file or the new one, never
+/// half of one: written next to it, flushed to disk, then renamed over it.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
     let mut f = std::fs::File::create(&tmp)?;
-    f.write_all(&serde_json::to_vec(state)?)?;
+    f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
-    std::fs::rename(&tmp, &final_path)
+    std::fs::rename(&tmp, path)
 }
 
 pub fn remove_state(dir: &Path, browser: &str, profile_id: &str) {

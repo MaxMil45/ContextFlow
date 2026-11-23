@@ -1,5 +1,6 @@
 //! Window control: placing windows and showing message boxes (Windows only).
 
+use crate::text::wide;
 use std::mem::{size_of, zeroed};
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
@@ -130,10 +131,6 @@ unsafe fn set_placement(hwnd: HWND, rect: &RECT, show_cmd: u32) -> std::io::Resu
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Show a modal message box (used by the windowless launcher to report problems).

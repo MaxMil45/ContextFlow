@@ -169,20 +169,10 @@ pub(crate) fn diff(
             .iter()
             .map(|g| PathBuf::from(&g.repository_path))
             .collect();
-        let r = capture::capture(capture::CaptureOptions {
-            only: &[],
-            repos: &repos,
-            notes: latest(db, &ctx)?
-                .map(|s| s.payload.notes)
-                .unwrap_or_default(),
-            include_windows: cfg.capture.include_windows,
-            unminimize: false,
-            rules: &cfg.capture,
-            git_timeout: cfg.timeouts.git(),
-            browser: &cfg.browser,
-            browser_state_dir: cf_browser::default_state_dir(),
-            detect: cf_detect::Sources::default(),
-        });
+        let notes = latest(db, &ctx)?
+            .map(|s| s.payload.notes)
+            .unwrap_or_default();
+        let r = capture::capture(capture::CaptureOptions::from_config(cfg, &repos, notes));
         ("live environment".to_string(), r.payload)
     } else {
         let s = db.get_snapshot(ctx.id, to)?;

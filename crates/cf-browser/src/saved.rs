@@ -15,6 +15,10 @@ pub struct SavedTab {
     pub title: String,
     #[serde(default)]
     pub pinned: bool,
+    /// The tab group it was in. Left out when there is none, so snapshots
+    /// saved before groups existed (and their hashes) are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<crate::protocol::TabGroup>,
 }
 
 /// One browser window and its tabs, tied to the Win32 window it was captured
@@ -26,6 +30,11 @@ pub struct SavedWindow {
     /// Index into `tabs` of the tab that was in front.
     #[serde(default)]
     pub active_tab: Option<usize>,
+    /// The browser profile folder (`Default`, `Profile 2`) the window was in,
+    /// so it reopens in the same profile. `None` when it couldn't be told:
+    /// the window then opens in whichever profile the browser picks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,18 +142,24 @@ fn distance(live: &LiveWindow, desktop: &DesktopWindow) -> i64 {
 /// information the first one wins, as before.
 ///
 /// `desktop` are that browser's desktop windows as captured. `excluded` are
-/// case-insensitive substrings; matching tabs are dropped.
+/// case-insensitive substrings; matching tabs are dropped. `profile_of` turns
+/// the extension's profile id into the profile folder (see [`crate::profiles`]).
 pub fn match_windows(
     browser: &str,
     desktop: &[DesktopWindow],
     live: &[LiveState],
     excluded: &[String],
+    profile_of: &dyn Fn(&str) -> Option<String>,
 ) -> MatchResult {
     let excluded: Vec<String> = excluded.iter().map(|e| e.to_lowercase()).collect();
-    let candidates: Vec<&LiveWindow> = live
+    // Each live window with the profile (folder) it was reported from.
+    let candidates: Vec<(Option<String>, &LiveWindow)> = live
         .iter()
-        .flat_map(|s| &s.windows)
-        .filter(|w| !w.tabs.is_empty())
+        .flat_map(|s| {
+            let profile = profile_of(&s.profile_id);
+            s.windows.iter().map(move |w| (profile.clone(), w))
+        })
+        .filter(|(_, w)| !w.tabs.is_empty())
         .collect();
     let mut used = vec![false; candidates.len()];
     let mut windows = Vec::new();
@@ -153,13 +168,14 @@ pub fn match_windows(
         let title = &win.title;
         // `min_by_key` keeps the first of equal distances.
         let Some(i) = (0..candidates.len())
-            .filter(|&i| !used[i] && title_matches(title, candidates[i]))
-            .min_by_key(|&i| distance(candidates[i], win))
+            .filter(|&i| !used[i] && title_matches(title, candidates[i].1))
+            .min_by_key(|&i| distance(candidates[i].1, win))
         else {
             continue;
         };
         used[i] = true;
-        let kept: Vec<(bool, SavedTab)> = candidates[i]
+        let (profile, live_window) = &candidates[i];
+        let kept: Vec<(bool, SavedTab)> = live_window
             .tabs
             .iter()
             .filter(|t| {
@@ -173,6 +189,7 @@ pub fn match_windows(
                         url: t.url.clone(),
                         title: t.title.clone(),
                         pinned: t.pinned,
+                        group: t.group.clone(),
                     },
                 )
             })
@@ -184,6 +201,7 @@ pub fn match_windows(
             window_title: title.clone(),
             active_tab: kept.iter().position(|(active, _)| *active),
             tabs: kept.into_iter().map(|(_, t)| t).collect(),
+            profile: profile.clone(),
         });
     }
     MatchResult {
@@ -247,6 +265,7 @@ mod tests {
                     title: (*title).into(),
                     pinned: false,
                     active: *active,
+                    group: None,
                 })
                 .collect(),
         }
@@ -259,6 +278,89 @@ mod tests {
             updated_at: Utc::now(),
             windows,
         }]
+    }
+
+    #[test]
+    fn groups_are_saved_with_their_tabs_and_left_out_when_there_are_none() {
+        let mut w = live_window(&[
+            ("https://a.example/", "A", true),
+            ("https://b.example/", "B", false),
+        ]);
+        w.tabs[0].group = Some(crate::protocol::TabGroup {
+            title: "Work".into(),
+            color: "blue".into(),
+        });
+        let titles = ["A - Google Chrome".to_string()];
+        let r = match_windows("chrome", &desk(&titles), &live(vec![w]), &[], &|_| None);
+        let tabs = &r.state.windows[0].tabs;
+        assert_eq!(
+            tabs[0].group.as_ref().map(|g| g.title.as_str()),
+            Some("Work")
+        );
+        assert_eq!(tabs[1].group, None);
+        let json = serde_json::to_string(&r.state).unwrap();
+        // Only the grouped tab mentions a group; old snapshots mention none.
+        assert_eq!(json.matches("\"group\"").count(), 1, "{json}");
+        let old = json.replace(r#","group":{"title":"Work","color":"blue"}"#, "");
+        assert!(!old.contains("group"), "{old}");
+        let back: BrowserAppState = serde_json::from_str(&old).unwrap();
+        assert_eq!(back.windows[0].tabs[0].group, None);
+    }
+
+    #[test]
+    fn each_window_carries_the_profile_it_was_reported_from() {
+        // Two profiles of one browser, each with a window of the same title.
+        let state = |id: &str, tab: &str| LiveState {
+            browser: "chrome".into(),
+            profile_id: id.into(),
+            updated_at: Utc::now(),
+            windows: vec![live_window(&[(tab, "Same", true)])],
+        };
+        let l = vec![
+            state("work-id", "https://work.example/"),
+            state("home-id", "https://home.example/"),
+        ];
+        let titles = [
+            "Same - Google Chrome".to_string(),
+            "Same - Google Chrome".to_string(),
+        ];
+        let folder = |id: &str| match id {
+            "work-id" => Some("Profile 2".to_string()),
+            _ => None, // the other profile can't be worked out
+        };
+        let r = match_windows("chrome", &desk(&titles), &l, &[], &folder);
+        let profiles: Vec<_> = r
+            .state
+            .windows
+            .iter()
+            .map(|w| (w.tabs[0].url.as_str(), w.profile.as_deref()))
+            .collect();
+        assert_eq!(
+            profiles,
+            [
+                ("https://work.example/", Some("Profile 2")),
+                ("https://home.example/", None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_window_without_a_known_profile_is_saved_exactly_as_before() {
+        let l = live(vec![live_window(&[("https://docs.rs", "Docs.rs", true)])]);
+        let titles = ["Docs.rs - Google Chrome".to_string()];
+        let r = match_windows("chrome", &desk(&titles), &l, &[], &|_| None);
+        let json = serde_json::to_string(&r.state).unwrap();
+        // Old snapshots and their hashes stay valid: no `profile` key at all.
+        assert!(!json.contains("profile"), "{json}");
+        // And a snapshot saved before profiles existed still loads.
+        let back: BrowserAppState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.windows[0].profile, None);
+        // A profile that is known is written and read back.
+        let mut with = r.state.clone();
+        with.windows[0].profile = Some("Profile 1".into());
+        let again: BrowserAppState =
+            serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(again.windows[0].profile.as_deref(), Some("Profile 1"));
     }
 
     #[test]
@@ -290,7 +392,7 @@ mod tests {
             "Docs.rs - Google Chrome".to_string(),
             "Navy-152 - Google Drive - Google Chrome".to_string(),
         ];
-        let r = match_windows("chrome", &desk(&titles), &l, &[]);
+        let r = match_windows("chrome", &desk(&titles), &l, &[], &|_| None);
         assert_eq!(r.unmatched_live, 0);
         assert_eq!(r.state.windows.len(), 2);
         assert_eq!(r.state.windows[0].window_title, titles[0]);
@@ -310,7 +412,7 @@ mod tests {
             "Same and 3 more pages - Work - Microsoft Edge".to_string(),
             "Same and 1 more page - Work - Microsoft Edge".to_string(),
         ];
-        let r = match_windows("msedge", &desk(&titles), &l, &[]);
+        let r = match_windows("msedge", &desk(&titles), &l, &[], &|_| None);
         assert_eq!(r.state.windows[0].tabs[0].url, "https://a.com/1");
         assert_eq!(r.state.windows[1].tabs[0].url, "https://a.com/2");
     }
@@ -328,7 +430,13 @@ mod tests {
             "Ok - Google Chrome".to_string(),
             "Mystery - Google Chrome".to_string(),
         ];
-        let r = match_windows("chrome", &desk(&titles), &l, &["BANK.example".into()]);
+        let r = match_windows(
+            "chrome",
+            &desk(&titles),
+            &l,
+            &["BANK.example".into()],
+            &|_| None,
+        );
         assert_eq!(r.state.windows.len(), 1);
         assert_eq!(r.state.windows[0].tabs.len(), 1, "excluded tab dropped");
         assert_eq!(r.state.windows[0].active_tab, Some(0));
@@ -350,7 +458,7 @@ mod tests {
             desktop_window("Same - Google Chrome", 1000, 0, 1.0),
             desktop_window("Same - Google Chrome", 0, 0, 1.0),
         ];
-        let r = match_windows("chrome", &desktop, &l, &[]);
+        let r = match_windows("chrome", &desktop, &l, &[], &|_| None);
         assert_eq!(r.state.windows.len(), 2);
         assert_eq!(r.state.windows[0].tabs[0].url, "https://right.example");
         assert_eq!(r.state.windows[1].tabs[0].url, "https://left.example");
@@ -365,7 +473,7 @@ mod tests {
         let b = at(live_window(&[("https://b.example", "Same", true)]), 600, 0);
         let l = live(vec![b, a]); // listed so that "first match" would pick b
         let desktop = vec![desktop_window("Same - Google Chrome", 600, 0, 1.5)];
-        let r = match_windows("chrome", &desktop, &l, &[]);
+        let r = match_windows("chrome", &desktop, &l, &[], &|_| None);
         assert_eq!(r.state.windows[0].tabs[0].url, "https://a.example");
         assert_eq!(r.unmatched_live, 1, "the other window stays unmatched");
     }
@@ -381,7 +489,7 @@ mod tests {
             desktop_window("Same - Google Chrome", 500, 500, 1.0),
             desktop_window("Same - Google Chrome", 0, 0, 1.0),
         ];
-        let r = match_windows("chrome", &desktop, &l, &[]);
+        let r = match_windows("chrome", &desktop, &l, &[], &|_| None);
         assert_eq!(r.state.windows[0].tabs[0].url, "https://one.example");
         assert_eq!(r.state.windows[1].tabs[0].url, "https://two.example");
     }

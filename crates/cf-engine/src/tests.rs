@@ -89,6 +89,10 @@ struct Fake {
     /// Windows that appear, one per call, when a browser window is opened.
     browser_windows: RefCell<Vec<DiscoveredWindow>>,
     browser_opens: RefCell<Vec<Vec<String>>>,
+    /// The profile each browser window was opened in, in the same order.
+    browser_profiles: RefCell<Vec<Option<String>>>,
+    /// The groups asked for with each request, in the same order.
+    group_requests: RefCell<Vec<Vec<cf_browser::request::GroupRequest>>>,
     /// Pin requests left for the extension: (browser, addresses).
     pin_requests: RefCell<Vec<(String, Vec<String>)>>,
     /// Arguments of every `open_app_window` call (e.g. VS Code folders).
@@ -131,7 +135,15 @@ impl Desktop for Fake {
         }
         Ok(())
     }
-    fn open_browser_window(&self, _exe: &str, urls: &[String]) -> Result<(), String> {
+    fn open_browser_window(
+        &self,
+        _exe: &str,
+        profile: Option<&str>,
+        urls: &[String],
+    ) -> Result<(), String> {
+        self.browser_profiles
+            .borrow_mut()
+            .push(profile.map(String::from));
         self.browser_opens.borrow_mut().push(urls.to_vec());
         self.events
             .borrow_mut()
@@ -146,7 +158,13 @@ impl Desktop for Fake {
     fn live_browser_urls(&self, _browser: &str) -> Option<Vec<String>> {
         self.live_urls.clone()
     }
-    fn request_pins(&self, browser: &str, urls: &[String]) {
+    fn request_pins(
+        &self,
+        browser: &str,
+        urls: &[String],
+        groups: &[cf_browser::request::GroupRequest],
+    ) {
+        self.group_requests.borrow_mut().push(groups.to_vec());
         self.events.borrow_mut().push(format!("pin:{}", urls.len()));
         self.pin_requests
             .borrow_mut()

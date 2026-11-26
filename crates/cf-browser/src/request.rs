@@ -33,7 +33,20 @@ pub const MAX_PINS: usize = 100;
 const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 const PREFIX: &str = "pin-";
 
-/// "Pin these tabs", as written by restore and passed to the extension.
+/// The most groups one request may carry.
+pub const MAX_GROUPS: usize = 20;
+
+/// "Put these tabs in a group": a title and colour and the addresses, in
+/// order, of the tabs that were in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRequest {
+    pub title: String,
+    pub color: String,
+    pub urls: Vec<String>,
+}
+
+/// "Pin these tabs and group these", as written by restore and passed to the
+/// extension. (Named for what it did first; it also carries groups.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinRequest {
     /// Unique, made of letters, digits and `-` only (it is part of a file name).
@@ -44,6 +57,10 @@ pub struct PinRequest {
     pub created_at: i64,
     /// Addresses to pin, in the order they should end up.
     pub urls: Vec<String>,
+    /// Groups to make. Left out of the file when there are none, which is also
+    /// how requests written before groups existed read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupRequest>,
 }
 
 impl PinRequest {
@@ -54,6 +71,7 @@ impl PinRequest {
             "id": self.id,
             "browser": self.browser,
             "urls": self.urls,
+            "groups": self.groups,
         })
     }
 }
@@ -80,17 +98,47 @@ fn usable(urls: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Leave a request to pin `urls` in `browser`. Returns the request, or `None`
-/// when there is nothing usable to pin. Written atomically, so a host never
-/// reads half a file.
+/// The groups that may be asked for: a colour the browser has, a clean title,
+/// plain web addresses, at most [`MAX_GROUPS`]. Empty ones are dropped.
+fn usable_groups(groups: &[GroupRequest]) -> Vec<GroupRequest> {
+    groups
+        .iter()
+        .filter_map(|g| {
+            let checked = crate::protocol::TabGroup::checked(&g.title, &g.color)?;
+            let urls = usable(&g.urls);
+            (!urls.is_empty()).then_some(GroupRequest {
+                title: checked.title,
+                color: checked.color,
+                urls,
+            })
+        })
+        .take(MAX_GROUPS)
+        .collect()
+}
+
+/// Leave a request to pin `urls` in `browser`. See [`write_request`].
 pub fn write_pin_request(
     dir: &Path,
     browser: &str,
     urls: &[String],
     now: DateTime<Utc>,
 ) -> std::io::Result<Option<PinRequest>> {
+    write_request(dir, browser, urls, &[], now)
+}
+
+/// Leave a request to pin `urls` and make `groups` in `browser`. Returns the
+/// request, or `None` when there is nothing usable to ask for. Written
+/// atomically, so a host never reads half a file.
+pub fn write_request(
+    dir: &Path,
+    browser: &str,
+    urls: &[String],
+    groups: &[GroupRequest],
+    now: DateTime<Utc>,
+) -> std::io::Result<Option<PinRequest>> {
     let urls = usable(urls);
-    if urls.is_empty() || !crate::is_browser(browser) {
+    let groups = usable_groups(groups);
+    if (urls.is_empty() && groups.is_empty()) || !crate::is_browser(browser) {
         return Ok(None);
     }
     let request = PinRequest {
@@ -98,6 +146,7 @@ pub fn write_pin_request(
         browser: browser.to_string(),
         created_at: now.timestamp_millis(),
         urls,
+        groups,
     };
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{PREFIX}{}.json", request.id));
@@ -146,7 +195,8 @@ pub fn pending_requests(
             continue;
         }
         request.urls = usable(&request.urls);
-        if !request.urls.is_empty() {
+        request.groups = usable_groups(&request.groups);
+        if !(request.urls.is_empty() && request.groups.is_empty()) {
             out.push(request);
         }
     }
@@ -256,6 +306,7 @@ mod tests {
             browser: "chrome".into(),
             created_at: 5,
             urls: urls(&["https://a.example/"]),
+            groups: Vec::new(),
         };
         let msg = req.to_message();
         assert_eq!(msg["type"], "pin");
@@ -265,5 +316,58 @@ mod tests {
         assert_eq!(len, bytes.len() - 4);
         let back: serde_json::Value = serde_json::from_slice(&bytes[4..]).unwrap();
         assert_eq!(back, msg);
+    }
+
+    fn group(title: &str, color: &str, list: &[&str]) -> GroupRequest {
+        GroupRequest {
+            title: title.into(),
+            color: color.into(),
+            urls: urls(list),
+        }
+    }
+
+    #[test]
+    fn groups_travel_with_the_request_and_only_clean_ones_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let asked = [
+            group(
+                "Work",
+                "blue",
+                &["https://a.example/", "https://b.example/"],
+            ),
+            group("Bad colour", "ultraviolet", &["https://c.example/"]),
+            group("Unsafe", "red", &["chrome://settings", "javascript:x"]),
+            group("Empty", "red", &[]),
+        ];
+        let req = write_request(dir.path(), "chrome", &[], &asked, now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(req.groups, [asked[0].clone()]);
+        assert_eq!(req.to_message()["groups"][0]["title"], "Work");
+        assert_eq!(
+            pending_requests(dir.path(), now, &mut HashSet::new()),
+            [req]
+        );
+        // Nothing usable at all: nothing is written.
+        let none = write_request(dir.path(), "chrome", &[], &asked[1..], now).unwrap();
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn a_request_written_before_groups_existed_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        std::fs::write(
+            dir.path().join("pin-old-1.json"),
+            format!(
+                r#"{{"id":"old-1","browser":"chrome","created_at":{},"urls":["https://a.example/"]}}"#,
+                now.timestamp_millis()
+            ),
+        )
+        .unwrap();
+        let got = pending_requests(dir.path(), now, &mut HashSet::new());
+        assert_eq!(got.len(), 1);
+        assert!(got[0].groups.is_empty());
     }
 }

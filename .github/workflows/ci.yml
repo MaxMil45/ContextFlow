@@ -40,6 +40,11 @@ jobs:
           npm ci
           npm run build
 
+      # The interface against its sample backend (jsdom, no Rust needed).
+      - name: Interface tests
+        working-directory: app
+        run: npm test
+
       # The extension's pinning logic, against a fake browser.
       - name: Extension test
         run: node extensions/browser/test/pinning.test.js

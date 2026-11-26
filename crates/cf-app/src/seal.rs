@@ -12,6 +12,7 @@ use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{anyhow, bail, Result};
+use zeroize::Zeroizing;
 
 const MAGIC: &[u8; 8] = b"CFXSEAL1";
 const SALT_LEN: usize = 16;
@@ -36,10 +37,14 @@ pub fn is_sealed(bytes: &[u8]) -> bool {
     bytes.starts_with(MAGIC)
 }
 
-fn key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
-    let mut key = [0u8; 32];
+/// The encryption key for `passphrase`. It is wiped from memory when dropped,
+/// so it doesn't linger in the process after the export is written or read.
+/// (The passphrase itself comes in as ordinary text from the interface, with
+/// copies this program can't reach, so only the key is wiped here.)
+fn key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+    let mut key = Zeroizing::new([0u8; 32]);
     argon2::Argon2::default()
-        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .hash_password_into(passphrase.as_bytes(), salt, &mut *key)
         .map_err(|e| anyhow!("couldn't derive a key from the passphrase: {e}"))?;
     Ok(key)
 }
@@ -53,7 +58,7 @@ pub fn seal(plain: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut nonce);
-    let cipher = Aes256Gcm::new_from_slice(&key(passphrase, &salt)?)?;
+    let cipher = Aes256Gcm::new_from_slice(&*key(passphrase, &salt)?)?;
     let sealed = cipher
         .encrypt(Nonce::from_slice(&nonce), plain)
         .map_err(|_| anyhow!("couldn't protect the file"))?;
@@ -73,7 +78,7 @@ pub fn open(bytes: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     }
     let salt = &bytes[MAGIC.len()..MAGIC.len() + SALT_LEN];
     let nonce = &bytes[MAGIC.len() + SALT_LEN..header];
-    let cipher = Aes256Gcm::new_from_slice(&key(passphrase, salt)?)?;
+    let cipher = Aes256Gcm::new_from_slice(&*key(passphrase, salt)?)?;
     cipher
         .decrypt(Nonce::from_slice(nonce), &bytes[header..])
         .map_err(|_| anyhow!("wrong passphrase, or the file has been changed"))

@@ -5,9 +5,9 @@
 // passwords, history, page content or form data, and it skips private
 // (incognito) windows. Data goes only to the program on this computer.
 //
-// The one thing it receives is a request to pin tabs: after ContextFlow
-// reopens a window whose tabs were pinned (the browser's command line can't
-// pin), it asks for those addresses to be pinned again.
+// The one thing it receives is a request to pin tabs and group tabs: after
+// ContextFlow reopens a window whose tabs were pinned or in groups (the
+// browser's command line can do neither), it asks for them again.
 
 const HOST = "dev.contextflow.host";
 const BROWSER = /Edg\//.test(navigator.userAgent) ? "msedge" : "chrome";
@@ -16,6 +16,9 @@ const HEARTBEAT_MS = 20000;
 // A pin request is tried for this long: tabs may still be loading.
 const PIN_FOR_MS = 60000;
 const MAX_PINS = 100;
+const MAX_GROUPS = 20;
+const GROUP_COLORS = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
+const NO_GROUP = -1; // chrome.tabs.TAB_GROUP_ID_NONE
 
 let port = null;
 let debounce = null;
@@ -28,11 +31,30 @@ async function profileId() {
   return id;
 }
 
+// The title and colour of each group the tabs are in (one lookup per group).
+async function groupsOf(windows) {
+  const found = new Map();
+  for (const w of windows) {
+    for (const t of w.tabs || []) {
+      const id = t.groupId ?? NO_GROUP;
+      if (id === NO_GROUP || found.has(id)) continue;
+      try {
+        const g = await chrome.tabGroups.get(id);
+        found.set(id, { title: g.title || "", color: g.color || "grey" });
+      } catch (e) {
+        found.set(id, null); // closed while we looked
+      }
+    }
+  }
+  return found;
+}
+
 async function collect() {
   const windows = await chrome.windows.getAll({
     populate: true,
     windowTypes: ["normal"],
   });
+  const groups = await groupsOf(windows);
   return windows
     .filter((w) => !w.incognito)
     .map((w) => ({
@@ -52,6 +74,7 @@ async function collect() {
         title: t.title || "",
         pinned: !!t.pinned,
         active: !!t.active,
+        group: groups.get(t.groupId ?? NO_GROUP) ?? null,
       })),
     }));
 }
@@ -73,7 +96,8 @@ async function push() {
 
 // ---------------------------------------------------------------- pinning
 
-// Requests not finished yet: { id, urls (normalised, in order), until }.
+// Requests not finished yet: { id, urls (normalised, in order), groups, until }.
+// Each group: { title, color, urls (still to place), windowId, groupId }.
 let pinRequests = [];
 const seenRequests = new Set();
 let pinTimer = null;
@@ -99,12 +123,62 @@ function acceptPinRequest(msg) {
   if (!msg || msg.type !== "pin" || msg.browser !== BROWSER) return;
   if (typeof msg.id !== "string" || seenRequests.has(msg.id) || !Array.isArray(msg.urls)) return;
   seenRequests.add(msg.id);
-  const urls = msg.urls
-    .filter((u) => typeof u === "string" && /^https?:\/\//i.test(u))
-    .slice(0, MAX_PINS)
-    .map(normalizeUrl);
-  if (urls.length) pinRequests.push({ id: msg.id, urls, until: Date.now() + PIN_FOR_MS });
+  const web = (list) =>
+    (Array.isArray(list) ? list : [])
+      .filter((u) => typeof u === "string" && /^https?:\/\//i.test(u))
+      .slice(0, MAX_PINS)
+      .map(normalizeUrl);
+  const urls = web(msg.urls);
+  const groups = (Array.isArray(msg.groups) ? msg.groups : [])
+    .filter((g) => g && typeof g.title === "string" && GROUP_COLORS.includes(g.color))
+    .slice(0, MAX_GROUPS)
+    .map((g) => ({
+      title: g.title.slice(0, 100),
+      color: g.color,
+      urls: web(g.urls),
+      windowId: null,
+      groupId: null,
+    }))
+    .filter((g) => g.urls.length);
+  if (urls.length || groups.length) {
+    pinRequests.push({ id: msg.id, urls, groups, until: Date.now() + PIN_FOR_MS });
+  }
   schedulePins();
+}
+
+// Put the tabs of one group together. Like pins, only tabs that are not pinned
+// and not in a group yet are used, and only addresses ContextFlow has just
+// opened are asked for. All tabs of a group must be in one window (the one of
+// the first tab found); later tabs join the group that was made.
+async function applyGroup(group, tabs, taken) {
+  const left = [];
+  for (const want of group.urls) {
+    const tab = tabs.find(
+      (t) =>
+        !t.pinned &&
+        !taken.has(t.id) &&
+        (t.groupId ?? NO_GROUP) === NO_GROUP &&
+        (group.windowId === null || t.windowId === group.windowId) &&
+        normalizeUrl(t.pendingUrl || t.url) === want,
+    );
+    if (!tab) {
+      left.push(want);
+      continue;
+    }
+    taken.add(tab.id);
+    try {
+      if (group.groupId === null) {
+        group.groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+        group.windowId = tab.windowId;
+        await chrome.tabGroups.update(group.groupId, { title: group.title, color: group.color });
+      } else {
+        await chrome.tabs.group({ tabIds: [tab.id], groupId: group.groupId });
+      }
+    } catch (e) {
+      left.push(want); // closed or busy: try again on the next change
+    }
+  }
+  group.urls = left;
 }
 
 // Pin, for each request, one unpinned tab per address, in the saved order.
@@ -112,7 +186,9 @@ function acceptPinRequest(msg) {
 // only the tabs that were not open), so an unpinned tab with that address is
 // the one it opened.
 async function applyPins() {
-  pinRequests = pinRequests.filter((r) => r.urls.length && r.until > Date.now());
+  pinRequests = pinRequests.filter(
+    (r) => (r.urls.length || r.groups.some((g) => g.urls.length)) && r.until > Date.now(),
+  );
   if (!pinRequests.length) return;
   let windows;
   try {
@@ -140,6 +216,10 @@ async function applyPins() {
       }
     }
     request.urls = left;
+    // Groups after pins, so a tab pinned by this request is never grouped.
+    for (const group of request.groups) {
+      if (group.urls.length) await applyGroup(group, tabs, taken);
+    }
   }
 }
 
@@ -183,13 +263,18 @@ for (const ev of [
 ]) {
   ev.addListener(schedulePush);
 }
+// A group changing is something to save too.
+for (const ev of [chrome.tabGroups.onCreated, chrome.tabGroups.onUpdated, chrome.tabGroups.onRemoved]) {
+  ev.addListener(schedulePush);
+}
+
 // New tabs, and tabs that finish loading, may be the ones a request is for.
 chrome.tabs.onCreated.addListener(schedulePins);
 chrome.tabs.onUpdated.addListener((_id, change) => {
   if (change.url || change.status === "complete") schedulePins();
 });
 chrome.tabs.onUpdated.addListener((_id, change) => {
-  if (change.url || change.title || change.pinned !== undefined || change.status === "complete") {
+  if (change.url || change.title || change.pinned !== undefined || change.groupId !== undefined || change.status === "complete") {
     schedulePush();
   }
 });

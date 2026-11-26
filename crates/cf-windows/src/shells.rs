@@ -6,7 +6,10 @@
 //!
 //! This sees where a shell **was started**, and where `cmd` is now. PowerShell
 //! does not change the folder of its process when you `cd`, so for it this is
-//! the folder it started in.
+//! the folder it started in, unless the user has installed the opt-in hook
+//! (`contextflow terminal hook install`): then the shell writes the folder it
+//! is in to `%LOCALAPPDATA%\ContextFlow\shells\<its process id>.txt`, and that
+//! is used when it is fresh (see [`reported_folder`]).
 
 use std::ffi::c_void;
 use std::mem::{size_of, zeroed};
@@ -170,6 +173,66 @@ fn started_at(pid: u32) -> u64 {
     }
 }
 
+/// Where PowerShell's hook writes the folder each shell is in.
+pub(crate) fn reports_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| {
+        std::path::PathBuf::from(d)
+            .join("ContextFlow")
+            .join("shells")
+    })
+}
+
+/// A time as the 100 ns ticks since 1601 that Windows uses for files and
+/// processes, so the two can be compared.
+fn filetime(t: std::time::SystemTime) -> u64 {
+    const UNIX_TO_1601_SECS: u64 = 11_644_473_600;
+    let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    (d.as_secs() + UNIX_TO_1601_SECS) * 10_000_000 + u64::from(d.subsec_nanos()) / 100
+}
+
+/// The folder a shell reported in its file, if the report is believable: text
+/// in the file (first line, at most 1,024 characters), written after the
+/// process started. A file from an older process that had the same id (ids are
+/// reused) was written before this one started, so it is refused.
+pub(crate) fn reported_folder(text: &str, written: u64, process_started: u64) -> Option<String> {
+    if written < process_started {
+        return None;
+    }
+    let line = text.lines().next()?.trim();
+    (!line.is_empty() && line.len() <= 1024).then(|| line.to_string())
+}
+
+/// What shell `pid` reported, from `dir`, if it reported anything believable.
+fn reported_by(dir: &std::path::Path, pid: u32, process_started: u64) -> Option<String> {
+    let path = dir.join(format!("{pid}.txt"));
+    let meta = std::fs::metadata(&path).ok()?;
+    if meta.len() > 4096 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&std::fs::read(&path).ok()?).into_owned();
+    reported_folder(&text, filetime(meta.modified().ok()?), process_started)
+}
+
+/// Delete reports of shells that are gone. Cheap; capture does it first.
+pub(crate) fn clean_reports() {
+    let (Some(dir), Ok(running)) = (reports_dir(), snapshot()) else {
+        return;
+    };
+    let running: std::collections::HashSet<u32> = running.into_iter().map(|e| e.pid).collect();
+    let Ok(files) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for f in files.flatten() {
+        let name = f.file_name().to_string_lossy().into_owned();
+        let pid = name
+            .strip_suffix(".txt")
+            .and_then(|n| n.parse::<u32>().ok());
+        if pid.is_some_and(|p| !running.contains(&p)) {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+}
+
 /// The program that owns window `hwnd` and the folder of each shell running in
 /// it, oldest shell (first tab) first. Shells whose folder can't be read are
 /// left out.
@@ -182,7 +245,18 @@ pub(crate) fn window_shell_folders(hwnd: isize) -> Option<(u32, Vec<String>)> {
     }
     let mut shells = shells_under(&snapshot().unwrap_or_default(), pid);
     shells.sort_by_key(|&p| started_at(p));
-    let folders = shells.into_iter().filter_map(process_cwd).collect();
+    let reports = reports_dir();
+    let folders = shells
+        .into_iter()
+        .filter_map(|p| {
+            // What the shell says about itself, when it does; otherwise where
+            // its process is.
+            reports
+                .as_deref()
+                .and_then(|dir| reported_by(dir, p, started_at(p)))
+                .or_else(|| process_cwd(p))
+        })
+        .collect();
     Some((pid, folders))
 }
 
@@ -332,6 +406,45 @@ mod tests {
                 .args(["/PID", &pid.to_string(), "/F"])
                 .output();
         }
+    }
+
+    #[test]
+    fn a_report_is_believed_only_when_written_after_the_shell_started() {
+        let started = 1_000;
+        assert_eq!(
+            reported_folder("C:\\work\\api\r\nignored", 2_000, started).as_deref(),
+            Some("C:\\work\\api")
+        );
+        // Written before this process existed: from an older shell with the
+        // same id.
+        assert_eq!(reported_folder("C:\\old", 999, started), None);
+        // A shell whose start time couldn't be read is never believed.
+        assert_eq!(reported_folder("C:\\x", 2_000, u64::MAX), None);
+        assert_eq!(reported_folder("", 2_000, started), None);
+        assert_eq!(reported_folder("\r\n", 2_000, started), None);
+        assert_eq!(reported_folder(&"x".repeat(2_000), 2_000, started), None);
+    }
+
+    #[test]
+    fn reports_are_read_from_files_named_by_process_id_and_old_ones_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("42.txt"), "C:\\work\\api").unwrap();
+        std::fs::write(dir.path().join("43.txt"), vec![b'x'; 5_000]).unwrap();
+        assert_eq!(
+            reported_by(dir.path(), 42, 0).as_deref(),
+            Some("C:\\work\\api")
+        );
+        // The file was written just now: a process "started" in the far future is newer.
+        assert_eq!(
+            reported_by(
+                dir.path(),
+                42,
+                filetime(std::time::SystemTime::now()) + 10_000_000_000
+            ),
+            None
+        );
+        assert_eq!(reported_by(dir.path(), 43, 0), None, "too large");
+        assert_eq!(reported_by(dir.path(), 44, 0), None, "no file");
     }
 
     #[test]

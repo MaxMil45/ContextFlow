@@ -450,8 +450,34 @@ capture ──▶ reads files younger than 120 s ──▶ matches live windows 
 > only needed to *read* tabs, to avoid opening tabs that are already open,
 > and to pin tabs again (below).
 
-**The one message back: pin requests.** The command line can open tabs but
-not pin them. So just before restore opens a window, it leaves a small file
+**Which profile a window is in.** A browser opens a window in a profile when
+started with `--profile-directory=<folder>`, but the extension can't say which
+folder it runs in. It does keep the id it reports (a random id it made up, one
+per profile) in its own storage inside the profile's folder, as plain text in
+the storage log (`Local Extension Settings/<extension id>/*.log`). So at
+capture, each profile's copy is searched for the id of each live connection;
+the one folder that holds it is saved with its windows (`SavedWindow.profile`)
+and used at restore.
+
+> **Why no guessing.** A folder is saved only when exactly one of `Default` and
+> `Profile <n>` holds the id. None (the browser compacted its storage, or the
+> extension isn't loaded there) or two (a copied profile) saves nothing, and
+> that window opens in whichever profile the browser picks, as before. Capture
+> says so when more than one profile is connected. The folder name is checked
+> again at restore, because a snapshot may come from an import: only `Default`
+> and `Profile <number>` ever reach a command line.
+>
+> **Trade-off.** It relies on how the browser stores extension data, which is
+> not a documented interface. It is read-only and fails safe, and was checked
+> on Chrome and Edge on 27 November 2026, but a browser update could change it.
+> Matching is by the id in the plain-text log: after the browser compacts its
+> storage into compressed table files the id may not be found.
+
+**The one message back: pin and group requests.** The command line can open
+tabs but not pin them or group them. (Groups: the extension also reports, for
+each tab, the title and colour of its group, saved as `SavedTab.group`; a
+colour the browser doesn't have is refused and a pinned tab is never in a
+group.) So just before restore opens a window, it leaves a small file
 for each window whose reopened tabs included pinned ones:
 
 ```
@@ -460,6 +486,14 @@ restore ──▶ browser/requests/pin-<id>.json ──▶ every running host (c
                                                  extension of that browser pins one unpinned
                                                  tab per address, in the saved order
 ```
+
+A request can also carry groups: a title, a colour and the addresses, in order,
+of the reopened tabs that were in it. The extension pins first, then for each
+group finds the unpinned, ungrouped tabs with those addresses, groups them with
+`chrome.tabs.group`, and sets the title and colour with `chrome.tabGroups.update`.
+All tabs of a group must be in one window (the window of the first one found);
+a tab that opens later joins the group already made. Tabs the user already had
+open are never grouped, because restore only reopens tabs that were not open.
 
 > **Why it is safe to pin by address.** Restore reopens only tabs that are not
 > open already, so an unpinned tab with a requested address is the one it just
@@ -796,9 +830,33 @@ as many windows as were saved is taken to have them all.
 > the home folder otherwise. `cmd` is read live. WSL and `bash` tabs are not
 > saved (their Windows-side folder says nothing about the Linux folder), split
 > panes come back as tabs, and two windows hosted by one terminal process
-> can't be separated, so nothing is saved for them. Seeing the live folder of
-> PowerShell would need a line in the user's PowerShell profile that reports
-> it, which ContextFlow doesn't install.
+> can't be separated, so nothing is saved for them.
+
+**The opt-in hook for PowerShell.** Windows Terminal keeps the folder a shell
+announces (OSC 9;9) to itself, with nothing another program can read, so the
+shell has to tell ContextFlow directly. `contextflow terminal hook install` adds
+a marked block to the user's PowerShell profile (the all-hosts profile of
+Windows PowerShell and PowerShell 7, whichever exist; `--profile <file>` names
+one). The block wraps the `prompt` function: it runs the existing prompt first
+and returns its text unchanged (so a custom prompt, Oh My Posh or Starship,
+sees the result of the last command untouched), then, when the folder changed,
+writes it to `%LOCALAPPDATA%\ContextFlow\shells\<PID of the shell>.txt`.
+`uninstall` removes exactly the marked block; a profile that was only the hook
+is deleted. Nothing is installed by the app or the installer.
+
+At capture, for each shell the report is used when the file is at most 4 KB,
+holds a folder on its first line, and was **written after the process
+started** (a file left by an older shell with the same id is refused, since
+ids are reused); otherwise the folder is read from the process as before. The
+folder then goes through the same safety checks as any other (absolute path,
+no `;`, must exist). Reports of shells that have ended are deleted at every
+capture.
+
+> **Trade-off.** It changes the user's profile, which is why it is opt-in,
+> reversible and shows what it does. It only helps shells started after it was
+> installed, and only PowerShell (`cmd` is read live already). If the prompt
+> function is replaced again later by something that doesn't call the previous
+> one, the reporting stops and the saved folder falls back to the start folder.
 
 **Explorer is the exception among the title-based apps: it is matched by window handle.** The Shell
 lists each open folder together with the window it is in, so capture asks it
@@ -924,8 +982,10 @@ because raising one would bring it back up.
 > **Trade-off.** Windows only lets the program the user is working in take
 > the focus. A switch started from the picker, the icon or the terminal
 > normally qualifies; when Windows refuses, the engine joins the input queue
-> of the window in front for the moment of the call, and if that fails too,
-> the stacking order is still rebuilt but the keyboard stays where it was.
+> of the window in front for the moment of the call (never if that window is
+> not responding, since joining a hung program's queue could hang the engine
+> too), and if that fails or is skipped, the stacking order is still rebuilt
+> but the keyboard stays where it was.
 > Windows of elevated programs can't be raised by a normal one.
 
 And one level higher, **a layout per display setup**: when nothing picks a
@@ -1179,10 +1239,18 @@ its first window after roughly 0.35 s and finish in roughly 1.2–1.4 s
 
 What to do about each of these, in order and with sizes, is in
 [ROADMAP.md](ROADMAP.md), together with gaps that are features rather than
-weak spots (tab groups, browser profiles, PowerShell's current folder,
-virtual desktops).
+weak spots (virtual desktops).
 
 Fixed in November 2026, and explained where they are described:
+
+* **PowerShell tabs saved with their start folder**: an opt-in profile hook
+  reports the folder each tab is in (section 7.4).
+
+* **Tab groups reopening as plain tabs**: the group's title and colour are
+  saved with its tabs and asked for again at restore (section 5.4).
+
+* **Tabs reopening in the wrong browser profile**: each saved window carries
+  its profile folder and reopens in it (section 5.4).
 
 * **Pinned tabs reopening unpinned**: restore asks the extension to pin them
   again (section 5.4).

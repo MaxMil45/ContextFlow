@@ -1,6 +1,7 @@
 # Roadmap: what is left, what to improve, and ideas
 
-This is the one list of work still to do. Other documents link here instead of
+This is the one list of work still to do. The next coding tasks, ready to
+pick up one by one, are in [NEXT_TASKS.md](NEXT_TASKS.md). Other documents link here instead of
 keeping lists of their own. Written 16 November 2026; update it when an item is
 done or a decision changes.
 
@@ -55,6 +56,9 @@ against the live desktop.
 | Windows Terminal tabs | A real capture and a real launch of a test window | A full switch reopens the window with a tab per folder, in place. |
 | Windows saved on a larger display | Unit and engine tests | Side-by-side windows stay side by side on the laptop screen. |
 | Explorer windows with several tabs | Tests with made-up data | Each tab of one window reports the same window; check with `cargo test -p cf-detect real_explorer -- --ignored --nocapture`. |
+| PowerShell tabs come back in their current folder | The hook text is tested in a real Windows PowerShell; a real Windows Terminal tab that moved was saved with its new folder (temporary profile and database) | `contextflow terminal hook install`, open a new PowerShell tab, `cd`, capture, restore: the tab comes back in the folder you moved to. |
+| Tab groups come back | Engine tests, the extension against a fake browser, and the capture and request data | Group tabs in Chrome (a title and a colour), capture, close the window, restore: the same tabs are grouped with the same title and colour. Needs the extension reloaded (0.4.0: it asks for a new permission, "tab groups") and the new build installed. |
+| Tabs reopen in their own browser profile | Resolver and engine tests; a real read-only capture found the right profile folder | Restore a window from each of two profiles: each opens in its own. |
 | Pinned tabs come back pinned | Engine tests, the extension against a fake browser, and the real helper program passing a request on | Restore a window with pinned tabs, once with Chrome closed and once with it open: the same tabs are pinned again. Needs the extension reloaded (version 0.3.0) and the new build installed. |
 | "Delete older versions" in the History tab | Typecheck and the storage tests behind it | The button appears with two or more versions and keeps the newest and the pinned one. |
 
@@ -68,21 +72,17 @@ Sizes are estimates. "Done when" is the test for finishing.
 
 | # | Improvement | Why | Size | Done when |
 |---|---|---|---|---|
-| 1 | **Tab groups** | Uses the channel built for pinned tabs (see SOFTWARE_ARCHITECTURE.md, section 5.4). Needs the `tabGroups` permission and the group's name, colour and members saved at capture. | 2 to 3 days | Groups come back with name and colour. |
-| 2 | **Browser profiles** | With work and personal profiles, restored tabs open in whichever was used last. The id the extension sends is its own, not Chrome's profile folder, so a mapping is needed (read Chrome's `Local State`, find the profile folders that have the extension). Only matters with more than one profile. | 3 days | Each window reopens in the profile it was saved from. |
-| 3 | **PowerShell's current folder** | PowerShell doesn't tell Windows when you `cd`, so a tab is saved with the folder it started in. Offer an opt-in line for the PowerShell profile that reports the folder to ContextFlow. Windows Terminal keeps this information to itself, so there is no way without the shell's help. | 1 to 2 days | With the line installed, a tab that moved is saved where it is. Without it, nothing changes. |
-| 4 | **Telling windows apart by more than their title** | Two windows with the same title, or a title that changed, can be saved without a folder or paired with the wrong position. Combine title, position and the order the windows were created; for browsers, the extension's own window id. Never guess on a tie. | 3 days | Two same-named windows of one app come back in their own places. |
+| 1 | **Telling windows apart by more than their title** | Two windows with the same title, or a title that changed, can be saved without a folder or paired with the wrong position. Combine title, position and the order the windows were created; for browsers, the extension's own window id. Never guess on a tie. | 3 days | Two same-named windows of one app come back in their own places. |
 
 ### Good, but after the above
 
 | # | Improvement | Why | Size |
 |---|---|---|---|
-| 6 | **Virtual desktops** | Windows on another virtual desktop are ignored, which can start a second copy. Needs a decision first: bring them to the current desktop, or leave them where they are. | 2 to 3 days |
-| 7 | **Environment variables per workspace** | For terminals and editors that ContextFlow starts (not ones already running, which keep theirs). Values may be secrets, so they must stay out of logs and exports. | 2 days |
-| 8 | **Every tab of an Explorer window** | Only the front tab is saved. Reopening tabs needs a reliable way to drive Explorer, which is not known yet. | Unknown |
-| 9 | **More apps** | `cf-detect` takes a new app as a table entry and a small module: Notepad++, Sublime Text, Office documents (from their recent lists). | About a day each |
-| 10 | **An updater** | People on an old build stay on it. Tauri has an updater; it needs signed update files. | 2 days, after signing |
-| 11 | **Tests for the user interface** | The Rust side has several hundred tests; the React side has none beyond the typecheck. `npm run preview:mock` (sample data in a browser) is the starting point: the same sample answers can drive automated checks of the main screens. | 2 days for the main flows |
+| 5 | **Virtual desktops** | Windows on another virtual desktop are ignored, which can start a second copy. Needs a decision first: bring them to the current desktop, or leave them where they are. | 2 to 3 days |
+| 6 | **Environment variables per workspace** | For terminals and editors that ContextFlow starts (not ones already running, which keep theirs). Values may be secrets, so they must stay out of logs and exports. | 2 days |
+| 7 | **Every tab of an Explorer window** | Only the front tab is saved. Reopening tabs needs a reliable way to drive Explorer, which is not known yet. | Unknown |
+| 8 | **More apps** | `cf-detect` takes a new app as a table entry and a small module: Notepad++, Sublime Text, Office documents (from their recent lists). | About a day each |
+| 9 | **An updater** | People on an old build stay on it. Tauri has an updater; it needs signed update files. | 2 days, after signing |
 
 ### Only with evidence
 

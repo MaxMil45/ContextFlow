@@ -25,6 +25,7 @@ const ADVANCED_HELP: &str = "Advanced commands (each has its own --help):
   verify, backup            Check and copy the database
   export, import            Move workspaces between computers
   config, info              Settings and where things are kept
+  terminal hook             Make PowerShell tabs in Windows Terminal remember their folder
   windows                   List the windows ContextFlow can see (names for --only)
 
 Everything is described in docs/COMMANDS.md.";
@@ -259,6 +260,10 @@ pub(crate) enum Command {
     #[command(subcommand)]
     Config(ConfigCmd),
 
+    /// Windows Terminal: the opt-in PowerShell hook (see `terminal hook --help`).
+    #[command(subcommand, hide = true)]
+    Terminal(TerminalCmd),
+
     /// Show where ContextFlow keeps its database, config and logs.
     #[command(hide = true)]
     Info,
@@ -348,6 +353,38 @@ pub(crate) enum WorkspaceCmd {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum TerminalCmd {
+    /// Let ContextFlow see which folder each PowerShell tab is in. PowerShell
+    /// doesn't report `cd` to Windows, so without this a tab is saved with the
+    /// folder it started in.
+    #[command(subcommand)]
+    Hook(HookCmd),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum HookCmd {
+    /// Add the hook to your PowerShell profile (Windows PowerShell and
+    /// PowerShell 7, whichever are installed).
+    Install {
+        /// Use this profile file instead of looking for them.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+    },
+    /// Take the hook out again; the rest of the profile is untouched.
+    Uninstall {
+        /// Use this profile file instead of looking for them.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+    },
+    /// Show whether the hook is in your PowerShell profile.
+    Status {
+        /// Use this profile file instead of looking for them.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum BrowserCmd {
     /// Register ContextFlow with Chrome and Edge and unpack the extension.
     Install,
@@ -397,6 +434,9 @@ fn main() -> Result<()> {
     }
     if let Command::Browser(cmd) = &cli.command {
         return commands::browser::browser_cmd(cmd);
+    }
+    if let Command::Terminal(cmd) = &cli.command {
+        return commands::terminal::terminal_cmd(cmd);
     }
     // The running app serves only the per-user database and config; with --db
     // or --config (or their environment variables) the work stays in this process.
@@ -540,7 +580,10 @@ fn run(
             }
             Ok(())
         }
-        Command::Config(_) | Command::Windows { .. } | Command::Browser(_) => {
+        Command::Config(_)
+        | Command::Windows { .. }
+        | Command::Browser(_)
+        | Command::Terminal(_) => {
             unreachable!("handled in main")
         }
     }

@@ -95,8 +95,8 @@ const HOST_REASON: &str = "it is running ContextFlow";
 pub fn running_apps(procs: &dyn Processes, sample: Duration) -> Vec<RunningApp> {
     let own_session = procs.own_session();
     let protected_pids = procs.protected_pids();
-    let hosts = host_programs(&procs.list(), &protected_pids);
     let before = procs.list();
+    let hosts = host_programs(&before, &protected_pids);
     let started = Instant::now();
     procs.sleep(sample);
     let after = procs.list();

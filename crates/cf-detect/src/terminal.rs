@@ -10,7 +10,9 @@
 //!   folder of its process when you `cd`, so it reports the folder it was
 //!   **started** in (a tab opened by "Open in Terminal", or `wt -d`, starts in
 //!   the project folder; a tab opened in the home folder and moved from there
-//!   is saved as the home folder).
+//!   is saved as the home folder), unless the user has installed the opt-in
+//!   hook (`contextflow terminal hook install`): then it is the folder the
+//!   shell itself reported last.
 //! * WSL and `bash` tabs are not saved: their Windows-side folder says nothing
 //!   about where the Linux shell is.
 //! * Split panes come back as tabs, and tab order is the order the shells were

@@ -60,6 +60,36 @@ pub struct IncomingWindow {
     pub tabs: Vec<IncomingTab>,
 }
 
+/// A tab group as the browser names it: a title and one of its fixed colours.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabGroup {
+    pub title: String,
+    pub color: String,
+}
+
+/// The colours a browser gives tab groups.
+pub const GROUP_COLORS: [&str; 9] = [
+    "grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange",
+];
+/// Longest group title kept, in characters.
+pub const MAX_GROUP_TITLE_CHARS: usize = 100;
+
+impl TabGroup {
+    /// A group made of what the extension reported: the title is cleaned and
+    /// shortened, and a colour the browser doesn't have is refused (`None`),
+    /// so only known values are ever saved or sent back.
+    pub fn checked(title: &str, color: &str) -> Option<Self> {
+        GROUP_COLORS.contains(&color).then(|| Self {
+            title: title
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_GROUP_TITLE_CHARS)
+                .collect(),
+            color: color.to_string(),
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct IncomingTab {
     #[serde(default)]
@@ -70,6 +100,17 @@ pub struct IncomingTab {
     pub pinned: bool,
     #[serde(default)]
     pub active: bool,
+    /// The group the tab is in, if any. Unchecked: see [`TabGroup::checked`].
+    #[serde(default)]
+    pub group: Option<IncomingGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IncomingGroup {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub color: String,
 }
 
 /// Validated state of one browser profile, as stored by the host.
@@ -98,6 +139,9 @@ pub struct LiveTab {
     pub title: String,
     pub pinned: bool,
     pub active: bool,
+    /// The tab group it is in. Older state files have none.
+    #[serde(default)]
+    pub group: Option<TabGroup>,
 }
 
 /// Only plain web addresses are ever saved or reopened. This excludes
@@ -173,6 +217,12 @@ pub fn sanitize(msg: IncomingMessage, now: DateTime<Utc>) -> Result<LiveState, P
                     title: clean_title(&t.title),
                     pinned: t.pinned,
                     active: t.active,
+                    // A pinned tab can't be in a group, so a group is only
+                    // believed for an unpinned one.
+                    group: t
+                        .group
+                        .filter(|_| !t.pinned)
+                        .and_then(|g| TabGroup::checked(&g.title, &g.color)),
                 })
                 .collect(),
         })
@@ -195,7 +245,64 @@ mod tests {
             title: "t".into(),
             pinned: false,
             active: false,
+            group: None,
         }
+    }
+
+    fn grouped(url: &str, title: &str, color: &str, pinned: bool) -> IncomingTab {
+        IncomingTab {
+            pinned,
+            group: Some(IncomingGroup {
+                title: title.into(),
+                color: color.into(),
+            }),
+            ..tab(url)
+        }
+    }
+
+    #[test]
+    fn tab_groups_keep_a_clean_title_and_a_known_colour() {
+        let state = sanitize(
+            msg(
+                "chrome",
+                "p",
+                vec![
+                    grouped("https://a.example/", "Work\u{7}\n", "blue", false),
+                    grouped("https://b.example/", &"x".repeat(500), "orange", false),
+                    // Not a colour the browser has.
+                    grouped("https://c.example/", "Odd", "ultraviolet", false),
+                    // A pinned tab can't be in a group.
+                    grouped("https://d.example/", "Pinned", "red", true),
+                    tab("https://e.example/"),
+                ],
+            ),
+            Utc::now(),
+        )
+        .unwrap();
+        let groups: Vec<Option<TabGroup>> = state.windows[0]
+            .tabs
+            .iter()
+            .map(|t| t.group.clone())
+            .collect();
+        assert_eq!(
+            groups[0],
+            Some(TabGroup {
+                title: "Work".into(),
+                color: "blue".into()
+            })
+        );
+        assert_eq!(
+            groups[1].as_ref().unwrap().title.chars().count(),
+            MAX_GROUP_TITLE_CHARS
+        );
+        assert_eq!(&groups[2..], &[None, None, None]);
+    }
+
+    #[test]
+    fn state_files_written_before_groups_still_load() {
+        let old = r#"{"url":"https://a.example/","title":"t","pinned":false,"active":true}"#;
+        let tab: LiveTab = serde_json::from_str(old).unwrap();
+        assert_eq!(tab.group, None);
     }
 
     fn msg(browser: &str, profile: &str, tabs: Vec<IncomingTab>) -> IncomingMessage {

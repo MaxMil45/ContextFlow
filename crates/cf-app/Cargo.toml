@@ -17,9 +17,11 @@ cf-ipc.workspace = true
 cf-storage.workspace = true
 cf-detect.workspace = true
 cf-windows.workspace = true
-aes-gcm = "0.10"
+# `zeroize` also wipes the cipher's own copy of the key when it is dropped.
+aes-gcm = { version = "0.10", features = ["zeroize"] }
 anyhow.workspace = true
 argon2 = "0.5"
+zeroize = "1"
 chrono.workspace = true
 hex.workspace = true
 image.workspace = true

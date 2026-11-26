@@ -9,6 +9,7 @@ function Step($name, [scriptblock]$cmd) {
 }
 
 Step 'Frontend' { Push-Location app; npm ci; if ($LASTEXITCODE -eq 0) { npm run build }; Pop-Location }
+Step 'Interface' { Push-Location app; npm test; $code = $LASTEXITCODE; Pop-Location; if ($code -ne 0) { exit $code } }
 Step 'Extension' { node extensions/browser/test/pinning.test.js }
 Step 'Format'  { cargo fmt --all -- --check }
 Step 'Clippy'  { cargo clippy --workspace --all-targets -- -D warnings }

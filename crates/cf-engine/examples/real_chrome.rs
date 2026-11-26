@@ -51,7 +51,12 @@ impl Desktop for Isolated {
     fn open_app_window(&self, exe: &str, args: &[String]) -> Result<(), String> {
         self.real.open_app_window(exe, args)
     }
-    fn open_browser_window(&self, exe: &str, urls: &[String]) -> Result<(), String> {
+    fn open_browser_window(
+        &self,
+        exe: &str,
+        _profile: Option<&str>,
+        urls: &[String],
+    ) -> Result<(), String> {
         if let Some(bad) = urls.iter().find(|u| !cf_browser::is_restorable_url(u)) {
             return Err(format!("refusing to open '{bad}'"));
         }
@@ -69,7 +74,12 @@ impl Desktop for Isolated {
     fn live_browser_urls(&self, _browser: &str) -> Option<Vec<String>> {
         None
     }
-    fn request_pins(&self, _browser: &str, _urls: &[String]) {
+    fn request_pins(
+        &self,
+        _browser: &str,
+        _urls: &[String],
+        _groups: &[cf_browser::request::GroupRequest],
+    ) {
         // A throwaway profile has no extension to pass the request to.
     }
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError> {

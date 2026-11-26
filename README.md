@@ -69,10 +69,15 @@ store yet): see [Reopening browser tabs](#reopening-browser-tabs-one-time-setup)
   opens twice if you switch again, and anything that didn't come back is named.
 * **Chrome and Edge tabs, VS Code and File Explorer folders, Visual Studio
   solutions and JetBrains projects** reopen in their own windows. Pinned tabs
-  come back pinned while the extension is connected.
-* **Windows Terminal windows** reopen with a tab per folder. PowerShell tabs
-  come back in the folder they were started in (PowerShell doesn't report a
-  `cd`); `cmd` tabs in the folder they were in.
+  come back pinned and tab groups come back with their title and colour while
+  the extension is connected, and each browser window
+  reopens in the profile (Work, Personal) it was saved from.
+* **Windows Terminal windows** reopen with a tab per folder. `cmd` tabs come
+  back in the folder they were in. PowerShell doesn't report a `cd`, so its
+  tabs come back in the folder they were started in, unless you run
+  `contextflow terminal hook install` once: it adds a small block to your
+  PowerShell profile (removable with `uninstall`) that tells ContextFlow where
+  each tab is.
 * **Programs that distract from a workspace** can close themselves as you enter
   it (see [Workspace Cleanup](#workspace-cleanup-focus-rules-in-the-app)), and a
   workspace can run its own start and stop commands, such as a dev server.

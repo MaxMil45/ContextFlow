@@ -291,6 +291,11 @@ fn attach_open_paths(
     sources: &cf_detect::Sources,
     warnings: &mut Vec<String>,
 ) {
+    if sources.terminal {
+        // Folder reports of PowerShell tabs that have ended: tidied on every
+        // capture, whether or not a terminal is open now.
+        cf_windows::clean_shell_reports();
+    }
     for i in 0..payload.applications.len() {
         let id = payload.applications[i].application_id.clone();
         let Some(app) = cf_detect::APPS.iter().find(|a| (a.is_app)(&id)) else {
@@ -384,8 +389,34 @@ fn attach_browser_tabs(
             continue;
         }
         let desktop = desktop_windows(payload, &id);
-        let result =
-            cf_browser::saved::match_windows(&id, &desktop, &live, &cfg.excluded_url_patterns);
+        // Which profile folder each window is in, so it reopens there. Looked
+        // up once per extension connection (one per profile).
+        let user_data = cf_browser::profiles::user_data_dir(&id);
+        let profile_of = |profile_id: &str| {
+            cf_browser::profiles::profile_folder(
+                user_data.as_deref()?,
+                cf_browser::install::EXTENSION_ID,
+                profile_id,
+            )
+        };
+        let result = cf_browser::saved::match_windows(
+            &id,
+            &desktop,
+            &live,
+            &cfg.excluded_url_patterns,
+            &profile_of,
+        );
+        let unknown = result
+            .state
+            .windows
+            .iter()
+            .filter(|w| w.profile.is_none())
+            .count();
+        if live.len() > 1 && unknown > 0 {
+            warnings.push(format!(
+                "{name}: {unknown} window(s) are in a profile that couldn't be worked out and will reopen in whichever profile {name} picks"
+            ));
+        }
         if result.unmatched_live > 0 {
             warnings.push(format!(
                 "{name}: {} open window(s) couldn't be matched to a desktop window and were not saved (minimized to the tray, or on another desktop?)",

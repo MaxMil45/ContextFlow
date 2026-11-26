@@ -8,6 +8,7 @@ fn tab(url: &str) -> SavedTab {
         url: url.into(),
         title: url.into(),
         pinned: false,
+        group: None,
     }
 }
 
@@ -28,6 +29,7 @@ fn saved_tabs_window(title: &str, urls: &[&str]) -> SavedWindow {
         window_title: title.into(),
         tabs: urls.iter().map(|u| tab(u)).collect(),
         active_tab: Some(0),
+        profile: None,
     }
 }
 
@@ -417,4 +419,94 @@ fn a_window_without_pinned_tabs_asks_for_nothing() {
     };
     run(&d, &chrome_payload(), &fast());
     assert!(d.pin_requests.borrow().is_empty());
+}
+
+#[test]
+fn each_browser_window_opens_in_the_profile_it_was_saved_from() {
+    let mut work = saved_tabs_window("Drive - Google Chrome", &["https://drive.example/"]);
+    work.profile = Some("Profile 2".into());
+    let home = saved_tabs_window("Docs - Google Chrome", &["https://docs.example/"]);
+    let payload = SnapshotPayload {
+        applications: vec![browser_app(vec![work, home])],
+        windows: vec![
+            saved_window("chrome", "Drive - Google Chrome", r(0, 0, 900, 800), "M1"),
+            saved_window("chrome", "Docs - Google Chrome", r(1000, 0, 800, 700), "M1"),
+        ],
+        ..Default::default()
+    };
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        browser_windows: RefCell::new(vec![
+            open_window(11, "chrome", "x"),
+            open_window(12, "chrome", "y"),
+        ]),
+        ..Default::default()
+    };
+    let result = run(&d, &payload, &fast());
+    assert_eq!(result.overall, RestoreStatus::Success, "{result:#?}");
+    // The first window in its profile; the one saved before profiles (or
+    // whose profile was unknown) in whichever the browser picks.
+    assert_eq!(
+        *d.browser_profiles.borrow(),
+        vec![Some("Profile 2".to_string()), None]
+    );
+}
+
+#[test]
+fn groups_of_reopened_tabs_are_asked_for_in_order_and_pinned_or_open_tabs_are_not() {
+    use cf_browser::protocol::TabGroup;
+    let grouped = |url: &str, title: &str, color: &str| {
+        let mut t = tab(url);
+        t.group = Some(TabGroup {
+            title: title.into(),
+            color: color.into(),
+        });
+        t
+    };
+    let mut window = saved_tabs_window("Work - Google Chrome", &[]);
+    window.tabs = vec![
+        grouped("https://a.example/", "Work", "blue"),
+        tab("https://plain.example/"),
+        grouped("https://b.example/", "Home", "green"),
+        grouped("https://c.example/", "Work", "blue"),
+        // Already open: not reopened, so not grouped by ContextFlow.
+        grouped("https://open.example/", "Work", "blue"),
+    ];
+    let payload = SnapshotPayload {
+        applications: vec![browser_app(vec![window])],
+        windows: vec![saved_window(
+            "chrome",
+            "Work - Google Chrome",
+            r(0, 0, 900, 800),
+            "M1",
+        )],
+        ..Default::default()
+    };
+    let d = Fake {
+        monitors: vec![monitor("M1", true, r(0, 0, 1920, 1080))],
+        open: RefCell::new(vec![open_window(1, "chrome", "Work - Google Chrome")]),
+        live_urls: Some(vec!["https://open.example".into()]),
+        browser_windows: RefCell::new(vec![open_window(12, "chrome", "y")]),
+        ..Default::default()
+    };
+    run(&d, &payload, &fast());
+    let asked = d.group_requests.borrow();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let groups: Vec<(&str, &str, Vec<&str>)> = asked[0]
+        .iter()
+        .map(|g| {
+            (
+                g.title.as_str(),
+                g.color.as_str(),
+                g.urls.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("Work", "blue", vec!["https://a.example/", "https://c.example/"]),
+            ("Home", "green", vec!["https://b.example/"]),
+        ]
+    );
 }

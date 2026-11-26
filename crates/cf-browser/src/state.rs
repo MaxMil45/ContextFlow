@@ -125,6 +125,7 @@ mod tests {
                         url: (*u).into(),
                         title: String::new(),
                         pinned: false,
+                        group: None,
                         active: false,
                     })
                     .collect(),

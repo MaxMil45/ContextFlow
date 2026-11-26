@@ -43,6 +43,13 @@ pub fn window_shell_folders(hwnd: isize) -> Option<(u32, Vec<String>)> {
     }
 }
 
+/// Delete the folder reports of PowerShell shells that have ended (see the
+/// `shells` module). Does nothing off Windows.
+pub fn clean_shell_reports() {
+    #[cfg(windows)]
+    shells::clean_reports();
+}
+
 /// Placeholder so callers compile off Windows; it never excludes anything.
 #[cfg(not(windows))]
 pub struct InstanceLock;
@@ -452,6 +459,26 @@ mod tests {
         let (n, full) = time(&|| list_processes().unwrap().len());
         let (m, ids) = time(&|| running_pids().len());
         println!("{n} processes: full listing {full:?}, ids only {ids:?} ({m})");
+    }
+
+    /// What scanning the windows costs here. Run with
+    /// `cargo test -p cf-windows --release window_scan_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn window_scan_cost() {
+        init_dpi_awareness();
+        let start = std::time::Instant::now();
+        let mut windows = Vec::new();
+        for _ in 0..10 {
+            windows = enumerate_windows().unwrap();
+        }
+        let each = start.elapsed() / 10;
+        let pids: std::collections::HashSet<u32> = windows.iter().map(|w| w.process_id).collect();
+        println!(
+            "{} windows from {} programs: {each:?} per scan",
+            windows.len(),
+            pids.len()
+        );
     }
 
     #[test]

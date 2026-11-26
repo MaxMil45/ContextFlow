@@ -118,8 +118,10 @@ mod tests {
                     url: "https://www.chess.com/play".into(),
                     title: "Play Chess Online".into(),
                     pinned: false,
+                    group: None,
                 }],
                 active_tab: Some(0),
+                profile: None,
             }],
         };
         let chrome = ApplicationState {

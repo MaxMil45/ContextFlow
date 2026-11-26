@@ -188,6 +188,19 @@ time.
 | `export <WORKSPACES…> --out <file>` | Write workspaces, with their full history, to a file. `--all` for every workspace, `--force` to overwrite a file, `--encrypt` to protect it with a passphrase read from `CONTEXTFLOW_PASSPHRASE`. |
 | `import <FILE>` | Read an export file. Hashes are verified first. `--as <name>` imports under a different name (single-workspace files only). Imported workspaces must be approved with `workspace trust` before they can be restored. |
 
+### Windows Terminal: PowerShell tabs
+
+PowerShell doesn't tell Windows when you `cd`, so without help a PowerShell tab
+is saved with the folder it started in. This opt-in hook fixes that.
+
+| Command | What it does |
+|---|---|
+| `terminal hook install` | Add a short marked block to your PowerShell profile (Windows PowerShell and PowerShell 7, whichever are installed; the command names each file it changes). It wraps your prompt and doesn't change what it shows. Only new tabs are affected. |
+| `terminal hook uninstall` | Take exactly that block out again. The rest of the profile is untouched. |
+| `terminal hook status` | Show whether the block is in each profile. |
+
+All three take `--profile <file>` to work on one file instead.
+
 ### Settings and diagnosis
 
 | Command | What it does |

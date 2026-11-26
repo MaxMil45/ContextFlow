@@ -1,5 +1,6 @@
 // Loads the extension's background.js with a fake `chrome` and checks that pin
-// requests from ContextFlow pin the right tabs. No browser needed.
+// and group requests from ContextFlow pin and group the right tabs, and that
+// tab groups are reported. No browser needed.
 // Run: node extensions/browser/test/pinning.test.js
 const fs = require("fs");
 const path = require("path");
@@ -11,7 +12,11 @@ const listeners = {};
 const ev = (name) => ({ addListener: (f) => (listeners[name] = (listeners[name] || []).concat(f)) });
 let tabs = [];
 const updates = [];
+const grouped = []; // [tabIds, groupId or null] for each chrome.tabs.group call (as plain data)
+const groupInfo = {}; // groupId -> { title, color }
+let nextGroup = 100;
 let portListener;
+const posted = [];
 const chrome = {
   storage: { local: { get: async () => ({ profileId: "p" }), set: async () => {} } },
   windows: {
@@ -24,16 +29,34 @@ const chrome = {
       updates.push([id, props.pinned]);
       tabs.find((t) => t.id === id).pinned = true;
     },
+    group: async ({ tabIds, groupId }) => {
+      grouped.push([[...tabIds], groupId ?? null]);
+      const id = groupId ?? nextGroup++;
+      for (const t of tabs) if (tabIds.includes(t.id)) t.groupId = id;
+      return id;
+    },
     onCreated: ev("tc"), onRemoved: ev("tr"), onMoved: ev("tm"), onAttached: ev("ta"),
     onDetached: ev("td"), onActivated: ev("tac"), onReplaced: ev("trp"), onUpdated: ev("tu"),
   },
   runtime: {
     connectNative: () => ({
-      postMessage: () => {},
+      postMessage: (m) => posted.push(m),
       onMessage: { addListener: (f) => (portListener = f) },
       onDisconnect: { addListener: () => {} },
     }),
     onStartup: ev("s"), onInstalled: ev("i"), lastError: undefined,
+  },
+  tabGroups: {
+    get: async (id) => {
+      if (!groupInfo[id]) throw new Error("no such group");
+      return groupInfo[id];
+    },
+    update: async (id, props) => {
+      groupInfo[id] = { ...(groupInfo[id] || {}), ...props };
+    },
+    onCreated: ev("gc"),
+    onUpdated: ev("gu"),
+    onRemoved: ev("gr"),
   },
   alarms: { create: () => {}, onAlarm: ev("a") },
 };
@@ -79,5 +102,75 @@ vm.runInContext(src, ctx);
   listeners.tc.forEach((f) => f());
   await new Promise((r) => setTimeout(r, 450));
   assert.strictEqual(updates.length, before, "a request is applied once");
-  console.log("extension pinning: all checks passed");
+  // ---------------------------------------------------------- groups
+
+  // Capture: tabs report their group (title and colour), others null.
+  groupInfo[7] = { title: "Work", color: "blue" };
+  tabs.length = 0;
+  tabs.push(
+    { id: 21, windowId: 1, index: 0, url: "https://a.example/", title: "A", pinned: false, active: true, groupId: 7 },
+    { id: 22, windowId: 1, index: 1, url: "https://b.example/", title: "B", pinned: false, active: false, groupId: -1 },
+    { id: 23, windowId: 1, index: 2, url: "https://c.example/", title: "C", pinned: false, active: false, groupId: 99 }, // group gone
+  );
+  posted.length = 0;
+  await vm.runInContext("push()", ctx);
+  // (Objects made inside the loaded script belong to another realm: compare as JSON.)
+  const sent = JSON.parse(JSON.stringify(posted.at(-1).windows[0].tabs.map((t) => t.group)));
+  assert.deepStrictEqual(sent, [{ title: "Work", color: "blue" }, null, null]);
+
+  // Restore: a group request groups the right tabs, with title and colour,
+  // in one window, skipping tabs that are pinned, already grouped or elsewhere.
+  tabs.length = 0;
+  tabs.push(
+    { id: 31, windowId: 1, url: "https://a.example/", pinned: false, groupId: -1 },
+    { id: 32, windowId: 2, url: "https://a.example/", pinned: false, groupId: -1 }, // same address, other window
+    { id: 33, windowId: 1, url: "https://b.example/", pinned: false, groupId: -1 },
+    { id: 34, windowId: 1, url: "https://mine.example/", pinned: false, groupId: 5 }, // the user's own group
+    { id: 35, windowId: 1, url: "https://pinned.example/", pinned: true, groupId: -1 },
+  );
+  grouped.length = 0;
+  portListener({
+    type: "pin",
+    id: "g1",
+    browser: "chrome",
+    urls: [],
+    groups: [
+      { title: "Docs", color: "green", urls: ["https://a.example/", "https://b.example/", "https://later.example/"] },
+      { title: "Mine", color: "red", urls: ["https://mine.example/"] }, // already grouped: left alone
+      { title: "Odd", color: "ultraviolet", urls: ["https://a.example/"] }, // bad colour: refused
+      { title: "Pinned", color: "red", urls: ["https://pinned.example/"] }, // pinned: left alone
+    ],
+  });
+  await new Promise((r) => setTimeout(r, 450));
+  assert.deepStrictEqual(grouped, [[[31], null], [[33], 100]], JSON.stringify(grouped));
+  assert.deepStrictEqual(groupInfo[100], { title: "Docs", color: "green" });
+  assert.strictEqual(tabs.find((t) => t.id === 32).groupId, -1, "a tab of another window is not pulled in");
+  assert.strictEqual(tabs.find((t) => t.id === 34).groupId, 5);
+
+  // The third address opens later: it joins the group already made.
+  tabs.push({ id: 36, windowId: 1, url: "https://later.example/", pinned: false, groupId: -1 });
+  listeners.tc.forEach((f) => f());
+  await new Promise((r) => setTimeout(r, 450));
+  assert.deepStrictEqual(grouped.at(-1), [[36], 100]);
+
+  // A request that asks for pins and a group does both, pins first.
+  tabs.length = 0;
+  tabs.push(
+    { id: 41, windowId: 1, url: "https://p.example/", pinned: false, groupId: -1 },
+    { id: 42, windowId: 1, url: "https://g.example/", pinned: false, groupId: -1 },
+  );
+  updates.length = 0;
+  grouped.length = 0;
+  portListener({
+    type: "pin",
+    id: "g2",
+    browser: "chrome",
+    urls: ["https://p.example/"],
+    groups: [{ title: "G", color: "cyan", urls: ["https://g.example/"] }],
+  });
+  await new Promise((r) => setTimeout(r, 450));
+  assert.deepStrictEqual(updates, [[41, true]]);
+  assert.deepStrictEqual(grouped, [[[42], null]]);
+
+  console.log("extension pinning and groups: all checks passed");
 })().catch((e) => { console.error(e); process.exit(1); });

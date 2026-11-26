@@ -73,7 +73,12 @@ export function Palette({
         aria-label="Command palette"
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
-          else if (e.key === "ArrowDown") {
+          else if (e.key === "Tab") {
+            // The rows are reached with the arrow keys, so Tab has nowhere to
+            // go inside: keep the focus here instead of on the page behind.
+            e.preventDefault();
+            input.current?.focus();
+          } else if (e.key === "ArrowDown") {
             e.preventDefault();
             setIndex((i) => Math.min(i + 1, all.length - 1));
           } else if (e.key === "ArrowUp") {

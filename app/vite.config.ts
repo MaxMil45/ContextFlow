@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Tauri expects a fixed port and must see Rust compile errors in the terminal.
@@ -13,6 +13,12 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**"] },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  // `npm test`: the interface against the sample backend, in a simulated browser.
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+  },
   build: {
     // WebView2 on Windows 10/11 is evergreen Chromium.
     target: "chrome120",

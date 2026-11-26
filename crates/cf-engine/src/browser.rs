@@ -133,6 +133,37 @@ fn pinned_among(window: &cf_browser::SavedWindow, opening: &[String]) -> Vec<Str
         .collect()
 }
 
+/// The tab groups of the tabs about to be opened, in the order each group first
+/// appears, with the addresses of its tabs in order. Only reopened tabs count
+/// (a tab that is already open is never grouped by ContextFlow), and a pinned
+/// tab can't be in a group.
+fn groups_among(
+    window: &cf_browser::SavedWindow,
+    opening: &[String],
+) -> Vec<cf_browser::request::GroupRequest> {
+    let opening: HashSet<String> = opening.iter().map(|u| normalize_url(u)).collect();
+    let mut groups: Vec<cf_browser::request::GroupRequest> = Vec::new();
+    for tab in window
+        .tabs
+        .iter()
+        .filter(|t| !t.pinned && opening.contains(&normalize_url(&t.url)))
+    {
+        let Some(group) = &tab.group else { continue };
+        match groups
+            .iter_mut()
+            .find(|g| g.title == group.title && g.color == group.color)
+        {
+            Some(g) => g.urls.push(tab.url.clone()),
+            None => groups.push(cf_browser::request::GroupRequest {
+                title: group.title.clone(),
+                color: group.color.clone(),
+                urls: vec![tab.url.clone()],
+            }),
+        }
+    }
+    groups
+}
+
 /// Drop trailing addresses until the command line fits.
 fn fit_command_line(urls: &mut Vec<String>) -> usize {
     let mut dropped = 0;
@@ -228,12 +259,14 @@ pub(crate) fn restore_tabs(
         // Pinned tabs are asked for before the window opens, so the request is
         // waiting when a browser that is only starting connects its extension.
         let pinned = pinned_among(window, &urls);
-        if !pinned.is_empty() {
+        let groups = groups_among(window, &urls);
+        if !pinned.is_empty() || !groups.is_empty() {
             log(&format!(
-                "asking the extension to pin {} tab(s)",
-                pinned.len()
+                "asking the extension to pin {} tab(s) and make {} group(s)",
+                pinned.len(),
+                groups.len()
             ));
-            desktop.request_pins(&app.application_id, &pinned);
+            desktop.request_pins(&app.application_id, &pinned, &groups);
         }
 
         log(&format!(
@@ -241,7 +274,7 @@ pub(crate) fn restore_tabs(
             urls.len(),
             app.application_id
         ));
-        if let Err(e) = desktop.open_browser_window(exe, &urls) {
+        if let Err(e) = desktop.open_browser_window(exe, window.profile.as_deref(), &urls) {
             out.failures.push(format!(
                 "could not open a window with {} tab(s): {e}",
                 urls.len()

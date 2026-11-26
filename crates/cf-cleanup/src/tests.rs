@@ -284,6 +284,15 @@ fn graceful_mode_never_ends_a_program_that_stays_open() {
 }
 
 #[test]
+fn running_apps_lists_the_system_twice_not_three_times() {
+    // Once before the CPU sample and once after; who runs ContextFlow is read
+    // from the first.
+    let d = Fake::with(vec![proc(10, "a.exe", 10), proc(11, "b.exe", 10)]);
+    running_apps(&d, Duration::from_millis(1));
+    assert_eq!(d.listings.get(), 2);
+}
+
+#[test]
 fn the_system_is_read_once_however_many_programs_are_listed() {
     let mut d = Fake::with(vec![
         proc(10, "a.exe", 10),

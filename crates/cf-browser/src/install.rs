@@ -236,7 +236,12 @@ mod tests {
             .map(|p| p.as_str().unwrap().to_string())
             .collect();
         perms.sort();
-        assert_eq!(perms, ["alarms", "nativeMessaging", "storage", "tabs"]);
+        // `tabGroups` is for reading and recreating tab groups' titles and
+        // colours; it gives no access to page content.
+        assert_eq!(
+            perms,
+            ["alarms", "nativeMessaging", "storage", "tabGroups", "tabs"]
+        );
         assert!(manifest.get("host_permissions").is_none());
         assert!(manifest.get("content_scripts").is_none());
         // Never anything that could read cookies, history or page content.

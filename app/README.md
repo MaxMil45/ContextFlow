@@ -33,6 +33,20 @@ Commands without a sample answer show an error saying so. It is for looking at
 screens and layout; the real behaviour needs `npm run tauri dev`. The sample
 data is only loaded in development and is not part of any build.
 
+## Tests
+
+```bash
+cd app
+npm test
+```
+
+runs the interface in a simulated browser (Vitest, jsdom, Testing Library)
+against the same sample backend as the preview (`src/dev/mockBackend.ts`,
+installed before each test by `src/test/setup.ts`). Tests live next to what
+they test as `*.test.tsx`. Each existing one guards something that was fixed by
+looking at a real screen. jsdom 26 is used because jsdom 27 needs a newer Node
+than 20.18.
+
 ## What is in the window
 
 * **Sidebar:** workspaces with their picture or colour, Ctrl+K search, an

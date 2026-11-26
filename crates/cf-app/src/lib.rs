@@ -16,3 +16,4 @@ pub mod search;
 pub mod service;
 pub mod session;
 pub mod shortcut;
+pub mod terminal_hook;

@@ -29,13 +29,23 @@ pub trait Desktop {
     /// already known to be safe to launch (no shell, no inherited console).
     fn open_app_window(&self, exe: &str, args: &[String]) -> Result<(), String>;
     /// Open a new browser window showing `urls` (one tab each, in order).
-    fn open_browser_window(&self, exe: &str, urls: &[String]) -> Result<(), String>;
+    fn open_browser_window(
+        &self,
+        exe: &str,
+        profile: Option<&str>,
+        urls: &[String],
+    ) -> Result<(), String>;
     /// Normalised addresses of the tabs open right now in `browser`, or `None`
     /// when the extension isn't connected and so the answer is unknown.
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>>;
     /// Ask the browser extension to pin these tabs once they are open (the
     /// command line can't). Best effort: without the extension nothing happens.
-    fn request_pins(&self, browser: &str, urls: &[String]);
+    fn request_pins(
+        &self,
+        browser: &str,
+        urls: &[String],
+        groups: &[cf_browser::request::GroupRequest],
+    );
     fn place(&self, hwnd: isize, rect: Rect, state: DisplayState) -> Result<(), PlaceError>;
     /// Put a window above the others without activating it.
     fn raise(&self, hwnd: isize);
@@ -149,14 +159,26 @@ impl Desktop for Timed<'_> {
     fn open_app_window(&self, exe: &str, args: &[String]) -> Result<(), String> {
         timed(&self.start, || self.inner.open_app_window(exe, args))
     }
-    fn open_browser_window(&self, exe: &str, urls: &[String]) -> Result<(), String> {
-        timed(&self.start, || self.inner.open_browser_window(exe, urls))
+    fn open_browser_window(
+        &self,
+        exe: &str,
+        profile: Option<&str>,
+        urls: &[String],
+    ) -> Result<(), String> {
+        timed(&self.start, || {
+            self.inner.open_browser_window(exe, profile, urls)
+        })
     }
     fn live_browser_urls(&self, browser: &str) -> Option<Vec<String>> {
         self.inner.live_browser_urls(browser)
     }
-    fn request_pins(&self, browser: &str, urls: &[String]) {
-        self.inner.request_pins(browser, urls);
+    fn request_pins(
+        &self,
+        browser: &str,
+        urls: &[String],
+        groups: &[cf_browser::request::GroupRequest],
+    ) {
+        self.inner.request_pins(browser, urls, groups);
     }
     fn raise(&self, hwnd: isize) {
         timed(&self.place, || self.inner.raise(hwnd));
@@ -184,6 +206,19 @@ impl Desktop for Timed<'_> {
 
 /// The real desktop.
 pub struct WindowsDesktop;
+
+/// The start of a browser's command line for a new window: in the profile
+/// `profile` names, when it is a plain folder name. A snapshot may come from an
+/// import, so the name is checked here and never trusted: an unsafe one is
+/// ignored and the browser picks its own profile.
+pub(crate) fn browser_args(profile: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(folder) = profile.filter(|p| cf_browser::profiles::is_safe_folder(p)) {
+        args.push(format!("--profile-directory={folder}"));
+    }
+    args.push("--new-window".to_string());
+    args
+}
 
 impl Desktop for WindowsDesktop {
     fn windows(&self) -> Result<Vec<DiscoveredWindow>, String> {
@@ -228,13 +263,18 @@ impl Desktop for WindowsDesktop {
             .map_err(|e| e.to_string())
     }
 
-    fn open_browser_window(&self, exe: &str, urls: &[String]) -> Result<(), String> {
+    fn open_browser_window(
+        &self,
+        exe: &str,
+        profile: Option<&str>,
+        urls: &[String],
+    ) -> Result<(), String> {
         // Only plain web addresses ever reach the command line, so none can be
         // mistaken for a browser option.
         if let Some(bad) = urls.iter().find(|u| !cf_browser::is_restorable_url(u)) {
             return Err(format!("refusing to open '{}'", cf_core::redact::url(bad)));
         }
-        let mut args = vec!["--new-window".to_string()];
+        let mut args = browser_args(profile);
         args.extend(urls.iter().cloned());
         cf_windows::launch_process(exe, &args, None)
             .map(|_| ())
@@ -245,11 +285,16 @@ impl Desktop for WindowsDesktop {
         cf_browser::live_urls(&cf_browser::default_state_dir()?, browser)
     }
 
-    fn request_pins(&self, browser: &str, urls: &[String]) {
+    fn request_pins(
+        &self,
+        browser: &str,
+        urls: &[String],
+        groups: &[cf_browser::request::GroupRequest],
+    ) {
         let Some(dir) = cf_browser::request::default_request_dir() else {
             return;
         };
-        match cf_browser::request::write_pin_request(&dir, browser, urls, chrono::Utc::now()) {
+        match cf_browser::request::write_request(&dir, browser, urls, groups, chrono::Utc::now()) {
             Ok(_) => {}
             Err(e) => tracing::debug!(browser, error = %e, "could not leave a pin request"),
         }
@@ -274,6 +319,24 @@ impl Desktop for WindowsDesktop {
                 Err(PlaceError::AccessDenied)
             }
             Err(e) => Err(PlaceError::Other(e.to_string())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod browser_args_tests {
+    use super::browser_args;
+
+    #[test]
+    fn a_new_window_opens_in_its_profile_when_it_is_a_plain_folder_name() {
+        assert_eq!(browser_args(None), ["--new-window"]);
+        assert_eq!(
+            browser_args(Some("Profile 2")),
+            ["--profile-directory=Profile 2", "--new-window"]
+        );
+        // From an imported snapshot: never put on a command line.
+        for bad in ["x --incognito", r"..\x", "a;b", "--evil", ""] {
+            assert_eq!(browser_args(Some(bad)), ["--new-window"], "{bad}");
         }
     }
 }

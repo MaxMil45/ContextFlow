@@ -87,7 +87,11 @@ All are done.
 | 5 | First run and setup | "Save what's open now" on first run. (The two setup chores are still open: see section 4.) |
 | 6 | Show it | The README leads with the one-key switch. (The recording is still missing.) |
 
-Done since, beyond the plan: a review for duplication merged five copies of
+Done since, beyond the plan: an opt-in PowerShell hook records the folder each
+tab is in; tab groups come back (through the same channel as
+pinned tabs); browser windows reopen in the profile they were
+saved from; the interface has automated tests (`npm test` in
+`app/`, run by CI); a review for duplication merged five copies of
 the capture settings into one builder, three process-list walks into one, and
 the browser and editor window placement into one routine, and cleanup now reads
 the process list once per run instead of four times per program; the interface can be previewed in a browser with
@@ -114,9 +118,8 @@ The full list, in order, with sizes and the test for "done", is
 * **For the owner:** try the current build on a real desk (several features
   have only been tested with a fake desktop), record the switch for the
   README, tag the first release (`v0.1.0`).
-* **Next improvements:** tab groups (using the channel to the browser
-  extension that pinned tabs use), browser profiles, PowerShell's current folder,
-  telling windows apart by more than their title.
+* **Next improvements:** telling windows apart by more than their title,
+  Windows virtual desktops.
 * **Decided for now:** distributed through GitHub, with an unsigned installer
   and the extension installed with Developer mode. Store publishing and code
   signing come later.

@@ -18,6 +18,7 @@
 
 pub mod host;
 pub mod install;
+pub mod profiles;
 pub mod protocol;
 pub mod request;
 pub mod saved;

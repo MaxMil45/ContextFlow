@@ -9,10 +9,11 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsWindow, IsZoomed, MessageBoxW,
-    SetForegroundWindow, SetWindowPlacement, SetWindowPos, HWND_TOP, MB_ICONINFORMATION,
-    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT,
+    GetForegroundWindow, GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsZoomed,
+    MessageBoxW, SetForegroundWindow, SetWindowPlacement, SetWindowPos, HWND_TOP,
+    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    WINDOWPLACEMENT,
 };
 
 use cf_core::{DisplayState, Rect};
@@ -94,7 +95,8 @@ pub fn raise_window(hwnd: isize) -> std::io::Result<()> {
 /// not in front (the tray app after its picker closed, say). When the plain
 /// call is refused, the calling thread joins the input queue of the window in
 /// front for the moment of the call, which Windows treats as the same user
-/// action. Returns whether the window ended up in front.
+/// action, unless that window is not responding (then nothing is joined).
+/// Returns whether the window ended up in front.
 pub fn focus_window(hwnd: isize) -> bool {
     let target = hwnd as HWND;
     // SAFETY: plain Win32 calls; stale handles just fail.
@@ -112,7 +114,9 @@ pub fn focus_window(hwnd: isize) -> bool {
             GetWindowThreadProcessId(front, std::ptr::null_mut())
         };
         let ours = GetCurrentThreadId();
-        if front_thread == 0 || front_thread == ours {
+        // Joining the input queue of a program that is not answering can hang
+        // this thread too, so a hung window in front is left alone.
+        if front_thread == 0 || front_thread == ours || IsHungAppWindow(front) != 0 {
             return false;
         }
         AttachThreadInput(ours, front_thread, 1);

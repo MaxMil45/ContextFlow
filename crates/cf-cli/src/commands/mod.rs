@@ -7,5 +7,6 @@ pub(crate) mod config;
 pub(crate) mod history;
 pub(crate) mod maintenance;
 pub(crate) mod restore;
+pub(crate) mod terminal;
 pub(crate) mod util;
 pub(crate) mod workspace;

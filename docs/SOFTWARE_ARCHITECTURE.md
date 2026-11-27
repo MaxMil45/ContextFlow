@@ -683,10 +683,19 @@ The workspace you leave is captured, then saved **only if it is worth it**:
 | Case | Result | Why |
 |---|---|---|
 | Saving on switch is off, the workspace is archived, or its save mode is `fixed` | Not saved | The user said so. |
+| Its newest snapshot has no programs in it (everything was removed from it, or it was captured empty) | Not saved | There is nothing to keep up to date. Saving what happens to be open into it would turn an empty workspace into a copy of the whole desktop. In effect the workspace is switched off. |
 | None of the programs it saved last time are open | Not saved | An emptied desk must never overwrite the last good layout with an empty one. |
 | Layout identical to the newest snapshot | Not saved | Switching back and forth shouldn't fill history with copies. "Identical" ignores window titles and capture metadata, which change constantly. |
 | You wrote a new leaving note | Saved even if unchanged | The note is new information. |
 | Otherwise | Saved as an `auto` snapshot, then retention runs | |
+
+**Only a failure is reported.** Every "not saved" case above is expected, so
+leaving a workspace says nothing about it: no warning in the switch report, no
+message after Leave. Only a save that should have happened and failed is shown
+(`AutoSave.problem`, `autoSaveProblem` in the report). The workspace page has one
+switch, "Save this workspace when I leave it", which sets the save mode to
+`auto` (on) or `fixed` (off); while it is on, "Tell me when it is saved"
+chooses `notify` instead of `auto`.
 
 ### 6.4 Concurrency
 

@@ -299,6 +299,9 @@ pub struct LeaveReport {
     pub saved_version: Option<u32>,
     /// Why nothing was saved, when it wasn't.
     pub save_note: Option<String>,
+    /// It should have been saved and wasn't (the save failed). Other reasons
+    /// for not saving are expected and aren't shown.
+    pub save_problem: bool,
     /// Its stop commands that ran.
     pub commands: Vec<super::CommandRun>,
 }

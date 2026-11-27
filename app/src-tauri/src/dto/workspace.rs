@@ -259,6 +259,9 @@ pub struct RestoreReport {
     pub auto_saved_version: Option<u32>,
     /// Why the workspace that was left was not saved, when it wasn't.
     pub auto_save_note: Option<String>,
+    /// The workspace that was left should have been saved and wasn't (the save
+    /// failed). Every other reason for not saving is expected and isn't shown.
+    pub auto_save_problem: bool,
     /// Set when the layout saved for the current screens was used instead of the newest.
     pub layout_note: Option<String>,
     /// Start and stop commands that ran.

@@ -232,11 +232,15 @@ function WelcomeBack({ report }: { report: RestoreReport }) {
           )}
         </div>
       </section>
-      {report.switchedFrom && (
-        <Notice tone={report.autoSaveNote ? "warn" : "ok"}>
-          {report.autoSavedVersion !== null
-            ? `Saved “${report.switchedFrom}” as v${report.autoSavedVersion} before switching.`
-            : `Left “${report.switchedFrom}”. ${report.autoSaveNote ?? ""}`}
+      {/* Said only when something was saved, or should have been and couldn't be.
+          A workspace that is set not to save, hasn't changed, or has nothing open
+          is not worth a message every time. */}
+      {report.switchedFrom && report.autoSavedVersion !== null && (
+        <Notice tone="ok">Saved “{report.switchedFrom}” as v{report.autoSavedVersion} before switching.</Notice>
+      )}
+      {report.switchedFrom && report.autoSavedVersion === null && report.autoSaveProblem && (
+        <Notice tone="warn">
+          Couldn't save “{report.switchedFrom}” when leaving it. {report.autoSaveNote ?? ""}
         </Notice>
       )}
     </>

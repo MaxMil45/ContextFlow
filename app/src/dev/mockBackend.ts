@@ -10,6 +10,7 @@ import type {
   CleanupConfig,
   CleanupPlan,
   RestoreRunEntry,
+  SaveMode,
   Settings,
   SnapshotDetail,
   SnapshotEntry,
@@ -153,6 +154,10 @@ const info: AppInfo = {
   logsPath: "C:\\Users\\me\\AppData\\Roaming\\ContextFlow\\data\\logs",
 };
 
+/** Save settings changed in this session (the sample data itself is never edited). */
+const saveModes = new Map<string, SaveMode>();
+const withMode = (w: WorkspaceSummary): WorkspaceSummary => ({ ...w, saveMode: saveModes.get(w.id) ?? w.saveMode });
+
 const find = (id: unknown) => workspaces.find((w) => w.id === id || w.name === id) ?? workspaces[0]!;
 
 /** Answers for the commands the screens read; changes are accepted and echoed. */
@@ -161,7 +166,7 @@ function answer(cmd: string, args: Record<string, unknown>): unknown {
     case "app_info":
       return info;
     case "list_workspaces":
-      return workspaces.filter((w) => args.includeArchived || !w.isArchived);
+      return workspaces.filter((w) => args.includeArchived || !w.isArchived).map(withMode);
     case "list_snapshots":
       return history[find(args.workspace).id] ?? [];
     case "get_snapshot": {
@@ -209,7 +214,8 @@ function answer(cmd: string, args: Record<string, unknown>): unknown {
     case "take_resume":
       return null;
     case "set_save_mode":
-      return { ...find(args.workspace), saveMode: args.mode };
+      saveModes.set(find(args.workspace).id, args.mode as SaveMode);
+      return withMode(find(args.workspace));
     case "set_pinned_version":
       return { ...find(args.workspace), pinnedVersion: args.version };
     case "delete_old_snapshots":
@@ -245,8 +251,16 @@ function answer(cmd: string, args: Record<string, unknown>): unknown {
         savedAt: history[w.id]?.[0]?.createdAt ?? ago(5),
         repositories: [],
         switchedFrom: cmd === "switch_workspace" ? "Uni" : null,
-        autoSavedVersion: cmd === "switch_workspace" ? 3 : null,
-        autoSaveNote: null,
+        // What happened to the workspace that was left: saved; not saved for an
+        // ordinary reason (nothing to report); or a save that failed.
+        autoSavedVersion: cmd === "switch_workspace" && w.name !== "Chess" && w.name !== "Uni" ? 3 : null,
+        autoSaveNote:
+          w.name === "Chess"
+            ? "It is set to always restore as you captured it, so it was not saved."
+            : w.name === "Uni"
+              ? "It could not be saved: the disk is full."
+              : null,
+        autoSaveProblem: w.name === "Uni",
         layoutNote: null,
         commands: [],
       };
@@ -263,6 +277,7 @@ function answer(cmd: string, args: Record<string, unknown>): unknown {
 }
 
 export function installMockBackend() {
+  saveModes.clear();
   mockWindows("main");
   mockIPC((cmd, payload) => answer(cmd, (payload ?? {}) as Record<string, unknown>), { shouldMockEvents: true });
   console.info("[mock] ContextFlow preview with sample data");

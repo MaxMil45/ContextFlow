@@ -27,8 +27,26 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 };
 
+// Newer Node versions have their own `localStorage`, which throws unless Node
+// is given a file to keep it in, and it hides jsdom's. The app uses it for a
+// dismissed tip, so give the tests one that lives in memory, on every version.
+const memoryStorage = new Map<string, string>();
+const storage = {
+  getItem: (k: string) => memoryStorage.get(k) ?? null,
+  setItem: (k: string, v: string) => void memoryStorage.set(k, String(v)),
+  removeItem: (k: string) => void memoryStorage.delete(k),
+  clear: () => memoryStorage.clear(),
+  key: (i: number) => [...memoryStorage.keys()][i] ?? null,
+  get length() {
+    return memoryStorage.size;
+  },
+};
+for (const target of [globalThis, window]) {
+  Object.defineProperty(target, "localStorage", { value: storage, configurable: true });
+}
+
 beforeEach(() => {
-  localStorage.clear();
+  memoryStorage.clear();
   installMockBackend();
 });
 

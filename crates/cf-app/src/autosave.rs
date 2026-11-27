@@ -31,6 +31,11 @@ pub struct AutoSave {
     pub saved_version: Option<u32>,
     /// Why nothing was saved, in words for the user.
     pub note: Option<String>,
+    /// Something that should have been saved wasn't (the save failed). Every
+    /// other reason for not saving is expected (the workspace is set not to
+    /// save, nothing changed, none of its programs are open), and the person
+    /// should not be bothered with it: only this one is worth a warning.
+    pub problem: bool,
     /// The workspace asks to be told when it is saved automatically.
     pub notify: bool,
 }
@@ -43,6 +48,11 @@ pub enum Decision {
     NothingOpen,
     /// The layout is the same as the newest snapshot.
     Unchanged,
+    /// The newest snapshot has no programs in it, so there is nothing to keep
+    /// up to date: the workspace is effectively switched off. (Saving what
+    /// happens to be open into it would turn an empty workspace into a copy of
+    /// the whole desktop.)
+    NothingTracked,
 }
 
 /// The parts of a payload that matter for restoring it. Window titles change
@@ -105,6 +115,9 @@ pub fn decide(previous: Option<&SnapshotPayload>, captured: &SnapshotPayload) ->
             Decision::Save
         };
     };
+    if previous.applications.is_empty() {
+        return Decision::NothingTracked;
+    }
     let expected: HashSet<&str> = previous
         .applications
         .iter()
@@ -195,6 +208,10 @@ pub fn save_active(
         Decision::Unchanged => {
             out.note = Some("Nothing had changed since its last save.".into());
         }
+        Decision::NothingTracked => {
+            out.note =
+                Some("Nothing is saved in it, so there is nothing to keep up to date.".into());
+        }
         Decision::Save => {
             match db.create_snapshot_as(
                 prev.id,
@@ -215,6 +232,7 @@ pub fn save_active(
                 Err(e) => {
                     tracing::warn!("auto-save before leaving failed: {e}");
                     out.note = Some(format!("It could not be saved: {e}."));
+                    out.problem = true;
                 }
             }
         }
@@ -291,6 +309,28 @@ mod tests {
         assert_eq!(decide(Some(&before), &moved), Decision::Save);
         let added = payload(&["code", "chrome"], vec![window("code", 0, "a")]);
         assert_eq!(decide(Some(&before), &added), Decision::Save);
+    }
+
+    #[test]
+    fn a_workspace_with_nothing_saved_in_it_is_left_alone() {
+        // Everything was removed from it (or it was captured empty): leaving it
+        // must not fill it with whatever else is open.
+        let empty = payload(&[], vec![]);
+        let desktop = payload(&["code", "chrome"], vec![window("code", 0, "a")]);
+        assert_eq!(decide(Some(&empty), &desktop), Decision::NothingTracked);
+        assert_eq!(decide(Some(&empty), &empty), Decision::NothingTracked);
+        // A first save of a workspace that has no snapshot yet is unchanged.
+        assert_eq!(decide(None, &desktop), Decision::Save);
+    }
+
+    #[test]
+    fn only_a_failed_save_is_a_problem() {
+        // Not saving for an ordinary reason says why, but is not a problem.
+        let quiet = AutoSave {
+            note: Some("Nothing had changed since its last save.".into()),
+            ..Default::default()
+        };
+        assert!(!quiet.problem);
     }
 
     #[test]

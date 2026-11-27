@@ -147,6 +147,7 @@ pub async fn leave_workspace(
             cleanup: out.cleanup.map(Into::into),
             saved_version: out.saved.saved_version,
             save_note: out.saved.note,
+            save_problem: out.saved.problem,
             commands: out.commands.into_iter().map(Into::into).collect(),
         })
     })

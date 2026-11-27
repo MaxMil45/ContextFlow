@@ -521,7 +521,8 @@ export function WorkspaceView({ workspace, onChanged, onGone, showArchived, pend
           name={name}
           onLeft={(r) => {
             if (r.savedVersion !== null) toast.show(`Saved “${name}” as v${r.savedVersion} and left it`);
-            else toast.show(`Left “${name}”${r.saveNote ? `. ${r.saveNote}` : ""}`);
+            else if (r.saveProblem) toast.show(`Left “${name}”, but it couldn't be saved. ${r.saveNote ?? ""}`, { tone: "bad", ms: 8000 });
+            else toast.show(`Left “${name}”`);
             const failed = r.commands.filter((c) => !c.ok);
             if (failed.length) toast.show(`A stop command didn't work: ${failed[0]!.command} (${failed[0]!.message})`, { tone: "bad", ms: 9000 });
             setLeaveReport(r.cleanup);
@@ -1032,21 +1033,17 @@ function SwitcherTip() {
   );
 }
 
-const SAVE_MODES: Array<{ mode: SaveMode; title: string; hint: string }> = [
+/** How a workspace that is being saved says so. (Not saving at all is the switch above them.) */
+const SAVE_STYLES: Array<{ mode: SaveMode; title: string; hint: string }> = [
   {
     mode: "notify",
-    title: "Save my changes and tell me",
-    hint: "For work in progress: your layout is saved as you leave, and a notification says which version.",
+    title: "Tell me when it is saved",
+    hint: "A notification says which version, each time.",
   },
   {
     mode: "auto",
-    title: "Save my changes quietly",
-    hint: "The same, without the notification.",
-  },
-  {
-    mode: "fixed",
-    title: "Keep it as I captured it",
-    hint: "One and done: never saved automatically, so it always comes back exactly the same. Capture again to change it.",
+    title: "Save quietly",
+    hint: "No notification.",
   },
 ];
 
@@ -1066,13 +1063,35 @@ function SaveModeCard({ workspace, onChanged }: { workspace: WorkspaceSummary; o
       setBusy(false);
     }
   };
+  const saving = workspace.saveMode !== "fixed";
   return (
     <section className="card">
       <header className="card-header">
         <h3>When you leave this workspace</h3>
       </header>
-      <div className="choice-list" role="radiogroup" aria-label="When you leave this workspace">
-        {SAVE_MODES.map((o) => (
+      {/* One switch: save changes as you leave, or never (it then always comes
+          back as captured, and leaving it says nothing about not saving). */}
+      <label className="toggle">
+        <input
+          type="checkbox"
+          role="switch"
+          aria-label="Save this workspace when I leave it"
+          checked={saving}
+          disabled={busy}
+          onChange={(e) => void choose(e.target.checked ? "auto" : "fixed")}
+        />
+        <span>
+          Save this workspace when I leave it
+          <span className="muted small block">
+            {saving
+              ? "Your layout is kept up to date as you switch away, so it comes back the way you left it."
+              : "Off: it always comes back exactly as you captured it. Leaving it never saves anything or shows a message. Capture again to change it."}
+          </span>
+        </span>
+      </label>
+      {saving && (
+      <div className="choice-list" role="radiogroup" aria-label="How a save is reported">
+        {SAVE_STYLES.map((o) => (
           <label key={o.mode} className={`choice${workspace.saveMode === o.mode ? " selected" : ""}`}>
             <input
               type="radio"
@@ -1088,6 +1107,7 @@ function SaveModeCard({ workspace, onChanged }: { workspace: WorkspaceSummary; o
           </label>
         ))}
       </div>
+      )}
     </section>
   );
 }

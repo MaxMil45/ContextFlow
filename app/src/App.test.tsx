@@ -91,3 +91,46 @@ describe("Command palette", () => {
     expect(search).toHaveFocus();
   });
 });
+
+describe("Saving when you leave", () => {
+  it("is one switch: on for a normal workspace, off for one that always restores as captured", async () => {
+    const user = await open("Spider");
+    const toggle = await screen.findByRole("switch", { name: "Save this workspace when I leave it" });
+    expect(toggle).toBeChecked();
+    // While saving, the way a save is reported can be chosen.
+    expect(screen.getByRole("radiogroup", { name: "How a save is reported" })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(await screen.findByText(/Leaving it never saves anything or shows a message/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Save this workspace when I leave it" })).not.toBeChecked();
+    expect(screen.queryByRole("radiogroup", { name: "How a save is reported" })).not.toBeInTheDocument();
+    // And back on.
+    await user.click(screen.getByRole("switch", { name: "Save this workspace when I leave it" }));
+    expect(await screen.findByRole("radiogroup", { name: "How a save is reported" })).toBeInTheDocument();
+  });
+
+  it("starts off for a workspace that is set to always restore as captured", async () => {
+    await open("Chess");
+    expect(await screen.findByRole("switch", { name: "Save this workspace when I leave it" })).not.toBeChecked();
+  });
+
+  /** Switch to `name` from the active workspace and wait for the finished report. */
+  async function switchTo(name: string) {
+    const user = await open(name);
+    await user.click(screen.getByRole("button", { name: /Switch to this/ }));
+    await screen.findByText(/Switch finished/);
+  }
+
+  it("says nothing about not saving the workspace you left when that is expected", async () => {
+    // Chess is set not to save: leaving it must not raise a warning.
+    await switchTo("Chess");
+    expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't save/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/before switching/)).not.toBeInTheDocument();
+  });
+
+  it("still says so when a save that should have happened failed", async () => {
+    await switchTo("Uni");
+    expect(await screen.findByText(/Couldn't save/)).toBeInTheDocument();
+    expect(screen.getByText(/the disk is full/)).toBeInTheDocument();
+  });
+});

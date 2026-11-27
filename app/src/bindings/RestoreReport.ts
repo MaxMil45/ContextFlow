@@ -39,6 +39,11 @@ autoSavedVersion: number | null,
  */
 autoSaveNote: string | null, 
 /**
+ * The workspace that was left should have been saved and wasn't (the save
+ * failed). Every other reason for not saving is expected and isn't shown.
+ */
+autoSaveProblem: boolean, 
+/**
  * Set when the layout saved for the current screens was used instead of the newest.
  */
 layoutNote: string | null, 

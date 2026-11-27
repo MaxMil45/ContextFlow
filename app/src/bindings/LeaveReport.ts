@@ -19,6 +19,11 @@ savedVersion: number | null,
  */
 saveNote: string | null, 
 /**
+ * It should have been saved and wasn't (the save failed). Other reasons
+ * for not saving are expected and aren't shown.
+ */
+saveProblem: boolean, 
+/**
  * Its stop commands that ran.
  */
 commands: Array<CommandRun>, };

@@ -432,6 +432,7 @@ pub(crate) async fn run_restore(
             switched_from: left.from,
             auto_saved_version: left.saved_version,
             auto_save_note: left.note,
+            auto_save_problem: left.problem,
             layout_note: outcome.layout_note,
             commands: outcome.commands.into_iter().map(Into::into).collect(),
         })
